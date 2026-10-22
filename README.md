@@ -15,6 +15,8 @@ Backfill resumes per game, archives official NBA sources, and writes
 `data/history/history.json.gz` only after every indexed final passes validation.
 Its `manifest.json` records coverage, failures, retrieval times and hashes.
 
+A [validated historical snapshot](datasets/regular-season-2026-10-21/README.md) is included.
+
 ## Daily loop
 
 1. `fetch-slate`: get the full current roster and upcoming games.
