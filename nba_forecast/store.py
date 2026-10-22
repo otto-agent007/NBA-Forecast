@@ -88,6 +88,8 @@ def _connect(db_path):
 def _validate_forecast(snapshot, forecast):
     """A caller cannot label unrelated or unsupported projections as this run."""
     try:
+        if forecast.get('forecast_stage', 'preliminary') != snapshot.get('forecast_stage', 'preliminary'):
+            raise ValueError('forecast stage does not match snapshot evidence')
         if (not isinstance(forecast['model_version'], str) or not forecast['model_version'] or
                 forecast['as_of'] != snapshot['as_of'] or forecast['season'] != snapshot['season']):
             raise ValueError('forecast version, cutoff, or season does not match snapshot')

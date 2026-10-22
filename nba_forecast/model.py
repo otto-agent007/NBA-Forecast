@@ -230,6 +230,11 @@ def forecast(snapshot, history):
     filtering. Nonprojected uncertain/off-slate numeric fields are null; out
     projections are exactly zero. Review flags do not silently alter availability.
     """
+    if snapshot.get("forecast_stage") == "final":
+        from .injuries import validate_final_check
+        if "injury_check" not in snapshot:
+            raise ValueError("final forecast requires injury checkpoint evidence")
+        validate_final_check(snapshot, snapshot["injury_check"])
     as_of = _time(snapshot["as_of"])
     season = snapshot["season"]
     previous_season = _previous_season(season)
@@ -395,6 +400,7 @@ def forecast(snapshot, history):
     counts = Counter(p["status"] for p in predictions)
     return {"model_version": MODEL_VERSION, "as_of": snapshot["as_of"], "season": season,
             "predictions": predictions, "review_queue": queue,
+            "forecast_stage": snapshot.get("forecast_stage", "preliminary"),
             "coverage": {"roster_players": len(snapshot["roster"]["players"]),
                          "pool_rows": len(predictions), "by_status": dict(sorted(counts.items())),
                          "eligible_history_rows": len(eligible), "excluded_history_rows": sum(excluded.values()),

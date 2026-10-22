@@ -108,6 +108,12 @@ def validate_inputs(snapshot, history, scope='league'):
     try:
         if snapshot['schema_version'] != 1 or isinstance(snapshot['schema_version'], bool):
             raise ValueError('unsupported schema_version')
+        stage=snapshot.get('forecast_stage','preliminary')
+        if stage not in ('preliminary','final'):
+            raise ValueError('invalid forecast stage')
+        if stage == 'final':
+            from .injuries import validate_final_check
+            validate_final_check(snapshot,snapshot['injury_check'])
         year = _season(snapshot['season'])
         cutoff = parse_time(snapshot['as_of'])
         roster = snapshot['roster']

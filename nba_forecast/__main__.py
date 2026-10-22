@@ -1,8 +1,9 @@
 """Small reproducible CLI. Run `python -m nba_forecast --help`."""
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import sqlite3
@@ -16,7 +17,9 @@ def _reject_constant(value):
 
 
 def read_json(path):
-    return json.loads(Path(path).read_text(encoding='utf-8'), parse_constant=_reject_constant)
+    raw=Path(path).read_bytes()
+    if str(path).endswith('.gz'): raw=gzip.decompress(raw)
+    return json.loads(raw.decode('utf-8'), parse_constant=_reject_constant)
 
 
 def _emit(value, output=None):
@@ -48,6 +51,8 @@ def _parser():
         cmd.add_argument('--scope', choices=('league', 'subset'), default='league')
         cmd.add_argument('--output')
         if name == 'forecast':
+            cmd.add_argument('--stage', choices=('preliminary','final'), default='preliminary')
+            cmd.add_argument('--injury-check')
             cmd.add_argument('--db', required=True)
             cmd.add_argument('--mode', choices=('live', 'replay', 'demo'), default='live')
     evaluate = sub.add_parser('evaluate')
@@ -67,21 +72,39 @@ def _parser():
     fetch.add_argument('--cache-dir', default='data/raw')
     fetch.add_argument('--output', required=True)
     slate = sub.add_parser('fetch-slate')
-    slate.add_argument('--until', help='ISO timestamp; default next 24 hours')
+    window=slate.add_mutually_exclusive_group()
+    window.add_argument('--until', help='ISO timestamp; default next 24 hours')
+    window.add_argument('--minutes-ahead', type=int, help='Use 30 for final-window games')
     slate.add_argument('--cache-dir', default='data/raw')
     slate.add_argument('--output', required=True)
+    backfill = sub.add_parser('backfill')
+    backfill.add_argument('--seasons', nargs='+', required=True)
+    backfill.add_argument('--directory', required=True)
+    backfill.add_argument('--workers', type=int, default=4)
+    backfill.add_argument('--output')
+    injury = sub.add_parser('injury-check')
+    injury.add_argument('--snapshot', required=True)
+    injury.add_argument('--cache-dir', default='data/raw')
+    injury.add_argument('--output', required=True)
     return parser
 
 
 def main(argv=None):
     parser = _parser()
     args = parser.parse_args(argv)
+    exit_code = 0
     try:
         # Refuse overwrite before any ledger or network side effect.
         if args.output and Path(args.output).exists():
             raise ValueError('output exists; use a new path to preserve the previous artifact')
         if args.command in ('validate', 'forecast'):
             snapshot, history = read_json(args.snapshot), _rows(args.history)
+            if args.command == 'forecast':
+                snapshot['forecast_stage']=args.stage
+                if args.injury_check:
+                    snapshot['injury_check']=read_json(args.injury_check)
+                if args.stage == 'final' and 'injury_check' not in snapshot:
+                    raise ValueError('final forecast requires --injury-check evidence')
             validate_inputs(snapshot, history, scope=args.scope)
             if args.command == 'validate':
                 value = dict(valid=True, scope=args.scope, roster_players=len(snapshot['roster']['players']),
@@ -92,6 +115,15 @@ def main(argv=None):
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
+        elif args.command == 'backfill':
+            from .backfill import backfill_seasons
+            result=backfill_seasons(args.seasons,args.directory,args.workers)
+            value={k:v for k,v in result.items() if k!='games'}
+            value['manifest']=str(Path(args.directory)/'manifest.json')
+            exit_code=0 if result['status']=='complete' else 2
+        elif args.command == 'injury-check':
+            from .injuries import fetch_injury_check
+            value=fetch_injury_check(read_json(args.snapshot),args.cache_dir)
         elif args.command == 'evaluate':
             from .store import evaluate_run
             value = evaluate_run(args.db, args.run_id, _rows(args.actuals))
@@ -113,11 +145,15 @@ def main(argv=None):
             value = normalize_boxscore(payload, source, datetime.now(timezone.utc).isoformat())
         elif args.command == 'fetch-slate':
             from .data import SCHEDULE_URL, build_snapshot, fetch_json, fetch_roster
+            if args.minutes_ahead is not None and not 1 <= args.minutes_ahead <= 1440:
+                raise ValueError('minutes-ahead must be between 1 and 1440')
             schedule = fetch_json(SCHEDULE_URL, cache_dir=args.cache_dir)
             roster = fetch_roster(schedule['leagueSchedule']['seasonYear'], cache_dir=args.cache_dir)
-            value = build_snapshot(roster, schedule, datetime.now(timezone.utc).isoformat(), args.until)
+            cutoff=datetime.now(timezone.utc)
+            until=(cutoff+timedelta(minutes=args.minutes_ahead)).isoformat() if args.minutes_ahead else args.until
+            value = build_snapshot(roster, schedule, cutoff.isoformat(), until)
         _emit(value, args.output)
-        return 0
+        return exit_code
     except (ValueError, OSError, KeyError, sqlite3.Error) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 2

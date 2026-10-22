@@ -39,6 +39,12 @@ def _timestamp(value):
 def _allowed_url(url, allow_roster=False):
     if not isinstance(url, str):
         raise ValueError("Source URL must be a string")
+    if re.fullmatch(r"https://stats\.nba\.com/stats/leaguegamelog\?Counter=0&DateFrom=&DateTo=&Direction=DESC&LeagueID=00&PlayerOrTeam=T&Season=20\d{2}-\d{2}&SeasonType=Regular%20Season&Sorter=DATE", url):
+        return
+    if re.fullmatch(r"https://official\.nba\.com/nba-injury-report-20\d{2}-\d{2}-season/", url):
+        return
+    if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}_\d{2}[AP]M\.pdf", url):
+        return
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment:
         raise ValueError("Only exact allowlisted HTTPS NBA URLs are accepted")
@@ -61,7 +67,7 @@ def archive_payload(raw, source_url, known_at, directory):
     digest = hashlib.sha256(raw).hexdigest()
     folder = Path(directory)
     folder.mkdir(parents=True, exist_ok=True)
-    suffix = ".html" if source_url == ROSTER_URL else ".json"
+    suffix = ".pdf" if source_url.endswith(".pdf") else ".html" if source_url == ROSTER_URL or "official.nba.com/" in source_url else ".json"
     raw_path = folder / (digest + suffix)
     meta_path = folder / (digest + ".provenance.json")
     metadata = {"source_url": source_url, "retrieved_at": known_at, "sha256": digest, "bytes": len(raw)}

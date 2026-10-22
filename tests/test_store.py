@@ -89,6 +89,11 @@ class StoreTests(unittest.TestCase):
             conn.row_factory = sqlite3.Row
             return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
 
+    def test_forecast_stage_cannot_disagree_with_evidence(self):
+        self.forecast['forecast_stage'] = 'final'
+        with self.assertRaises(ValueError):
+            self.save()
+
     def test_saves_clock_full_inputs_and_hashes_with_independent_reruns(self):
         self.forecast["generated_at"] = "2001-01-01T00:00:00Z"
         first, second = self.save(), self.save()

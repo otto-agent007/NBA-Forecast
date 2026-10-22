@@ -17,7 +17,10 @@
 5. Record supported game-specific adjustments, including a reviewer, reason,
    evidence URL and observation time. Maximum minutes delta ±15 and opportunity
    multiplier 0.5–1.5. These bounds prevent accidents, not scientific validation.
-6. Save a live run before all included tipoffs. Keep the complete inputs and
+6. Use the official report available at each game’s T−30 checkpoint for the final
+   run (`--stage final --injury-check FILE`). Earlier runs remain preliminary.
+   Capture later reports separately and review late changes. See
+   [checkpoint commands](backfill-and-injuries.md). Save a live run before all included tipoffs. Keep the complete inputs and
    output. Later information produces a new run, never an edit to a prior run.
 
 ## A useful reasoning packet

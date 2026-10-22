@@ -41,3 +41,22 @@ are checked, but the program cannot prove the official source omitted nobody.
 
 GitHub CI separately runs the offline suite on Python 3.11, 3.12 and 3.13. Local
 verification here is Python 3.12; remote check status is visible on the PR.
+
+## Backfill and injury-check follow-up — October 21, 2026 (Pacific)
+
+- 91 offline tests passed, including resumable imports, corrupt-cache rejection
+  across repeated attempts, regular-season filtering, compressed history input,
+  T−30 selection, final-stage evidence requirements and ledger stage integrity.
+- A live official NBA injury-index/PDF capture succeeded. A separate replay
+  exercised the final-stage CLI and SQLite save for one game: 519 roster rows,
+  34 needing review and 485 with no game. No numeric predictions were invented
+  from unresolved availability; this replay makes no prospective accuracy claim.
+- Final-stage evidence is checked both at the model boundary and in input
+  validation. The ledger rejects a stage that disagrees with its input snapshot.
+- Independent review findings about repeated corrupt-cache resumes and a direct
+  model-call validation bypass were fixed with regression tests.
+
+The historical export is described in the dataset README. Retrieval timestamps
+remain actual download times, so this newly acquired dataset cannot establish
+what was known before historical tipoffs. No historical injury coverage or
+leakage-free retrospective performance is claimed.
