@@ -108,3 +108,10 @@ class CliTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_profiles_and_benchmark_commands_work_offline(self):
+        profiles=json.loads(self.run_cli('profiles','--snapshot',ROOT/'examples/verified/snapshot.json').stdout)
+        self.assertEqual(len(profiles['players']),519)
+        with tempfile.TemporaryDirectory() as d:
+            result=json.loads(self.run_cli('benchmarks','--db',Path(d)/'empty.sqlite').stdout)
+            self.assertEqual(result['groups'],[])

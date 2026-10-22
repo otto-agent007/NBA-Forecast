@@ -60,3 +60,29 @@ The historical export is described in the dataset README. Retrieval timestamps
 remain actual download times, so this newly acquired dataset cannot establish
 what was known before historical tipoffs. No historical injury coverage or
 leakage-free retrospective performance is claimed.
+
+## Season operations follow-up — October 21, 2026 (Pacific)
+
+- 117 tests passed locally, including the real official six-page injury PDF:
+  91 unique player/game status matches; Blake Hinson was retained as an unmatched
+  identity rather than guessed. Tests also cover missing teams, stale-status
+  clearing, conflicting rows, source-publication chronology and game binding.
+- Full official schedule capture: 1,206 regular-season entries, 1,200 assigned
+  games (80 per team) and six TBD placeholders. The published feed is not yet
+  a fully assigned 1,230-game calendar. Exact source bytes and normalized calendar
+  are packaged under datasets/season-schedule-2026-10-21/.
+- Live tick succeeded at 03:35 UTC October 22: two preliminary immutable runs,
+  each covering 519 roster players; 11 final boxscores cached. No errors.
+  The runs had 4/5 explicit out statuses and 30/29 unresolved players respectively;
+  485 players per run were off slate. No numeric scoring predictions were
+  manufactured, and there are no prospective outcome metrics yet.
+- First live smoke exposed a warning-key collision; fixed with a regression
+  test and the subsequent successful live tick above.
+- Independent review findings were fixed: OS-released locking after process
+  death, reconstruction of missing run artifacts, replacement report clearing,
+  missing-team reporting, warning serialization and publication-vs-download
+  ordering. Reviewer independently reran all 117 tests with no blocking findings.
+- Paired baseline integration uses a real SQLite save/evaluate/report cycle.
+  CLI profiles and empty benchmark reporting work offline. Compileall and
+  whitespace checks passed. A user-systemd timer is supplied but not installed
+  on an always-on host; persistent scheduling is an explicit deployment step.

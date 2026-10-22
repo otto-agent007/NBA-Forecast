@@ -92,6 +92,8 @@ def validate_history(history):
                 raise ValueError('inconsistent two/three-point counts')
             if row['pts'] != 2 * row['fgm'] + row['fg3m'] + row['ftm']:
                 raise ValueError('points do not match made shots/free throws')
+            if 'starter' in row and type(row['starter']) is not bool:
+                raise ValueError('starter must be explicit boolean evidence')
             if row['status'] not in ('played', 'dnp'):
                 raise ValueError('observation status must be played or dnp')
             if row['status'] == 'dnp' and (row['minutes'] != 0 or any(row[k] for k in COUNTS)):
@@ -146,6 +148,8 @@ def validate_inputs(snapshot, history, scope='league'):
                 _source(player['status_source_url'])
                 if not cutoff - timedelta(hours=24) <= parse_time(player['status_observed_at']) <= cutoff:
                     raise ValueError('availability evidence must be within 24 hours before cutoff')
+                if 'status_published_at' in player and not cutoff-timedelta(hours=24)<=parse_time(player['status_published_at'])<=parse_time(player['status_observed_at']):
+                    raise ValueError('status publication chronology is invalid')
             players[player['player_id']] = player
         if set(p['team_id'] for p in players.values()) != set(teams):
             raise ValueError('each declared team must have roster entries')
@@ -165,6 +169,11 @@ def validate_inputs(snapshot, history, scope='league'):
                 raise ValueError('invalid teams or multiple games per team in slate')
             playing_teams.update(pair)
             games[game['game_id']] = game
+        for player in players.values():
+            if player.get('status_game_id') and player['status']!='unknown':
+                target=games.get(player['status_game_id'])
+                if target is None or player['team_id'] not in (target['home_team_id'],target['away_team_id']):
+                    raise ValueError('availability evidence targets another game')
         seen_adjustments = set()
         for adjustment in snapshot.get('role_adjustments', []):
             key = (adjustment['player_id'], adjustment['game_id'])

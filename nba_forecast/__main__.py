@@ -86,6 +86,26 @@ def _parser():
     injury.add_argument('--snapshot', required=True)
     injury.add_argument('--cache-dir', default='data/raw')
     injury.add_argument('--output', required=True)
+    calendar = sub.add_parser('fetch-schedule')
+    calendar.add_argument('--directory', default='data/operations/schedule')
+    calendar.add_argument('--output')
+    profiles = sub.add_parser('profiles')
+    profiles.add_argument('--snapshot', required=True)
+    profiles.add_argument('--history', nargs='*', default=[])
+    profiles.add_argument('--output')
+    extract = sub.add_parser('apply-injuries')
+    extract.add_argument('--snapshot', required=True)
+    extract.add_argument('--schedule', required=True)
+    extract.add_argument('--injury-check', required=True)
+    extract.add_argument('--cache-dir', default='data/raw')
+    extract.add_argument('--output', required=True)
+    tick = sub.add_parser('tick')
+    tick.add_argument('--directory', required=True)
+    tick.add_argument('--history', nargs='*', default=[])
+    tick.add_argument('--output')
+    benchmarks = sub.add_parser('benchmarks')
+    benchmarks.add_argument('--db', required=True)
+    benchmarks.add_argument('--output')
     return parser
 
 
@@ -115,6 +135,32 @@ def main(argv=None):
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
+        elif args.command == 'fetch-schedule':
+            from .schedule import fetch_schedule
+            value=fetch_schedule(args.directory)
+        elif args.command == 'profiles':
+            from .profiles import build_profiles
+            value=build_profiles(read_json(args.snapshot),_rows(args.history))
+        elif args.command == 'apply-injuries':
+            from .injury_parser import pdf_text,parse_report,apply_report
+            snapshot=read_json(args.snapshot);schedule=read_json(args.schedule)
+            check=read_json(args.injury_check)
+            snapshot['as_of']=datetime.now(timezone.utc).isoformat()
+            snapshot['injury_check']=check
+            for item in check['games']:
+                evidence=item['anchor_report']
+                if evidence:
+                    text=pdf_text(Path(args.cache_dir)/(evidence['sha256']+'.pdf'),evidence['sha256'])
+                    snapshot=apply_report(snapshot,parse_report(text,schedule,snapshot['roster'],evidence),[item['game_id']])
+            validate_inputs(snapshot,[])
+            value=snapshot
+        elif args.command == 'tick':
+            from .operations import run_tick
+            value=run_tick(args.directory,_rows(args.history))
+            exit_code=0 if value['status']=='complete' and not value['missed_final_games'] else 2
+        elif args.command == 'benchmarks':
+            from .benchmarks import benchmark_report
+            value=benchmark_report(args.db)
         elif args.command == 'backfill':
             from .backfill import backfill_seasons
             result=backfill_seasons(args.seasons,args.directory,args.workers)

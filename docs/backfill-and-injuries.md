@@ -67,9 +67,9 @@ publication times and actual download times. Its output lists each game,
 checkpoint time, preliminary/final-review/started phase, source freshness and
 whether a newer report is available. Missing or stale reports are explicit.
 
-Review the actual PDF for both teams, then supply sourced player availability in
-the snapshot. This version does not parse PDF player names or infer that players
-omitted from a report are healthy. Probable/doubtful entries must remain withheld
+Use the conservative `apply-injuries` extractor described in
+[season operations](season-operations.md), then review unmatched names and team
+coverage. The extractor never infers that omitted players are healthy. Probable/doubtful entries must remain withheld
 unless resolved into a supported existing status; do not silently map probable
 to available. Check `NOT YET SUBMITTED` and game/team coverage yourself.
 
@@ -93,5 +93,5 @@ no numeric forecast, even in a run labeled final.
 The full report metadata is saved inside the immutable forecast input. A later
 status change creates a new run; old forecasts stay intact. Aggregate feedback
 continues selecting the latest eligible pregame run per player/game/model,
-regardless of its preliminary/final label. No scheduler or unattended injury
-parser is installed by these one-shot commands.
+regardless of its preliminary/final label. These one-shot commands do not install a scheduler. The `tick` command and
+optional Linux timer templates are documented in [season operations](season-operations.md).

@@ -161,6 +161,9 @@ def normalize_boxscore(payload, source_url, known_at):
                 stats = player["statistics"]
                 row = {"game_id": game_id, "season": season, "season_type": "Regular Season", "game_time": game_time, "known_at": known_at, "source_url": source_url, "player_id": str(player["personId"]), "name": player["name"], "team_id": str(team["teamId"]), "opponent_id": str(opponent["teamId"]), "minutes": _minutes(stats["minutes"]), "status": "played" if played == "1" else "dnp"}
                 row.update({field: stats[source] for field, source in STAT_FIELDS.items()})
+                if 'starter' in player:
+                    if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
+                    row['starter']=player['starter']=='1'
                 rows.append(row)
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Incomplete or malformed NBA boxscore: {exc}") from exc

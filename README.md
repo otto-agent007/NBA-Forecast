@@ -1,7 +1,7 @@
 # NBA-Forecast
 
 Reproducible regular-season player scoring forecasts with an auditable pregame
-ledger and postgame feedback. Python 3.11+; no model API calls or paid dependencies.
+ledger and postgame feedback. Python 3.11+; no model API calls or paid dependencies. Injury extraction uses Poppler.
 
 ## Start
 
@@ -23,7 +23,7 @@ A [validated historical snapshot](datasets/regular-season-2026-10-21/README.md) 
 2. `injury-check`: capture the official report available at each game's **T−30**
    checkpoint; newer reports are tracked separately. Run this command at the
    checkpoint—it does not install a background scheduler.
-3. Review the PDF, supply sourced availability and any supported role changes.
+3. `apply-injuries`: extract explicit statuses; review unmatched players and roles.
 4. `forecast`: save a preliminary run, or use `--stage final --injury-check FILE`
    within 30 minutes of each included tipoff. Final is a timing/evidence label,
    not a guarantee of complete availability or superior accuracy.
@@ -36,12 +36,14 @@ minutes and opportunities adapt faster.
 
 ## Guides
 
+- [Season schedule, automated ticks and review inputs](docs/season-operations.md)
 - [Commands, demo and input formats](docs/usage.md)
 - [Backfill and T−30 report workflow](docs/backfill-and-injuries.md)
 - [Daily research and review loop](docs/operations.md)
 - [Model design](docs/design.md) · [Verification](docs/validation-results.md)
 
 This is an initial scoring baseline: uncertainty intervals are not yet calibrated.
-Injury PDFs are captured for review, not automatically converted to availability.
+Injury extraction is conservative: omission never means available.
+`tick` runs the loop once; persistent Linux timer templates are in `deploy/systemd/`.
 Back up `data/forecast.sqlite` and `data/`: they are ignored by Git. GitHub CI tests
 Python 3.11–3.13; PRs are reviewed before merging.

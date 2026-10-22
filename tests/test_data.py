@@ -29,6 +29,10 @@ class DataTests(unittest.TestCase):
         self.assertTrue(all(row["known_at"] == KNOWN for row in rows))
         self.assertEqual({row["source_url"] for row in rows}, {URL})
 
+    def test_starter_evidence_is_preserved_when_explicit(self):
+        rows=data.normalize_boxscore(self.payload,URL,KNOWN)
+        self.assertEqual(sum(r.get('starter',False) for r in rows),10)
+
     def test_nonregular_and_nonfinal_games_are_rejected(self):
         for game_id, status in [("0012600001", 3), ("0042600001", 3), ("0062600001", 3), ("0022600001", 2)]:
             with self.subTest(game_id=game_id, status=status):
