@@ -46,6 +46,12 @@ def _allowed_url(url, allow_roster=False):
         return
     if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}_\d{2}[AP]M\.pdf", url):
         return
+    if url.startswith("https://stats.nba.com/stats/leaguedashplayerclutch?"):
+        from .clutch import clutch_url
+        match = re.search(r"(?:[?&])Season=(20\d{2}-\d{2})(?:&|$)", url)
+        if match and url == clutch_url(match[1]):
+            return
+        raise ValueError("Clutch URL must use the complete canonical regular-season request")
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment:
         raise ValueError("Only exact allowlisted HTTPS NBA URLs are accepted")
@@ -83,6 +89,21 @@ def archive_payload(raw, source_url, known_at, directory):
     return {**metadata, "raw_path": str(raw_path), "provenance_path": str(meta_path)}
 
 
+def _record_fetch_failure(cache_dir, url, category, exc, attempt=None, status=None):
+    """Keep bounded metadata, never request headers or remote response bodies."""
+    record = {"observed_at": datetime.now(timezone.utc).isoformat(),
+              "source_url": url, "category": category,
+              "exception_type": type(exc).__name__, "attempt": attempt, "status": status}
+    try:
+        folder = Path(cache_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        with (folder / "fetch-failures.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record) + "\n")
+    except OSError:
+        # Diagnostics must not replace the original retrieval exception.
+        pass
+
+
 def _fetch(url, cache_dir, allow_roster=False):
     _allowed_url(url, allow_roster=allow_roster)
     opener = urllib.request.build_opener(_NoRedirects())
@@ -96,11 +117,13 @@ def _fetch(url, cache_dir, allow_roster=False):
             archive_payload(raw, url, observed, cache_dir)
             return raw, observed
         except HTTPError as exc:
+            _record_fetch_failure(cache_dir, url, "http", exc, attempt + 1, exc.code)
             if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
-                raise ValueError(f"NBA source returned HTTP {exc.code}; cached files can be used offline") from exc
+                raise ValueError(f"NBA source {url} returned HTTP {exc.code}; cached files can be used offline") from exc
         except (URLError, TimeoutError) as exc:
+            _record_fetch_failure(cache_dir, url, "network", exc, attempt + 1)
             if attempt == 2:
-                raise ValueError("NBA source unavailable after 3 bounded attempts") from exc
+                raise ValueError(f"NBA source {url} unavailable after 3 bounded attempts ({type(exc).__name__})") from exc
         time.sleep(0.25 * (attempt + 1))
     raise ValueError("NBA source unavailable")
 
@@ -111,7 +134,8 @@ def fetch_json(url, *, cache_dir=DEFAULT_CACHE):
     try:
         payload = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("NBA response was not valid JSON") from exc
+        _record_fetch_failure(cache_dir, url, "invalid_json", exc)
+        raise ValueError(f"NBA response from {url} was not valid JSON; inspect archived payload") from exc
     if not isinstance(payload, dict):
         raise ValueError("NBA response must contain a JSON object")
     return payload
