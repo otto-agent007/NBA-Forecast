@@ -106,6 +106,11 @@ def _parser():
     benchmarks = sub.add_parser('benchmarks')
     benchmarks.add_argument('--db', required=True)
     benchmarks.add_argument('--output')
+    dashboard = sub.add_parser('dashboard')
+    dashboard.add_argument('--directory', required=True)
+    dashboard.add_argument('--assets', default='dashboard/dist')
+    dashboard.add_argument('--port', type=int, default=8765)
+    dashboard.add_argument('--output', help='Export a static capture instead of starting the local server')
     return parser
 
 
@@ -135,6 +140,15 @@ def main(argv=None):
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
+        elif args.command == 'dashboard':
+            from .dashboard import dashboard_data,serve_dashboard
+            if args.output:
+                value=dashboard_data(args.directory)
+                value['source_mode']='static_capture'
+            else:
+                if not 1<=args.port<=65535:raise ValueError('invalid port')
+                serve_dashboard(args.directory,args.assets,args.port)
+                return 0
         elif args.command == 'fetch-schedule':
             from .schedule import fetch_schedule
             value=fetch_schedule(args.directory)

@@ -9,3 +9,6 @@ data/
 .coverage
 .nba_forecast/
 run-*.json
+
+node_modules/
+dashboard/public/dashboard.json
