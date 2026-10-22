@@ -1,0 +1,11 @@
+{
+  "source_url": "https://www.nba.com/players",
+  "retrieved_at": "2026-10-22T01:34:17.082091+00:00",
+  "source_sha256": "f25336989732d5332aa25af4b46d0e580729596f3c885447c2e1c8e3ee9b28bb",
+  "source_bytes": 579248,
+  "extraction": "__NEXT_DATA__.props.pageProps.players; roster identity fields only; all availability statuses explicitly unknown",
+  "artifact_sha256": "136c235aad62c04d0feaa2b322f7e97f3abcc52e262eb3c352f21284ff7bb086",
+  "artifact_bytes": 46780,
+  "roster_players": 519,
+  "teams": 30
+}
