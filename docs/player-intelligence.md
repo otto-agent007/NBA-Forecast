@@ -99,3 +99,17 @@ long source timeouts can delay ticks and are reported.
 For an offline static capture, export dashboard.json as before and copy the
 operations `players/` directory into `dashboard/public/players/` before building.
 Only serve a capture with `?snapshot=1`; it must not be labeled live.
+
+## Player headshots and recent form
+
+Profiles and lists load NBA CDN headshots by numeric player ID (large portraits
+only in the open profile; list thumbnails load lazily). Failed images fall back
+to the team logo. These are the NBA's latest images, not historical roster proof;
+uniforms can lag trades. Photos require access to cdn.nba.com, including in an
+offline snapshot. The server permits that image origin only, without expanding
+script or data-fetch permissions.
+
+Recent form uses up to five played appearances within the captured 10-game log,
+with per-stat denominators and a comparison against current-season means. DNPs
+and missing fields are excluded, never converted to zero. This display does not
+change model weights or override an established baseline after one poor game.

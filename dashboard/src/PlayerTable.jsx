@@ -1,6 +1,7 @@
+import PlayerPortrait from "./PlayerPortrait";
 import React, { useMemo } from "react";
-import { filterPlayers, initialName, number, statusLabel } from "./data";
-import { Icon, TeamMark } from "./Icons";
+import { filterPlayers, number, statusLabel } from "./data";
+import { Icon } from "./Icons";
 export function Status({ player }) {
   return (
     <span
@@ -102,7 +103,7 @@ export default function PlayerTable({
               <tr key={p.player_id}>
                 <td>
                   <button className="player-button" onClick={() => onSelect(p)}>
-                    <TeamMark id={p.team_id} code={p.team_code} />
+                    <PlayerPortrait key={p.player_id} player={p} />
                     <span>
                       {p.name}
                       <small>

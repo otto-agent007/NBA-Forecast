@@ -1304,3 +1304,129 @@ pre {
   color: #bacce2;
   margin: 12px 0 0;
 }
+
+.player-portrait {
+  display: inline-flex;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 42px;
+  overflow: hidden;
+  align-items: flex-end;
+  justify-content: center;
+  border-radius: 8px;
+  background: #e8eef6;
+}
+.player-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: bottom;
+}
+.portrait-large {
+  flex: 0 0 210px;
+  width: 210px;
+  height: 175px;
+  background: radial-gradient(ellipse at bottom, #326594, transparent 75%);
+  border-radius: 0;
+}
+.portrait-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+.portrait-fallback small {
+  font-size: 10px;
+}
+.profile-hero .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.profile-hero .eyebrow .team-logo {
+  width: 28px;
+  height: 28px;
+}
+.profile-identity {
+  min-width: 0;
+}
+.profile-hero h2 {
+  overflow-wrap: anywhere;
+}
+.profile-hero .icon-button {
+  flex-shrink: 0;
+}
+.recent-form {
+  margin-top: 25px;
+  padding: 20px;
+  border: 1px solid #dce5f1;
+  border-radius: 10px;
+  background: #f7f9fd;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+  margin-top: 20px;
+}
+.form-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.form-grid span {
+  font-size: 10px;
+  color: #61738c;
+  font-weight: 700;
+}
+.form-grid strong {
+  font-family: "Barlow Condensed";
+  font-size: 30px;
+  color: #173b65;
+}
+.form-grid small {
+  font-size: 10px;
+  color: #61738c;
+}
+.sample-note {
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 20px 0 0;
+  color: #5a6e88;
+}
+.projection-matchup {
+  color: #245fa6;
+  font-weight: 700;
+}
+@media (max-width: 650px) {
+  .portrait-large {
+    flex-basis: 95px;
+    width: 95px;
+    height: 110px;
+  }
+  .profile-hero h2 {
+    font-size: 28px;
+  }
+  .profile-identity {
+    gap: 8px;
+  }
+  .form-grid {
+    grid-template-columns: repeat(3, 1fr);
+    row-gap: 22px;
+  }
+  .recent-form {
+    padding: 15px;
+  }
+}
+.portrait-large .portrait-fallback .team-logo {
+  width: 90px;
+  height: 90px;
+  flex-shrink: 0;
+}
+@media (max-width: 650px) {
+  .portrait-large .portrait-fallback .team-logo {
+    width: 60px;
+    height: 60px;
+  }
+}

@@ -88,7 +88,7 @@ def serve_dashboard(directory,assets,port=8765):
                 body=target.read_bytes();self.send_response(200)
                 self.send_header('Content-Type',mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
             self.send_header('X-Content-Type-Options','nosniff')
-            self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'")
+            self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.nba.com; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'")
             self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def log_message(self,fmt,*args):pass
     with ThreadingHTTPServer(('127.0.0.1',port),Handler) as server:

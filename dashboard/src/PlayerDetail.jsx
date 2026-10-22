@@ -1,3 +1,5 @@
+import PlayerPortrait from "./PlayerPortrait";
+import RecentForm from "./RecentForm";
 import React, { useRef, useEffect, useState } from "react";
 import { Icon, TeamMark } from "./Icons";
 import { Status } from "./PlayerTable";
@@ -62,10 +64,11 @@ export default function PlayerDetail({ player, onClose }) {
     >
       <div className="profile-hero">
         <div className="profile-identity">
-          <TeamMark id={player.team_id} code={player.team_code} large />
+          <PlayerPortrait key={player.player_id} player={player} large />
           <div>
             <p className="eyebrow">
-              PLAYER PROFILE · {player.team_code || "NBA"}
+              <TeamMark id={player.team_id} code={player.team_code} /> PLAYER
+              PROFILE · {player.team_code || "NBA"}
             </p>
             <h2 id="player-title">{player.name}</h2>
             <Status player={player} />
@@ -155,15 +158,22 @@ export default function PlayerDetail({ player, onClose }) {
                 </span>
               ))}
             </div>
+            <RecentForm profile={profile} />
             <div className="profile-columns">
               <section>
                 <h3>Next-game projection</h3>
+                <p className="projection-matchup">
+                  {player.matchup || "No matchup selected"}
+                </p>
                 <p className="reason">{player.reason}</p>
                 <div className="detail-metrics">
                   {[
                     ["MIN", player.expected_minutes],
                     ["PTS", player.points_mean],
                     ["FGA", player.expected_fga],
+                    ["REB", player.expected_reb],
+                    ["AST", player.expected_ast],
+                    ["3PM", player.expected_fg3m],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span>{label}</span>
@@ -357,8 +367,9 @@ export default function PlayerDetail({ player, onClose }) {
           </>
         )}
         <p className="profile-source tiny">
-          NBA final boxscores · Updated {stamp(profile?.as_of)} · Observed stats
-          and projections are separate.
+          Headshots: NBA.com (latest image; uniform may lag roster changes). NBA
+          final boxscores · Updated {stamp(profile?.as_of)} · Observed stats and
+          projections are separate.
         </p>
       </div>
     </dialog>
