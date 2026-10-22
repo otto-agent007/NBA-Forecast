@@ -1,0 +1,209 @@
+"""Small reproducible CLI. Run `python -m nba_forecast --help`."""
+
+import argparse
+from datetime import datetime, timezone, timedelta
+import hashlib
+import gzip
+import json
+from pathlib import Path
+import sqlite3
+import sys
+
+from .validation import validate_inputs
+
+
+def _reject_constant(value):
+    raise ValueError(f'non-finite JSON number: {value}')
+
+
+def read_json(path):
+    raw=Path(path).read_bytes()
+    if str(path).endswith('.gz'): raw=gzip.decompress(raw)
+    return json.loads(raw.decode('utf-8'), parse_constant=_reject_constant)
+
+
+def _emit(value, output=None):
+    text = json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + '\n'
+    if output:
+        with Path(output).open('x', encoding='utf-8') as stream:
+            stream.write(text)
+    else:
+        print(text, end='')
+
+
+def _rows(paths):
+    rows = []
+    for path in paths or []:
+        data = read_json(path)
+        if not isinstance(data, list):
+            raise ValueError(f'{path} must contain a normalized list of observations')
+        rows.extend(data)
+    return rows
+
+
+def _parser():
+    parser = argparse.ArgumentParser(description='Auditable regular-season player scoring forecasts')
+    sub = parser.add_subparsers(dest='command', required=True)
+    for name in ('validate', 'forecast'):
+        cmd = sub.add_parser(name)
+        cmd.add_argument('--snapshot', required=True)
+        cmd.add_argument('--history', nargs='*', default=[])
+        cmd.add_argument('--scope', choices=('league', 'subset'), default='league')
+        cmd.add_argument('--output')
+        if name == 'forecast':
+            cmd.add_argument('--stage', choices=('preliminary','final'), default='preliminary')
+            cmd.add_argument('--injury-check')
+            cmd.add_argument('--db', required=True)
+            cmd.add_argument('--mode', choices=('live', 'replay', 'demo'), default='live')
+    evaluate = sub.add_parser('evaluate')
+    evaluate.add_argument('--db', required=True)
+    evaluate.add_argument('--run-id', required=True)
+    evaluate.add_argument('--actuals', nargs='+', required=True)
+    evaluate.add_argument('--output')
+    report = sub.add_parser('report')
+    report.add_argument('--db', required=True)
+    report.add_argument('--output')
+    normalize = sub.add_parser('normalize-boxscore')
+    normalize.add_argument('--input', required=True)
+    normalize.add_argument('--provenance', required=True)
+    normalize.add_argument('--output', required=True)
+    fetch = sub.add_parser('fetch-boxscore')
+    fetch.add_argument('--game-id', required=True)
+    fetch.add_argument('--cache-dir', default='data/raw')
+    fetch.add_argument('--output', required=True)
+    slate = sub.add_parser('fetch-slate')
+    window=slate.add_mutually_exclusive_group()
+    window.add_argument('--until', help='ISO timestamp; default next 24 hours')
+    window.add_argument('--minutes-ahead', type=int, help='Use 30 for final-window games')
+    slate.add_argument('--cache-dir', default='data/raw')
+    slate.add_argument('--output', required=True)
+    backfill = sub.add_parser('backfill')
+    backfill.add_argument('--seasons', nargs='+', required=True)
+    backfill.add_argument('--directory', required=True)
+    backfill.add_argument('--workers', type=int, default=4)
+    backfill.add_argument('--output')
+    injury = sub.add_parser('injury-check')
+    injury.add_argument('--snapshot', required=True)
+    injury.add_argument('--cache-dir', default='data/raw')
+    injury.add_argument('--output', required=True)
+    calendar = sub.add_parser('fetch-schedule')
+    calendar.add_argument('--directory', default='data/operations/schedule')
+    calendar.add_argument('--output')
+    profiles = sub.add_parser('profiles')
+    profiles.add_argument('--snapshot', required=True)
+    profiles.add_argument('--history', nargs='*', default=[])
+    profiles.add_argument('--output')
+    extract = sub.add_parser('apply-injuries')
+    extract.add_argument('--snapshot', required=True)
+    extract.add_argument('--schedule', required=True)
+    extract.add_argument('--injury-check', required=True)
+    extract.add_argument('--cache-dir', default='data/raw')
+    extract.add_argument('--output', required=True)
+    tick = sub.add_parser('tick')
+    tick.add_argument('--directory', required=True)
+    tick.add_argument('--history', nargs='*', default=[])
+    tick.add_argument('--output')
+    benchmarks = sub.add_parser('benchmarks')
+    benchmarks.add_argument('--db', required=True)
+    benchmarks.add_argument('--output')
+    return parser
+
+
+def main(argv=None):
+    parser = _parser()
+    args = parser.parse_args(argv)
+    exit_code = 0
+    try:
+        # Refuse overwrite before any ledger or network side effect.
+        if args.output and Path(args.output).exists():
+            raise ValueError('output exists; use a new path to preserve the previous artifact')
+        if args.command in ('validate', 'forecast'):
+            snapshot, history = read_json(args.snapshot), _rows(args.history)
+            if args.command == 'forecast':
+                snapshot['forecast_stage']=args.stage
+                if args.injury_check:
+                    snapshot['injury_check']=read_json(args.injury_check)
+                if args.stage == 'final' and 'injury_check' not in snapshot:
+                    raise ValueError('final forecast requires --injury-check evidence')
+            validate_inputs(snapshot, history, scope=args.scope)
+            if args.command == 'validate':
+                value = dict(valid=True, scope=args.scope, roster_players=len(snapshot['roster']['players']),
+                             history_rows=len(history), games=len(snapshot['games']))
+            else:
+                from .model import forecast
+                from .store import save_run
+                result = forecast(snapshot, history)
+                run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
+                value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
+        elif args.command == 'fetch-schedule':
+            from .schedule import fetch_schedule
+            value=fetch_schedule(args.directory)
+        elif args.command == 'profiles':
+            from .profiles import build_profiles
+            value=build_profiles(read_json(args.snapshot),_rows(args.history))
+        elif args.command == 'apply-injuries':
+            from .injury_parser import pdf_text,parse_report,apply_report
+            snapshot=read_json(args.snapshot);schedule=read_json(args.schedule)
+            check=read_json(args.injury_check)
+            snapshot['as_of']=datetime.now(timezone.utc).isoformat()
+            snapshot['injury_check']=check
+            for item in check['games']:
+                evidence=item['anchor_report']
+                if evidence:
+                    text=pdf_text(Path(args.cache_dir)/(evidence['sha256']+'.pdf'),evidence['sha256'])
+                    snapshot=apply_report(snapshot,parse_report(text,schedule,snapshot['roster'],evidence),[item['game_id']])
+            validate_inputs(snapshot,[])
+            value=snapshot
+        elif args.command == 'tick':
+            from .operations import run_tick
+            value=run_tick(args.directory,_rows(args.history))
+            exit_code=0 if value['status']=='complete' and not value['missed_final_games'] else 2
+        elif args.command == 'benchmarks':
+            from .benchmarks import benchmark_report
+            value=benchmark_report(args.db)
+        elif args.command == 'backfill':
+            from .backfill import backfill_seasons
+            result=backfill_seasons(args.seasons,args.directory,args.workers)
+            value={k:v for k,v in result.items() if k!='games'}
+            value['manifest']=str(Path(args.directory)/'manifest.json')
+            exit_code=0 if result['status']=='complete' else 2
+        elif args.command == 'injury-check':
+            from .injuries import fetch_injury_check
+            value=fetch_injury_check(read_json(args.snapshot),args.cache_dir)
+        elif args.command == 'evaluate':
+            from .store import evaluate_run
+            value = evaluate_run(args.db, args.run_id, _rows(args.actuals))
+        elif args.command == 'report':
+            from .store import performance_report
+            value = performance_report(args.db)
+        elif args.command == 'normalize-boxscore':
+            from .data import normalize_boxscore
+            raw = Path(args.input).read_bytes()
+            metadata = read_json(args.provenance)
+            if hashlib.sha256(raw).hexdigest() != metadata['sha256']:
+                raise ValueError('raw source SHA256 does not match provenance')
+            value = normalize_boxscore(json.loads(raw, parse_constant=_reject_constant),
+                                       metadata['source_url'], metadata['retrieved_at'])
+        elif args.command == 'fetch-boxscore':
+            from .data import boxscore_url, fetch_json, normalize_boxscore
+            source = boxscore_url(args.game_id)
+            payload = fetch_json(source, cache_dir=args.cache_dir)
+            value = normalize_boxscore(payload, source, datetime.now(timezone.utc).isoformat())
+        elif args.command == 'fetch-slate':
+            from .data import SCHEDULE_URL, build_snapshot, fetch_json, fetch_roster
+            if args.minutes_ahead is not None and not 1 <= args.minutes_ahead <= 1440:
+                raise ValueError('minutes-ahead must be between 1 and 1440')
+            schedule = fetch_json(SCHEDULE_URL, cache_dir=args.cache_dir)
+            roster = fetch_roster(schedule['leagueSchedule']['seasonYear'], cache_dir=args.cache_dir)
+            cutoff=datetime.now(timezone.utc)
+            until=(cutoff+timedelta(minutes=args.minutes_ahead)).isoformat() if args.minutes_ahead else args.until
+            value = build_snapshot(roster, schedule, cutoff.isoformat(), until)
+        _emit(value, args.output)
+        return exit_code
+    except (ValueError, OSError, KeyError, sqlite3.Error) as exc:
+        print(f'error: {exc}', file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

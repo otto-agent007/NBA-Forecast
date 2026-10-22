@@ -1,0 +1,14 @@
+[Unit]
+Description=NBA Forecast schedule, injury and feedback tick
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Replace /ABSOLUTE/PATH/NBA-Forecast in both lines before installation.
+WorkingDirectory=/ABSOLUTE/PATH/NBA-Forecast
+ExecStart=/usr/bin/python3 -m nba_forecast tick --directory data/operations/production --history datasets/regular-season-2026-10-21/history.json.gz
+TimeoutStartSec=10min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
