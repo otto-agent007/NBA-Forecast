@@ -1,3 +1,4 @@
+import Postgame from "./Postgame";
 import Projections from "./Projections";
 import React, { useEffect, useMemo, useState } from "react";
 import { Icon, TeamMark } from "./Icons";
@@ -118,16 +119,18 @@ export default function App() {
             NBA <span>FORECAST</span>
           </a>
           <nav aria-label="Main navigation">
-            {["Games", "Projections", "Players", "Performance"].map((v) => (
-              <button
-                key={v}
-                onClick={() => chooseTab(v)}
-                className={tab === v ? "active" : ""}
-                aria-current={tab === v ? "page" : undefined}
-              >
-                {v}
-              </button>
-            ))}
+            {["Games", "Projections", "Players", "Postgame", "Performance"].map(
+              (v) => (
+                <button
+                  key={v}
+                  onClick={() => chooseTab(v)}
+                  className={tab === v ? "active" : ""}
+                  aria-current={tab === v ? "page" : undefined}
+                >
+                  {v}
+                </button>
+              ),
+            )}
           </nav>
           <span className="season">{data?.season || "2026–27"}</span>
         </div>
@@ -162,7 +165,7 @@ export default function App() {
                 aria-label={`${g.away_tricode || "TBD"} at ${g.home_tricode || "TBD"}`}
                 onClick={() => {
                   setSelected(g.game_id);
-                  chooseTab("Games");
+                  chooseTab(tab === "Postgame" ? "Postgame" : "Games");
                 }}
               >
                 <div>
@@ -197,7 +200,9 @@ export default function App() {
                   ? "The player pool"
                   : tab === "Projections"
                     ? "Player projections"
-                    : "Performance"}
+                    : tab === "Postgame"
+                      ? "Postgame review"
+                      : "Performance"}
             </h1>
             <p>
               {tab === "Games"
@@ -248,7 +253,9 @@ export default function App() {
               · {stamp(data.generated_at)}{" "}
               <span>Times shown in Pacific Time</span>
             </div>
-            {tab === "Performance" ? (
+            {tab === "Postgame" ? (
+              <Postgame game={game} />
+            ) : tab === "Performance" ? (
               <Performance data={data} />
             ) : tab === "Projections" ? (
               <Projections

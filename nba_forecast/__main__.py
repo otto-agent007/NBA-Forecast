@@ -111,6 +111,9 @@ def _parser():
     dashboard.add_argument('--assets', default='dashboard/dist')
     dashboard.add_argument('--port', type=int, default=8765)
     dashboard.add_argument('--output', help='Export a static capture instead of starting the local server')
+    post=sub.add_parser('postgame')
+    post.add_argument('--directory',required=True)
+    post.add_argument('--output')
     enrich=sub.add_parser('enrich-history')
     enrich.add_argument('--archive',required=True)
     enrich.add_argument('--output',required=True)
@@ -148,6 +151,9 @@ def main(argv=None):
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
+        elif args.command == 'postgame':
+            from .postgame import build_postgames
+            value=build_postgames(args.directory)
         elif args.command == 'enrich-history':
             from .player_sync import enrich_archive
             value=enrich_archive(args.archive)

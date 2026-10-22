@@ -1430,3 +1430,125 @@ pre {
     height: 60px;
   }
 }
+.postgame {
+  background: white;
+  border: 1px solid #dce5ef;
+  border-radius: 12px;
+  padding: 28px;
+}
+.postgame-score {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  padding: 25px;
+  background: #0e2745;
+  color: white;
+  border-radius: 8px;
+}
+.postgame-score > div {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.postgame-score strong {
+  font-family: "Barlow Condensed";
+  font-size: 52px;
+}
+.postgame-final {
+  font-size: 12px;
+  text-align: center;
+  line-height: 2;
+}
+.postgame-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 35px;
+  margin: 28px 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.margin-chart {
+  width: 100%;
+  display: block;
+  margin-bottom: 25px;
+}
+.margin-chart text {
+  font-size: 13px;
+  fill: #61748c;
+}
+.postgame-player {
+  margin: 25px 0;
+  padding: 22px;
+  background: #f4f7fc;
+  border-radius: 8px;
+}
+.postgame-player li {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.postgame-player .form-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+.rotation-events {
+  display: flex;
+  gap: 10px;
+  overflow: auto;
+  padding: 8px 0;
+}
+.rotation-events > div {
+  display: flex;
+  flex: 0 0 90px;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  background: white;
+  border: 1px solid #dce5ef;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.rotation-events span {
+  color: #ad6134;
+  font-weight: bold;
+}
+.rotation-events .rotation-in {
+  color: #187968;
+}
+.postgame details {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.postgame summary {
+  cursor: pointer;
+  font-weight: bold;
+}
+@media (max-width: 650px) {
+  .postgame {
+    padding: 15px;
+  }
+  .postgame-score {
+    gap: 12px;
+    padding: 15px 8px;
+  }
+  .postgame-score > div {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .postgame-score .team-logo {
+    width: 55px;
+    height: 55px;
+  }
+  .postgame-score strong {
+    font-size: 36px;
+  }
+  .postgame-summary {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .postgame-player {
+    padding: 14px;
+  }
+  .top-inner nav {
+    overflow-x: auto;
+  }
+}

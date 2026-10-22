@@ -19,7 +19,9 @@ def dashboard_data(directory):
     folder=Path(directory)
     schedule=read_optional(folder/'schedule/latest.json',{})
     games=deepcopy(schedule.get('games',[]));by_id={g['game_id']:g for g in games}
-    for g in games:g['forecast']=None
+    for g in games:
+        g['forecast']=None
+
     db=folder/'forecast.sqlite';players=[];roster_observed=None;roster_rank=None
     if db.exists():
         # URI mode=ro is important: opening the UI never initializes or edits a ledger.
@@ -75,9 +77,12 @@ def serve_dashboard(directory,assets,port=8765):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             path=unquote(urlsplit(self.path).path)
-            if path=='/api/dashboard' or re.fullmatch(r'/api/players/[0-9]+',path):
+            if path=='/api/dashboard' or re.fullmatch(r'/api/players/[0-9]+',path) or re.fullmatch(r'/api/postgame/002[0-9]{7}',path):
                 try:
-                    value=dashboard_data(directory) if path=='/api/dashboard' else player_payload(directory,path.rsplit('/',1)[1])
+                    if path.startswith('/api/postgame/'):
+                        value=read_optional(Path(directory)/'postgame'/(path.rsplit('/',1)[1]+'.json'),dict(missing_reason='No verified postgame timeline captured yet. Run postgame after syncing player data.'))
+                    else:
+                        value=dashboard_data(directory) if path=='/api/dashboard' else player_payload(directory,path.rsplit('/',1)[1])
                     body=json.dumps(value,allow_nan=False).encode()
                 except (OSError,ValueError,KeyError,sqlite3.Error):
                     self.send_error(503,'Saved dashboard evidence is unavailable');return

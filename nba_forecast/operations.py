@@ -184,5 +184,8 @@ def _tick(folder,history,report):
             from .player_sync import sync_player_data
             report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=2)
             report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
+            from .postgame import build_postgames
+            report['postgame']=build_postgames(folder)
+            report['warnings'].extend(dict(task='postgame',**e) for e in report['postgame']['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
