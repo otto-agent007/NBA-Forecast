@@ -53,6 +53,30 @@ export default function Performance({ data }) {
               Includes out predictions; inspect status groups before
               interpreting aggregate accuracy. Intervals remain heuristic.
             </p>
+            {g.metrics.per_stat && (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Statistic</th>
+                      <th>Outcomes</th>
+                      <th>MAE</th>
+                      <th>Bias</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(g.metrics.per_stat).map(([k, v]) => (
+                      <tr key={k}>
+                        <td>{k.toUpperCase()}</td>
+                        <td>{v.count}</td>
+                        <td>{number(v.mae)}</td>
+                        <td>{number(v.mean_signed_error)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             <details>
               <summary>Error breakdown and status groups</summary>
               <pre>

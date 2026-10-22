@@ -12,3 +12,4 @@ run-*.json
 
 node_modules/
 dashboard/public/dashboard.json
+dashboard/public/players/

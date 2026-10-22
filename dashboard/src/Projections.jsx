@@ -24,7 +24,7 @@ export default function Projections(props) {
           <strong>{props.players.length}</strong>
         </div>
         <div>
-          <span>Supported projections</span>
+          <span>With projections</span>
           <strong>{supported.length}</strong>
         </div>
         <div>
@@ -38,8 +38,9 @@ export default function Projections(props) {
       </div>
       <PlayerTable {...props} title="Player projections" expanded />
       <p className="projection-disclaimer">
-        Rebounds, assists, steals, blocks and fantasy totals are not modeled
-        yet. Ranges are heuristic 80% scoring intervals, pending calibration.
+        PTS, REB, AST, 3PM, TO, STL and BLK use saved regular-season evidence.
+        Missing categories stay blank. Ranges are heuristic 80% scoring
+        intervals. Fantasy totals require a selected scoring system.
       </p>
     </section>
   );

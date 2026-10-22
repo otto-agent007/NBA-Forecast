@@ -93,7 +93,11 @@ export function gamePlayers(data, game) {
 }
 export function statusLabel(p) {
   if (p.status === "out") return "Out";
-  if (p.status === "projected") return "Projected";
+  if (p.status === "projected")
+    return p.availability === "Not listed" ||
+      p.flags?.includes("availability_not_listed")
+      ? "Conditional"
+      : "Projected";
   if (
     p.availability &&
     ["Questionable", "Doubtful", "Probable", "questionable"].includes(

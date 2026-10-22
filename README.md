@@ -51,3 +51,5 @@ Python 3.11–3.13; PRs are reviewed before merging.
 ## Dashboard
 
 Game-day matchups, team logos, player projections and performance: see [setup and usage](docs/dashboard/README.md).
+
+Player profiles, shot charts, expanded stats and continuous operation: [guide](docs/player-intelligence.md).

@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
+OPTIONAL_COUNTS = ('reb', 'ast', 'stl', 'blk')
 COUNTS = ('fgm', 'fga', 'fg3m', 'fg3a', 'ftm', 'fta', 'tov', 'pts')
 
 
@@ -85,6 +86,10 @@ def validate_history(history):
             for field in COUNTS:
                 if isinstance(row[field], bool) or not isinstance(row[field], int) or row[field] < 0:
                     raise ValueError(f'{field} must be a nonnegative integer')
+            for field in OPTIONAL_COUNTS:
+                value = row.get(field)
+                if value is not None and (type(value) is not int or value < 0):
+                    raise ValueError(f'{field} must be a nonnegative integer or null')
             if any(row[m] > row[a] for m, a in (('fgm', 'fga'), ('fg3m', 'fg3a'), ('ftm', 'fta'))):
                 raise ValueError('made shots exceed attempts')
             if (row['fg3m'] > row['fgm'] or row['fg3a'] > row['fga'] or
@@ -96,7 +101,7 @@ def validate_history(history):
                 raise ValueError('starter must be explicit boolean evidence')
             if row['status'] not in ('played', 'dnp'):
                 raise ValueError('observation status must be played or dnp')
-            if row['status'] == 'dnp' and (row['minutes'] != 0 or any(row[k] for k in COUNTS)):
+            if row['status'] == 'dnp' and (row['minutes'] != 0 or any(row.get(k) for k in COUNTS + OPTIONAL_COUNTS)):
                 raise ValueError('DNP observations must have zero minutes and counts')
     except (KeyError, TypeError) as exc:
         raise ValueError(f'incomplete normalized history: {exc}') from exc
@@ -188,6 +193,8 @@ def validate_inputs(snapshot, history, scope='league'):
             _source(adjustment['source_url'])
             _text(adjustment['reason'], 'reason')
             _text(adjustment['reviewer'], 'reviewer')
+            if 'minutes_cap' in adjustment:
+                _number(adjustment['minutes_cap'], 'minutes_cap', 0, 48)
             _number(adjustment['minutes_delta'], 'minutes_delta', -15, 15)
             _number(adjustment['opportunity_multiplier'], 'opportunity_multiplier', 0.5, 1.5)
         for row in history:

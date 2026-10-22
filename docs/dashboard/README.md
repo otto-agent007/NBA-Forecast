@@ -23,9 +23,9 @@ Run the existing operational pipeline separately to update evidence.
 - **Performance:** see prospective error, interval coverage and paired baselines
   after outcomes are recorded. No evaluated results means no accuracy score.
 
-Fantasy-style presentation does not imply fantasy-point scoring. Rebounds,
-assists, steals, blocks, turnovers, salaries and fantasy totals are not modeled.
-A later extension needs validated stat forecasts and an explicit scoring rule.
+Expanded stat forecasts and NBA-style profiles are now available: see
+[the player intelligence guide](../player-intelligence.md). Fantasy totals still
+require a selected scoring rule; they are not implied by the table layout.
 
 The T−30 checkpoint is our operational target, not a guarantee that the NBA's
 last or most accurate report is published then. Later reports and lineup changes
@@ -35,7 +35,8 @@ The server is read-only, binds to localhost and serves only built assets plus
 `/api/dashboard`. There is no hosted deployment, login or always-on runner here.
 Live pregame ledger runs must match the current game identity and tipoff; replay
 runs, changed tipoffs and postponed games cannot supply a displayed forecast.
-Current roster membership is not historical availability evidence.
+Current roster membership is not historical availability evidence. Conditional
+Not listed projections use a fully parsed team report and remain visibly conditional.
 
 Optional portable snapshot: `python -m nba_forecast dashboard --directory
 <operations-dir> --output dashboard/public/dashboard.json` (one shell line),

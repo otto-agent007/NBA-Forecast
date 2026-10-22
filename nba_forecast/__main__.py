@@ -111,6 +111,14 @@ def _parser():
     dashboard.add_argument('--assets', default='dashboard/dist')
     dashboard.add_argument('--port', type=int, default=8765)
     dashboard.add_argument('--output', help='Export a static capture instead of starting the local server')
+    enrich=sub.add_parser('enrich-history')
+    enrich.add_argument('--archive',required=True)
+    enrich.add_argument('--output',required=True)
+    sync=sub.add_parser('sync-players')
+    sync.add_argument('--directory',required=True)
+    sync.add_argument('--history',nargs='*',default=[])
+    sync.add_argument('--max-shot-games',type=int,default=2)
+    sync.add_argument('--output')
     return parser
 
 
@@ -140,6 +148,12 @@ def main(argv=None):
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
+        elif args.command == 'enrich-history':
+            from .player_sync import enrich_archive
+            value=enrich_archive(args.archive)
+        elif args.command == 'sync-players':
+            from .player_sync import sync_player_data
+            value=sync_player_data(args.directory,_rows(args.history),max_shot_games=args.max_shot_games)
         elif args.command == 'dashboard':
             from .dashboard import dashboard_data,serve_dashboard
             if args.output:

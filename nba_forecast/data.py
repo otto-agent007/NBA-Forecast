@@ -23,6 +23,7 @@ MAX_BYTES = 12 * 1024 * 1024
 DEFAULT_CACHE = Path(".nba_forecast/raw")
 STAT_FIELDS = {"fgm": "fieldGoalsMade", "fga": "fieldGoalsAttempted", "fg3m": "threePointersMade", "fg3a": "threePointersAttempted", "ftm": "freeThrowsMade", "fta": "freeThrowsAttempted", "tov": "turnovers", "pts": "points"}
 
+OPTIONAL_STAT_FIELDS = {"reb": "reboundsTotal", "ast": "assists", "stl": "steals", "blk": "blocks"}
 
 def _timestamp(value):
     if not isinstance(value, str):
@@ -51,6 +52,8 @@ def _allowed_url(url, allow_roster=False):
     if url == SCHEDULE_URL or (allow_roster and url == ROSTER_URL):
         return
     if parsed.netloc == "cdn.nba.com" and re.fullmatch(r"/static/json/liveData/boxscore/boxscore_002\d{7}\.json", parsed.path):
+        return
+    if parsed.netloc == "cdn.nba.com" and re.fullmatch(r"/static/json/liveData/playbyplay/playbyplay_002\d{7}\.json", parsed.path):
         return
     raise ValueError("Source URL is not an allowlisted NBA endpoint")
 
@@ -161,6 +164,7 @@ def normalize_boxscore(payload, source_url, known_at):
                 stats = player["statistics"]
                 row = {"game_id": game_id, "season": season, "season_type": "Regular Season", "game_time": game_time, "known_at": known_at, "source_url": source_url, "player_id": str(player["personId"]), "name": player["name"], "team_id": str(team["teamId"]), "opponent_id": str(opponent["teamId"]), "minutes": _minutes(stats["minutes"]), "status": "played" if played == "1" else "dnp"}
                 row.update({field: stats[source] for field, source in STAT_FIELDS.items()})
+                row.update({field: stats.get(source) for field, source in OPTIONAL_STAT_FIELDS.items()})
                 if 'starter' in player:
                     if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
                     row['starter']=player['starter']=='1'
@@ -214,6 +218,12 @@ def normalize_roster(players, observed_at, season):
             normalized.append({"player_id": player_id, "name": f"{player['PLAYER_FIRST_NAME']} {player['PLAYER_LAST_NAME']}".strip(), "team_id": str(player["TEAM_ID"]), "status": "unknown"})
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Incomplete NBA roster response: {exc}") from exc
+    source_players={str(p['PERSON_ID']):p for p in players}
+    bio_fields={'team_code':'TEAM_ABBREVIATION','position':'POSITION','jersey':'JERSEY_NUMBER','height':'HEIGHT','weight':'WEIGHT','college':'COLLEGE','country':'COUNTRY','draft_year':'DRAFT_YEAR','draft_round':'DRAFT_ROUND','draft_number':'DRAFT_NUMBER'}
+    for row in normalized:
+        source=source_players[row['player_id']]
+        row['bio']={k:source.get(v) for k,v in bio_fields.items()}
+        row['team_code']=source.get('TEAM_ABBREVIATION')
     teams = sorted({player["team_id"] for player in normalized})
     if set(teams) != {str(team) for team in range(1610612737, 1610612767)}:
         raise ValueError("Official active roster must contain all 30 NBA teams")

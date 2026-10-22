@@ -89,6 +89,12 @@ export default function PlayerTable({
                   80% range
                 </th>
               )}
+              {expanded &&
+                ["REB", "AST", "3PM", "TO", "STL", "BLK"].map((k) => (
+                  <th key={k} scope="col" className="numeric">
+                    {k}
+                  </th>
+                ))}
             </tr>
           </thead>
           <tbody>
@@ -128,6 +134,19 @@ export default function PlayerTable({
                       : "—"}
                   </td>
                 )}
+                {expanded &&
+                  [
+                    "expected_reb",
+                    "expected_ast",
+                    "expected_fg3m",
+                    "expected_tov",
+                    "expected_stl",
+                    "expected_blk",
+                  ].map((k) => (
+                    <td key={k} className="numeric">
+                      {number(p[k])}
+                    </td>
+                  ))}
               </tr>
             ))}
           </tbody>
@@ -151,7 +170,8 @@ export default function PlayerTable({
       <div className="table-note">
         <Icon name="info" />
         <span>
-          Availability must be resolved before a scoring projection is shown.
+          Dashes mean unsupported estimates. Conditional projections use a
+          complete-report not-listed assumption; participation is not confirmed.
         </span>
       </div>
     </section>

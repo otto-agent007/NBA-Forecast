@@ -6,6 +6,7 @@ import json
 import mimetypes
 from pathlib import Path
 import sqlite3
+import re
 from urllib.parse import urlsplit,unquote
 from .validation import parse_time
 
@@ -49,17 +50,22 @@ def dashboard_data(directory):
                         evidence=statuses.get(p['player_id'],{})
                         p['availability']=evidence.get('reported_status') or evidence.get('status','unknown')
                         p['status_source_url']=evidence.get('status_source_url')
-                    game['forecast']=dict(run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
+                    roles=read_optional(folder/'runs'/row['run_id']/'profiles.json',{})
+                    game['forecast']=dict(team_roles=[t for t in roles.get('teams',[]) if t['team_id'] in (game['home_team_id'],game['away_team_id'])],run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
                         stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],predictions=predictions,
                         review_queue=[q for q in forecast['review_queue'] if q['game_id']==game['game_id']],
                         injury_check=check,context=snapshot.get('schedule_context',{}))
+    if not players:
+        roster=read_optional(folder/'roster.json',{})
+        players=roster.get('players',[]);roster_observed=roster.get('observed_at')
     # Roster status from another game's snapshot is not current availability.
-    players=[{k:p[k] for k in ('player_id','name','team_id')} for p in players]
+    team_codes={g[side+'_team_id']:g.get(side+'_tricode') for g in games for side in ('home','away')}
+    players=[{**{k:p[k] for k in ('player_id','name','team_id')},'team_code':team_codes.get(p['team_id'])} for p in players]
     return dict(schema_version=1,generated_at=datetime.now(timezone.utc).isoformat(),source_mode='saved_operations',
                 season=schedule.get('season'),schedule_observed_at=schedule.get('observed_at'),coverage=schedule.get('coverage',{}),
                 games=games,players=players,roster_observed_at=roster_observed,
                 runner=read_optional(folder/'last-tick.json',None),
-                performance=read_optional(folder/'performance.json',None),benchmarks=read_optional(folder/'benchmarks.json',None))
+                performance=read_optional(folder/'performance.json',None),benchmarks=read_optional(folder/'benchmarks.json',None),player_data=read_optional(folder/'players/index.json',None))
 
 
 def serve_dashboard(directory,assets,port=8765):
@@ -69,8 +75,10 @@ def serve_dashboard(directory,assets,port=8765):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             path=unquote(urlsplit(self.path).path)
-            if path=='/api/dashboard':
-                try:body=json.dumps(dashboard_data(directory),allow_nan=False).encode()
+            if path=='/api/dashboard' or re.fullmatch(r'/api/players/[0-9]+',path):
+                try:
+                    value=dashboard_data(directory) if path=='/api/dashboard' else player_payload(directory,path.rsplit('/',1)[1])
+                    body=json.dumps(value,allow_nan=False).encode()
                 except (OSError,ValueError,KeyError,sqlite3.Error):
                     self.send_error(503,'Saved dashboard evidence is unavailable');return
                 self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Cache-Control','no-store')
@@ -85,3 +93,26 @@ def serve_dashboard(directory,assets,port=8765):
         def log_message(self,fmt,*args):pass
     with ThreadingHTTPServer(('127.0.0.1',port),Handler) as server:
         print(f'Dashboard: http://127.0.0.1:{port}',flush=True);server.serve_forever()
+
+
+def player_payload(directory,player_id):
+    if not re.fullmatch(r'[0-9]+',str(player_id)):raise ValueError('Invalid player ID')
+    folder=Path(directory);page=read_optional(folder/'players'/(player_id+'.json'),None)
+    if page is None:return dict(player_id=player_id,missing_reason='Player history has not been synchronized yet.',prediction_history=[])
+    page=deepcopy(page);selected={};db=folder/'forecast.sqlite'
+    if db.exists():
+        with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
+            conn.row_factory=sqlite3.Row;conn.execute('BEGIN')
+            for run in conn.execute("SELECT rowid,run_id,created_at,forecast_json FROM runs WHERE mode='live' AND scope='league' ORDER BY created_at,rowid"):
+                f=json.loads(run['forecast_json'])
+                if f['season']!=page['season']:continue
+                for pred in f['predictions']:
+                    if pred['player_id']!=player_id or not pred.get('game_id') or parse_time(run['created_at'])>=parse_time(pred['start_time']):continue
+                    # Select before looking at outcomes, even when latest abstains.
+                    selected[pred['game_id']]=dict(run_id=run['run_id'],saved_at=run['created_at'],model_version=f['model_version'],prediction=pred)
+            for item in selected.values():
+                row=conn.execute('SELECT report_json FROM evaluations WHERE run_id=? ORDER BY revision DESC LIMIT 1',(item['run_id'],)).fetchone()
+                matched=json.loads(row['report_json'])['matched'] if row else []
+                item['actual']=next((r for r in matched if r['player_id']==player_id and r['game_id']==item['prediction']['game_id']),None)
+    page['prediction_history']=sorted(selected.values(),key=lambda r:parse_time(r['prediction']['start_time']),reverse=True)[:20]
+    return page

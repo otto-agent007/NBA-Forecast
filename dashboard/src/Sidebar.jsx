@@ -53,6 +53,30 @@ export default function Sidebar({ game, data, onReview, now }) {
           View review queue <Icon name="arrow" size={18} />
         </button>
       </section>
+      {(forecast?.team_roles || [])
+        .filter((t) => t.out_player_ids.length > 0)
+        .map((t) => (
+          <section key={t.team_id}>
+            <h3>Rotation opportunity review</h3>
+            <p>
+              {t.vacated_baseline_minutes.toFixed(1)} baseline minutes and{" "}
+              {t.vacated_baseline_fga.toFixed(1)} shot attempts associated with
+              out players.
+            </p>
+            <p>
+              Compare:{" "}
+              {t.opportunity_ranking
+                .map((id) =>
+                  forecast.predictions.find((p) => p.player_id === id),
+                )
+                .filter((p) => p && p.status === "projected")
+                .slice(0, 3)
+                .map((p) => p.name)
+                .join(", ") || "Availability unresolved"}
+              . These are review candidates, not assigned beneficiaries.
+            </p>
+          </section>
+        ))}
       <section className="evidence-block">
         <h3>Evidence freshness</h3>
         <dl>
