@@ -10,7 +10,7 @@ const moment = (t) => {
     t === 2880 ? 0 : q <= 4 ? q * 720 - t : 2880 + (q - 4) * 300 - t;
   return `${q <= 4 ? "Q" + q : "OT" + (q - 4)} ${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")}`;
 };
-export default function Postgame({ game }) {
+export default function Postgame({ game, refreshRevision = 0 }) {
   const playerPanel = useRef(null);
   const [data, setData] = useState(null),
     [error, setError] = useState(""),
@@ -35,12 +35,14 @@ export default function Postgame({ game }) {
         if (!r.ok) throw Error("Postgame evidence unavailable.");
         return r.json();
       })
-      .then(setData)
+      .then((next) => {
+        if (!abort.signal.aborted) setData(next);
+      })
       .catch((e) => {
         if (e.name !== "AbortError") setError(e.message);
       });
     return () => abort.abort();
-  }, [game?.game_id]);
+  }, [game?.game_id, refreshRevision]);
   if (!game)
     return <div className="empty">Choose a date with a completed game.</div>;
   if (error || data?.missing_reason)

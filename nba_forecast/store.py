@@ -399,7 +399,8 @@ def performance_report(db_path):
     try:
         with conn:
             conn.execute('BEGIN')
-            runs = conn.execute('SELECT rowid AS insertion_order, * FROM runs').fetchall()
+            runs = conn.execute(
+                'SELECT rowid AS insertion_order,run_id,created_at,mode,scope,forecast_json FROM runs')
             selected = {}
             off_slate_rows = non_live_runs = ineligible_rows = 0
             for run in runs:
@@ -409,6 +410,7 @@ def performance_report(db_path):
                 forecast = json.loads(run['forecast_json'])
                 created = parse_time(run['created_at'])
                 rank = created, run['insertion_order']
+                identity = {'run_id': run['run_id'], 'created_at': run['created_at']}
                 for prediction in forecast['predictions']:
                     if prediction['game_id'] is None:
                         off_slate_rows += 1
@@ -419,7 +421,10 @@ def performance_report(db_path):
                     key = (forecast['season'], forecast['model_version'],
                            prediction['game_id'], prediction['player_id'])
                     if key not in selected or rank > selected[key][0]:
-                        selected[key] = rank, run, prediction
+                        # Selection needs identity/status only, not another copy
+                        # of every input or each prediction's component audit.
+                        selected[key] = rank, identity, {
+                            'team_id': prediction['team_id'], 'status': prediction['status']}
 
             # Only now inspect final-result revisions; none participate in selection.
             evaluations = {}

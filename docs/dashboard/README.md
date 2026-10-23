@@ -52,3 +52,18 @@ licenses. All routine dashboard calculations are deterministic and use no LLMs.
 
 Validation: `python -m unittest discover -s tests -v`, `npm test --prefix dashboard`,
 and `npm run build --prefix dashboard`. CI runs both Python and frontend checks.
+
+Browser regressions run on desktop and mobile viewports using synthetic saved
+evidence without contacting NBA sources:
+
+```sh
+npm exec --prefix dashboard -- playwright install chromium
+npm run test:e2e --prefix dashboard
+```
+
+CI installs Chromium and runs these checks too. An existing compatible Chromium
+can be selected with `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/absolute/path/to/chrome`.
+The tests cover saved role-review queue membership, refreshing new or corrected
+postgame evidence for an unchanged game, and cancellation when switching games.
+Refresh reloads postgame evidence as well as the main dashboard capture. The
+review filter includes projected players who appear in the saved role queue.

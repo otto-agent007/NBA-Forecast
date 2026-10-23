@@ -1,5 +1,6 @@
 """One restartable operations tick. Run on a persistent host with the supplied timer."""
 from copy import deepcopy
+from contextlib import closing
 from datetime import datetime,timezone
 import json
 import hashlib
@@ -14,20 +15,40 @@ from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
 from .store import save_run,evaluate_run,performance_report
 from .benchmarks import benchmark_report
-from .validation import parse_time,validate_history,validate_inputs
+from .validation import parse_time,validate_history,validate_inputs,_source
 
 
 def _now():return datetime.now(timezone.utc).isoformat()
 
 
 def ledger_runs(db):
-    if not Path(db).exists():return []
-    with sqlite3.connect(db) as conn:
-        conn.row_factory=sqlite3.Row
-        return [dict(r) for r in conn.execute('SELECT run_id,snapshot_json,history_json,forecast_json,mode FROM runs')]
+    """Yield bounded batches of run metadata, releasing readers before writes.
+
+    Histories are large immutable inputs. Only artifact recovery needs them;
+    routine ticks must not load one copy for every saved forecast.
+    """
+    if not Path(db).exists():return
+    after=0;upper=None
+    while True:
+        with closing(sqlite3.connect(db)) as conn:
+            conn.row_factory=sqlite3.Row
+            if upper is None:
+                upper=conn.execute('SELECT COALESCE(MAX(rowid),0) FROM runs').fetchone()[0]
+            rows=conn.execute(
+                'SELECT rowid AS insertion_order,run_id,snapshot_json,forecast_json,mode FROM runs '
+                'WHERE rowid>? AND rowid<=? ORDER BY rowid LIMIT 32',(after,upper)).fetchall()
+        if not rows:return
+        after=rows[-1]['insertion_order']
+        for row in rows:yield dict(row)
 
 
-def apply_review(snapshot,review):
+def _saved_history(db,run_id):
+    with closing(sqlite3.connect(db)) as conn:
+        row=conn.execute('SELECT history_json FROM runs WHERE run_id=?',(run_id,)).fetchone()
+    return json.loads(row[0])
+
+
+def apply_review(snapshot,review,*,skip_superseded=False):
     out=deepcopy(snapshot)
     if len(out['games'])!=1 or review['game_id']!=out['games'][0]['game_id']:
         raise ValueError('review targets a different game')
@@ -37,14 +58,27 @@ def apply_review(snapshot,review):
         if not p or pid in seen or p['team_id'] not in (game['home_team_id'],game['away_team_id']):
             raise ValueError('duplicate or wrong-team review player')
         seen.add(pid)
-        if p.get('status_observed_at') and parse_time(update.get('status_published_at',update['status_observed_at']))<parse_time(p.get('status_published_at',p['status_observed_at'])):
+        observed=parse_time(update['status_observed_at'])
+        published=parse_time(update.get('status_published_at',update['status_observed_at']))
+        if not published<=observed<=parse_time(out['as_of']):
+            raise ValueError('review availability evidence chronology is invalid')
+        if update['status'] not in ('available','out','questionable','unknown'):
+            raise ValueError('invalid review availability status')
+        _source(update['status_source_url'])
+        if p.get('status_observed_at') and published<parse_time(p.get('status_published_at',p['status_observed_at'])):
+            if skip_superseded:
+                out.setdefault('review_warnings',[]).append(dict(kind='superseded_review_availability',
+                    game_id=review['game_id'],player_id=pid,
+                    review_published_at=published.isoformat(),
+                    retained_published_at=p.get('status_published_at',p['status_observed_at'])))
+                continue
             raise ValueError('review cannot supersede newer availability evidence')
         for key in ('status','status_observed_at','status_source_url'):p[key]=update[key]
         p['status_published_at']=update.get('status_published_at',update['status_observed_at'])
         p['status_game_id']=review['game_id']
         p['status_basis']='sourced_review'
         p['reported_status']=update['status'].capitalize()
-    out['role_adjustments']=review.get('role_adjustments',[])
+    out['role_adjustments']=deepcopy(review.get('role_adjustments',[]))
     out['review_input']=deepcopy(review)
     validate_inputs(out,[])
     return out
@@ -83,7 +117,7 @@ def _tick(folder,history,report):
         snapshot=json.loads(run['snapshot_json']);key=snapshot.get('operation_key')
         if key:
             output=folder/'runs'/run['run_id']
-            if not (output/'profiles.json').exists():atomic_json(output/'profiles.json',build_profiles(snapshot,json.loads(run['history_json'])))
+            if not (output/'profiles.json').exists():atomic_json(output/'profiles.json',build_profiles(snapshot,_saved_history(db,run['run_id'])))
             if not (output/'forecast.json').exists():atomic_json(output/'forecast.json',json.loads(run['forecast_json']))
             if not (output/'snapshot.json').exists():atomic_json(output/'snapshot.json',snapshot)
         if key and key not in state['jobs']:
@@ -94,7 +128,9 @@ def _tick(folder,history,report):
     combined={(r['game_id'],r['player_id']):r for r in history}
     for p in sorted(cache.glob('*.json')):
         rows=json.loads(p.read_text());validate_history(rows)
-        for row in rows:combined[(row['game_id'],row['player_id'])]=row
+        for row in rows:
+            key=(row['game_id'],row['player_id']);old=combined.get(key)
+            if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):combined[key]=row
     history=list(combined.values());validate_history(history)
     jobs=due_jobs(schedule,_now());by_id={g['game_id']:g for g in schedule['games']}
     reviews={}
@@ -130,7 +166,9 @@ def _tick(folder,history,report):
                 if job['stage']=='final':raise
                 report['warnings'].append(dict(game_id=job['game_id'],error=str(exc),action='Preliminary availability remains unresolved.'))
             snapshot['as_of']=_now()
-            if job['game_id'] in reviews:snapshot=apply_review(snapshot,reviews[job['game_id']])
+            if job['game_id'] in reviews:
+                snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
+                report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
             usable=eligible_history(snapshot,history)
             profiles=build_profiles(snapshot,usable)
             prediction=forecast(snapshot,usable)

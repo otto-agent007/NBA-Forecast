@@ -32,3 +32,5 @@ jobs:
       - run: npm ci --prefix dashboard
       - run: npm test --prefix dashboard
       - run: npm run build --prefix dashboard
+      - run: npm exec --prefix dashboard -- playwright install --with-deps chromium
+      - run: npm run test:e2e --prefix dashboard

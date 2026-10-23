@@ -73,6 +73,9 @@ export function gamePlayers(data, game) {
   const predictions = new Map(
     (game.forecast?.predictions || []).map((p) => [p.player_id, p]),
   );
+  const reviewIds = new Set(
+    (game.forecast?.review_queue || []).map((p) => p.player_id),
+  );
   const members = data.players.filter((p) =>
     [game.home_team_id, game.away_team_id].includes(p.team_id),
   );
@@ -82,6 +85,7 @@ export function gamePlayers(data, game) {
     ...p,
     ...predictions.get(p.player_id),
     status: predictions.get(p.player_id)?.status || "not_forecast",
+    requires_review: reviewIds.has(p.player_id),
     game_id: game.game_id,
     matchup: `${game.away_tricode || "TBD"} @ ${game.home_tricode || "TBD"}`,
     team_code:
@@ -121,7 +125,7 @@ export function filterPlayers(
           `${p.name} ${p.team_code || ""}`.toLowerCase().includes(text)) &&
         (filter === "all" ||
           (filter === "review" &&
-            ["needs_review", "not_forecast"].includes(p.status)) ||
+            (p.requires_review || ["needs_review", "not_forecast"].includes(p.status))) ||
           (filter === "out" && p.status === "out") ||
           (filter === "projected" && p.status === "projected")),
     )

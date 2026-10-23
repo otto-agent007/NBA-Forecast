@@ -55,3 +55,31 @@ test("unsafe source schemes are rejected", () => {
   assert.equal(safeSource("javascript:alert(1)"), null);
   assert.equal(safeSource("https://nba.com"), "https://nba.com");
 });
+
+test("review filtering includes projected members of the saved role queue", () => {
+  const game = {
+    game_id: "g",
+    home_team_id: "H",
+    away_team_id: "A",
+    forecast: {
+      predictions: [
+        { player_id: "1", name: "Role review", team_id: "H", status: "projected" },
+        { player_id: "2", name: "Routine", team_id: "A", status: "projected" },
+      ],
+      review_queue: [{ player_id: "1", tier: "reasoning_review" }],
+    },
+  };
+  const rows = gamePlayers({ players: [] }, game);
+  assert.deepEqual(filterPlayers(rows, "", "review").map((p) => p.player_id), ["1"]);
+  assert.equal(rows.find((p) => p.player_id === "1").status, "projected");
+});
+
+test("missing or empty saved queues preserve availability review filtering", () => {
+  const game = {
+    game_id: "g", home_team_id: "H", away_team_id: "A",
+    forecast: { predictions: [{ player_id: "1", name: "Unknown", team_id: "H", status: "needs_review" }] },
+  };
+  assert.equal(filterPlayers(gamePlayers({ players: [] }, game), "", "review").length, 1);
+  game.forecast.review_queue = [];
+  assert.equal(filterPlayers(gamePlayers({ players: [] }, game), "", "review").length, 1);
+});

@@ -36,6 +36,15 @@ Postgame corrections require explicit re-fetch/import (cached finals are not
 silently changed). A changed actual tipoff may fail strict ledger time matching;
 that error requires review instead of silently rewriting the saved forecast.
 
+Imported history and cached finals are merged by `known_at`: newer evidence
+wins, with cache precedence on equal instants. This preserves explicit imported
+corrections even when the local final cache contains an older download.
+Routine ledger readers stream run metadata; saved history is loaded only when
+rebuilding a missing profile or computing a selected run's benchmark. Existing
+immutable inputs and hashes retain their original format. The ledger still
+stores full inputs for every run, so storage and backup capacity must account
+for repeated history snapshots.
+
 ## Schedule and context
 
 `data/calendar/latest.json` points to the latest normalized calendar;
@@ -91,6 +100,13 @@ Review timestamps must precede cutoff and remain recent; older publication
 cannot supersede newer official status evidence. Fresh downloads do not make an
 old publication new. Changed review content produces a new immutable run before
 tipoff. Late review files cannot create a retroactive live prediction.
+
+During a tick, an availability override superseded by newer official evidence
+is skipped and logged as `superseded_review_availability`. The original review
+is preserved in the saved snapshot along with the warning; other valid
+overrides and role adjustments still apply. Invalid identities, sources and
+future or inconsistent evidence timestamps still reject the review. Direct
+`apply_review` callers remain strict unless they explicitly request this policy.
 
 Routine collection, exact matching, calculations and validation are deterministic.
 Use the forecast review queue for data verification, and capable reasoning for

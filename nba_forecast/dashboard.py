@@ -28,7 +28,7 @@ def dashboard_data(directory):
         with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
             conn.row_factory=sqlite3.Row
             conn.execute('BEGIN')
-            rows=conn.execute("SELECT rowid AS insertion_order,run_id,created_at,snapshot_json,forecast_json FROM runs WHERE mode='live' AND scope='league' ORDER BY created_at,rowid").fetchall()
+            rows=conn.execute("SELECT rowid AS insertion_order,run_id,created_at,snapshot_json,forecast_json FROM runs WHERE mode='live' AND scope='league' ORDER BY created_at,rowid")
             chosen={}
             for row in rows:
                 snapshot=json.loads(row['snapshot_json']);forecast=json.loads(row['forecast_json'])

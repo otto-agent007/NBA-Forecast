@@ -26,6 +26,7 @@ export default function App() {
     [filter, setFilter] = useState("all"),
     [sort, setSort] = useState("name"),
     [detail, setDetail] = useState(null),
+    [refreshRevision, setRefreshRevision] = useState(0),
     [now, setNow] = useState(Date.now());
   async function reload() {
     setLoading(true);
@@ -49,6 +50,7 @@ export default function App() {
       )
         throw new Error("Dashboard data format is not supported.");
       setData(next);
+      setRefreshRevision((old) => old + 1);
       setDate((old) => old || initialDay(next));
     } catch (e) {
       setError(e.message);
@@ -254,7 +256,7 @@ export default function App() {
               <span>Times shown in Pacific Time</span>
             </div>
             {tab === "Postgame" ? (
-              <Postgame game={game} />
+              <Postgame game={game} refreshRevision={refreshRevision} />
             ) : tab === "Performance" ? (
               <Performance data={data} />
             ) : tab === "Projections" ? (
