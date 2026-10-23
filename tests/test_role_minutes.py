@@ -54,3 +54,11 @@ class RoleMinutesTests(unittest.TestCase):
         p=forecast(snapshot(),previous+[inactive])['predictions'][0]
         self.assertLess(p['expected_minutes'],30)
         self.assertIn('recent_dnp_role_review',p['flags'])
+
+    def test_supported_starter_minutes_are_not_diluted_by_speculative_bench_priors(self):
+        people=[player(str(i)) for i in range(8)]
+        data=[row(j,pid=str(i),minutes=35 if i<5 else 25,starter=i<5) for i in range(8) for j in range(8)]
+        data += [current(pid=str(i),minutes=35 if i<5 else 20,starter=i<5) for i in range(8)]
+        result=forecast(snapshot(people),data)['predictions']
+        self.assertTrue(all(p['expected_minutes']>=34 for p in result if int(p['player_id'])<5))
+        self.assertLessEqual(sum(p['expected_minutes'] for p in result),240.)

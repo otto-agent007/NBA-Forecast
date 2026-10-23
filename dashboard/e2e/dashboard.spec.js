@@ -217,3 +217,17 @@ test('roster quarantine stays visible while verified player projections remain i
   await expect(page.locator('.saved-roster-review')).toContainText('Peripheral Player');
   await expect(page.locator('.preflight-status')).toContainText('This saved forecast passed with roster review');
 });
+
+test('player details disclose historical scoring seasons and samples used by the forecast', async ({ page }) => {
+  const staged=structuredClone(dashboard);
+  staged.games[0].forecast.predictions[0].components={historical_prior:{seasons:[
+    {season:'2023-24',games:77,ppg:28.7},{season:'2024-25',games:65,ppg:26},{season:'2025-26',games:74,ppg:26},
+  ],source:{source_url:'https://site.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/99/stats'}}};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:staged}));
+  await page.route('**/api/players/101',route=>route.fulfill({json:{missing_reason:'Synthetic fixture',recent_games:[]}}));
+  await page.goto('/');await page.getByRole('button',{name:'Role Player',exact:false}).click();
+  const prior=page.getByLabel('Historical scoring prior');
+  await expect(prior).toContainText('28.7 PPG · 77 games');
+  await expect(prior).toContainText('26 PPG · 74 games');
+  await expect(prior.getByRole('link',{name:'Historical statistics source'})).toBeVisible();
+});

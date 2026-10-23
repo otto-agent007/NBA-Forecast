@@ -85,7 +85,7 @@ def collect_references(snapshot,directory,roster_reviews=()):
             if not names:raise ValueError('reference roster is empty')
             rosters[tid]=names;sources.append(meta)
             if any(r.get('team_id')==tid and r.get('game_id')==game['game_id'] for r in roster_reviews):
-                team_payload,team_meta=fetch_reference(f'https://www.nba.com/team/{tid}/roster',directory)
+                team_payload,team_meta=fetch_reference(f'https://www.nba.com/team/{tid}/roster',directory,max_age=900)
                 info=team_payload['info'];members=team_payload['roster']
                 if str(info['TEAM_ID'])!=tid or info['SEASON_YEAR']!=snapshot['season']:raise ValueError('Official team roster identity mismatch')
                 if any(str(p['TeamID'])!=tid or str(p['SEASON'])!=snapshot['season'][:4] for p in members):raise ValueError('Official team roster season or membership mismatch')

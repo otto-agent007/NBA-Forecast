@@ -51,3 +51,15 @@ class RosterReviewTests(unittest.TestCase):
         starter=next(x['player_id'] for x in s['roster']['players'] if x['team_id']=='T2' and x['player_id']!=pid)
         s['roster_reviews'][0]['quarantine_player_ids'].append(starter)
         self.assertEqual(check_inputs(apply_roster_reviews(s,p,r),[],p,r)['status'],'blocked')
+
+    def test_researched_person_specific_suffix_alias_preserves_projection_eligibility(self):
+        from nba_forecast.roster_review import apply_roster_reviews
+        from nba_forecast.preflight import check_inputs
+        s,p,r,pid=fixture();member=next(x for x in s['roster']['players'] if x['player_id']==pid);old=member['name'];member['name']+=' Jr.'
+        next(x for x in r['official_rosters']['T2']['players'] if x['player_id']==pid)['name']=member['name']
+        r['rosters']['T2'].append(old);review=s['roster_reviews'][0]
+        review.update(nba_only=[member['name']],espn_only=[old],quarantine_player_ids=[],name_aliases=[dict(player_id=pid,nba_name=member['name'],espn_name=old)])
+        out=apply_roster_reviews(s,p,r);self.assertEqual(check_inputs(out,[],p,r)['status'],'passed')
+        self.assertEqual(next(x for x in out['roster']['players'] if x['player_id']==pid)['status'],'available')
+        review['name_aliases'][0]['espn_name']='Different Person'
+        self.assertEqual(check_inputs(apply_roster_reviews(s,p,r),[],p,r)['status'],'blocked')

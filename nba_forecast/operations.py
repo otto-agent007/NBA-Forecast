@@ -154,6 +154,8 @@ def _tick(folder,history,report):
         seconds=300 if job['stage']=='final' else 900
         slot=int(parse_time(_now()).timestamp())//seconds
         job['key']+=f':model:{MODEL_VERSION}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
+        prior_book=folder/'historical-priors.json'
+        if prior_book.exists():job['key']+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
         roster_review=folder/'roster-reviews'/(job['game_id']+'.json')
         if roster_review.exists():job['key']+=':roster-review:'+hashlib.sha256(roster_review.read_bytes()).hexdigest()
         path=folder/'reviews'/(job['game_id']+'.json')
@@ -198,6 +200,11 @@ def _tick(folder,history,report):
                 snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
                 report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
             usable=eligible_history(snapshot,history)
+            prior_path=folder/'historical-priors.json'
+            if prior_path.exists():
+                book=json.loads(prior_path.read_text());teams={game['home_team_id'],game['away_team_id']}
+                player_ids={p['player_id'] for p in roster['players'] if p['team_id'] in teams}
+                snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
             profiles=build_profiles(snapshot,usable)
             verification=run_preflight(snapshot,usable,profiles,folder)
             if verification['status']!='passed':

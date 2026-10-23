@@ -197,6 +197,14 @@ export default function PlayerDetail({ player, onClose }) {
                     Availability source ↗
                   </a>
                 )}
+                {c.historical_prior && <section aria-label="Historical scoring prior">
+                  <h3>Historical scoring baseline</h3>
+                  <dl className="profile-facts">{c.historical_prior.seasons.map((s) => <React.Fragment key={s.season}>
+                    <dt>{s.season}</dt><dd>{number(s.ppg)} PPG · {s.games} games</dd>
+                  </React.Fragment>)}</dl>
+                  <p className="tiny">Recent completed seasons carry more weight. The game forecast also reflects minutes, availability and matchup.</p>
+                  {safeSource(c.historical_prior.source?.source_url) && <a href={c.historical_prior.source.source_url} target="_blank" rel="noreferrer">Historical statistics source ↗</a>}
+                </section>}
               </section>
               <section>
                 <h3>Role & minutes</h3>
@@ -211,7 +219,7 @@ export default function PlayerDetail({ player, onClose }) {
                   <dt>Sourced minutes cap</dt>
                   <dd>{number(c.manual_adjustment?.minutes_cap)}</dd>
                   <dt>Opponent factor</dt>
-                  <dd>{number(c.opponent?.factor)}</dd>
+                  <dd>{typeof c.opponent?.factor === 'number' ? c.opponent.factor.toFixed(3) : '—'}</dd>
                 </dl>
                 <p className="tiny">
                   Opponent adjustment is a bounded points-allowed proxy, not a

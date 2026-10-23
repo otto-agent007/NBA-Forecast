@@ -137,8 +137,8 @@ role estimate may be scaled in the final team rotation.
 Roster disagreements block by default. A short-lived `roster-reviews/GAME_ID.json`
 list can name an explicitly researched peripheral disagreement, including game,
 tipoff, team, observation/expiry, reviewer/reason, exact NBA-only and ESPN-only
-names, and `quarantine_player_ids`. It requires a fresh hash-archived official
-NBA team roster whose complete player ID/name set matches the captured roster.
+names, and `quarantine_player_ids`. It requires an official roster captured within fifteen minutes, with a verified hash. The official
+NBA team roster must have the same complete player ID/name set as the captured roster.
 The exception cannot include a projected starter, ignore undeclared differences,
 accept stale evidence, or project a disputed player. NBA-only discrepancies must
 be quarantined as unknown; ESPN-only candidates receive no numeric forecast.
@@ -282,3 +282,22 @@ prospective outcomes exist, no fabricated historical injury backtest, and no
 automatic parameter promotion. Review errors by minutes, rates, roles and
 availability, change one explicit hypothesis, version the model, and compare
 subsequent results on the same population.
+
+## Multi-season scoring priors (model 0.4)
+
+The model can consume `historical-priors.json` containing source-stamped career
+season totals for the three completed seasons before the forecast season. The
+versioned October23 snapshot is in `datasets/scoring-priors-2026-10-23/`.
+Preflight verifies response hashes, exact season totals, identity joins and the
+retrieval cutoff. Minutes based on rounded season MPG are labeled estimates;
+points, shots and game counts retain the source totals. Traded-player total rows
+are used once. Source rosters establish player identity, not future availability.
+
+These priors replace overlapping game-history scoring priors. Season weights are
+1/0.65/0.4225, capped at20 effective games per season before current-season decay.
+Rates use0.90 recency decay. Current-team role minutes remain separate. In the
+team budget, observed starters and supported high-minute rotation roles are
+preserved while excess bench estimates are scaled first. If the core alone
+exceeds240 minutes, it is scaled too; missing minutes are never invented.
+Player details disclose the historical PPG, games and source actually used.
+Regenerated preliminaries remain selectable after a final run is saved.

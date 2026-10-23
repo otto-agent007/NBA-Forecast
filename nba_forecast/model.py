@@ -5,12 +5,14 @@ expects the validated contract in docs/design.md but independently excludes
 history that was played/known after the cutoff, non-regular seasons, and seasons
 other than the snapshot season and its immediate predecessor.
 
-Minutes and opportunity totals use at most six prior-season pseudo-games. Their
-weight decays by 0.70 per current-season game; current games decay by 0.75 per
-older game. Prior-season DNPs remain in the audit but do not dilute healthy role
-minutes. Current-season DNPs remain observed role evidence. Once a current-team
-role is observed, earlier teams do not supply its minutes prior. Older shooting
-and per-minute production evidence remains regularized separately.
+Role minutes retain at most six prior appearance pseudo-games, decaying by 0.70
+per current game; current role games decay by 0.75. Prior-season DNPs remain in
+the audit without diluting healthy role minutes. Current-team observations govern
+a traded player's role. Scoring opportunity rates use a stronger 20-game prior
+with 0.90 decay. Verified season aggregates from the last three completed seasons
+replace overlapping prior scoring evidence, with season-age weights 1/0.65/0.4225.
+These totals are not synthetic game observations. Estimated aggregate minutes
+are explicitly labeled; points and shot totals come from the source archive.
 Shooting changes more slowly: current attempts decay by 0.985 per older game;
 previous attempts are capped at 250 two-point, 200 three-point, and 100 free-throw
 attempts. Fixed regularization defaults are 0.52/0.35/0.75 with 40/50/20 pseudo
@@ -23,8 +25,9 @@ a small sample does not establish certain zero-point production.
 Points = 2*E[2PA]*P(2PM) + 3*E[3PA]*P(3PM) + E[FTA]*P(FTM), multiplied
 by a bounded opponent points-allowed proxy. Manual game-specific adjustments
 alter minutes and attempt/turnover rates, with full source/reviewer audit.
-Projected team minutes above 240 are scaled down proportionally; deficits are
-flagged rather than filled with invented bench production. Individual minutes
+Supported starters and high-minute rotation roles are preserved when excess
+bench estimates push a team above 240 minutes. The core is scaled only if it
+alone exceeds the budget. Deficits stay explicit. Individual minutes
 are capped at 48: this v0.1 does not forecast overtime.
 
 Intervals are uncalibrated heuristics: binomial shot variance plus shrunk excess
@@ -37,8 +40,10 @@ from copy import deepcopy
 from datetime import datetime
 from math import sqrt
 from statistics import fmean, pvariance
+from .rotation import rotation_role
+from .historical import season_prior
 
-MODEL_VERSION = "regular-season-baseline-0.3.0"
+MODEL_VERSION = "regular-season-baseline-0.4.0"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -75,11 +80,14 @@ def _attempts(row, kind):
     return row["ftm"], row["fta"]
 
 
-def _shooting(previous, current):
+def _shooting(previous, current, historical=None):
     result = {}
     for kind, (default, strength, cap) in EFFICIENCY_DEFAULTS.items():
         prior_made = sum(_attempts(r, kind)[0] for r in previous)
         prior_attempts = sum(_attempts(r, kind)[1] for r in previous)
+        if historical:
+            t=historical['totals']
+            prior_made,prior_attempts=(t['FGM']-t['FG3M'],t['FGA']-t['FG3A']) if kind=='two_point' else (t['FG3M'],t['FG3A']) if kind=='three_point' else (t['FTM'],t['FTA'])
         prior_scale = min(1.0, cap / prior_attempts) if prior_attempts else 1.0
         weighted = [(r, 0.985 ** age) for age, r in enumerate(reversed(current))]
         current_made = sum(_attempts(r, kind)[0] * w for r, w in weighted)
@@ -98,17 +106,23 @@ def _shooting(previous, current):
     return result
 
 
-def _opportunities(previous, current, team_id=None):
+def _opportunities(previous, current, team_id=None, historical=None):
     prior_dnp=sum(r['status']=='dnp' for r in previous)
     previous=[r for r in previous if r['status']=='played' and r['minutes']>0]
-    prior_weight = min(len(previous), 6) * 0.70 ** len(current)
-    weighted = [(r, 0.75 ** age) for age, r in enumerate(reversed(current))]
+    prior_weight = min(len(previous), 20) * 0.90 ** len(current)
+    weighted = [(r, 0.90 ** age) for age, r in enumerate(reversed(current))]
     # Each previous row gets an equal fraction of the prior pseudo-game mass.
     if previous:
         weighted += [(r, prior_weight / len(previous)) for r in previous]
     mass = sum(w for _, w in weighted)
     totals = {field: sum(r[field] * w for r, w in weighted)
               for field in ("minutes", "fga", "fg3a", "fta", "tov")}
+    if historical:
+        t=historical['totals'];decay=.90**len(current)
+        prior_weight=t['GP']*decay
+        mass=prior_weight+sum(.90**age for age,_ in enumerate(reversed(current)))
+        for field,key in (('minutes','MIN'),('fga','FGA'),('fg3a','FG3A'),('fta','FTA'),('tov','TOV')):
+            totals[field]=t[key]*decay+sum(r[field]*(.90**age) for age,r in enumerate(reversed(current)))
     # Participation is assessed separately. Prior-year absences do not describe
     # a healthy player's rotation minutes. A new team supplies its own role;
     # older teams still inform per-minute production and shooting efficiency.
@@ -130,7 +144,7 @@ def _opportunities(previous, current, team_id=None):
     minute_variance = (observed_variance * role_mass + 16.0 * 4) / (role_mass + 4)
     return minutes, rates, minute_variance, {
         "prior_effective_games": prior_weight, "current_weight": mass - prior_weight,
-        "prior_decay_per_current_game": 0.70, "current_decay_per_game": 0.75,
+        "prior_decay_per_current_game": 0.90, "current_decay_per_game": 0.90,
         "minutes_before_adjustment": minutes, "per_minute_rates": rates.copy(),
         "observed_minutes_variance": observed_variance,
         "prior_dnp_excluded":prior_dnp,"role_prior_effective_games":role_prior_weight,
@@ -399,7 +413,8 @@ def forecast(snapshot, history):
             }
         if any(r["status"] == "dnp" for r in current[-3:]):
             p["flags"].append("recent_dnp_role_review")
-        minutes, rates, variance, opportunities = _opportunities(previous, current,team)
+        historical=season_prior(snapshot,pid)
+        minutes, rates, variance, opportunities = _opportunities(previous, current,team,historical)
         if (any(r['team_id']==team for r in current) and
             not any(r['team_id']==team and r['minutes']>0 for r in previous+current) and
             not adjustments.get((pid,game['game_id']))):
@@ -407,7 +422,8 @@ def forecast(snapshot, history):
             p['flags'].append('new_team_role_unobserved')
             p['components']['opportunities']=opportunities
             continue
-        shooting = _shooting(previous, current)
+        shooting = _shooting(previous, current,historical)
+        if historical:p['components']['historical_prior']=historical
         p["components"]["multistat"] = _multistat(previous, current)
         recent_role = (current or previous)[-5:]
         starts = [r["starter"] for r in recent_role if "starter" in r]
@@ -419,6 +435,7 @@ def forecast(snapshot, history):
             "recent_mean_minutes": fmean(r["minutes"] for r in recent_role),
             "recent_dnp_count": sum(r["status"] == "dnp" for r in recent_role),
         }
+        p['components']['current_team_rotation']=rotation_role(player,rows)
         adjustment = adjustments.get((pid, game["game_id"]))
         if adjustment:
             p["components"]["manual_adjustment"] = deepcopy(adjustment)
@@ -438,13 +455,22 @@ def forecast(snapshot, history):
     for team in sorted(games):
         team_predictions = [p for p in predictions if p["team_id"] == team]
         total = sum(working[p["player_id"]][0] for p in team_predictions if p["status"] == "projected")
-        scale = min(1.0, 240.0 / total) if total else 1.0
-        deficit = max(0.0, 240.0 - total * scale)
+        core={p['player_id'] for p in team_predictions if p['status']=='projected' and
+              p['components'].get('current_team_rotation',{}).get('observations',0)>0 and
+              (p['components']['current_team_rotation'].get('last_game_started') is True or
+               (working[p['player_id']][0]>=28 and (p['components']['current_team_rotation'].get('recent_minutes') or 0)>=24))}
+        core_total=sum(working[pid][0] for pid in core)
+        core_scale=min(1.,240./core_total) if core_total else 1.
+        bench_total=total-core_total
+        bench_scale=min(1.,max(0.,240.-core_total*core_scale)/bench_total) if bench_total else 1.
+        deficit=max(0.,240.-core_total*core_scale-bench_total*bench_scale)
         assigned_minutes = 0.0
         for p in team_predictions:
+            scale=core_scale if p['player_id'] in core else bench_scale
             p["components"]["rotation"] = {"team_minutes_before_scaling": total,
                 "regulation_budget": 240.0, "scale": scale, "unallocated_minutes": deficit,
-                "method": "Scale excess only; never redistribute missing minutes automatically."}
+                "protected_rotation_player_ids":sorted(core),"protected_rotation_minutes":core_total,
+                "method": "Preserve supported starters and high-minute rotation roles; scale excess bench estimates first. Missing minutes are not invented."}
             if deficit > 1e-8:
                 p["flags"].append("team_minutes_unresolved")
             if p["status"] != "projected":

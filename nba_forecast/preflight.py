@@ -13,6 +13,7 @@ from .schedule import atomic_json,canonical
 from .validation import parse_time,validate_inputs
 from .availability import apply_no_injuries,needs_empty_report,report_current,record_availability_update,BASIS
 from .roster_review import apply_roster_reviews,resolution
+from .historical import verify_priors
 import json
 
 PREFLIGHT_VERSION='independent-inputs-4'
@@ -124,6 +125,7 @@ def run_preflight(snapshot,history,profiles,directory,*,cache_dir=None):
     reference={}
     try:
         phase='injury_archive_unverified'
+        verify_priors(snapshot,directory)
         verified=verify_extractions(snapshot,cache_dir or Path(directory)/'raw')
         checked=deepcopy(snapshot);checked['injury_extractions']=verified
         phase='reference_unavailable'

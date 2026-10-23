@@ -50,6 +50,13 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result['forecast']['run_id'],final)
             self.assertEqual(result.get('forecasts',{}).get('preliminary',{}).get('run_id'),pre)
             self.assertEqual(result['forecasts']['final']['run_id'],final)
+            refreshed_s=deepcopy(s);refreshed_f=deepcopy(f)
+            refreshed_s['as_of']=refreshed_f['as_of']='2026-10-22T17:45:00Z'
+            with patch('nba_forecast.store._now',return_value=NOW+timedelta(hours=5,minutes=45)):
+                refreshed=save_run(folder/'forecast.sqlite',refreshed_s,h,refreshed_f)
+            result=dashboard_data(d)['games'][0]
+            self.assertEqual(result['forecast']['run_id'],final)
+            self.assertEqual(result['forecasts']['preliminary']['run_id'],refreshed)
 
     def test_empty_directory_does_not_create_database(self):
         with tempfile.TemporaryDirectory() as d:

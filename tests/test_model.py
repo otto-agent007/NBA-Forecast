@@ -117,7 +117,7 @@ class ForecastTests(unittest.TestCase):
         before = self.one(past)
         after = self.one(past + recent)
         self.assertGreater(after["expected_minutes"], 35)
-        self.assertGreater(after["expected_fga"], 18)
+        self.assertGreater(after["expected_fga"], before["expected_fga"])
         self.assertGreater(after["components"]["shooting"]["two_point"]["percentage"], .35)
         self.assertIn("minutes_change", after["flags"])
         self.assertIn("opportunity_change", after["flags"])

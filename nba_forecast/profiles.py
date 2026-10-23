@@ -4,6 +4,7 @@ from statistics import fmean
 from .model import _previous_season, _opportunities
 from .validation import parse_time, validate_history
 from .rotation import rotation_role
+from .historical import season_prior
 
 
 def eligible_history(snapshot,history):
@@ -22,7 +23,7 @@ def build_profiles(snapshot,history):
         rows=by_player[p['player_id']];current=[r for r in rows if r['season']==snapshot['season']]
         previous=[r for r in rows if r['season']!=snapshot['season']];recent=current[-5:]
         supported=any(r['minutes']>0 for r in rows)
-        minutes,rates,variance,components=_opportunities(previous,current,p['team_id'])
+        minutes,rates,variance,components=_opportunities(previous,current,p['team_id'],season_prior(snapshot,p['player_id']))
         flags=[]
         if not supported:flags.append('cold_start')
         if not current:flags.append('current_role_unobserved')

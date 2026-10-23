@@ -19,7 +19,7 @@ def resolution(snapshot,profiles,reference,game,team):
         if (official['team_id']!=team or official['season']!=snapshot['season'] or
             meta['source_url']!=f'https://www.nba.com/team/{team}/roster' or
             not re.fullmatch('[a-f0-9]{64}',meta['sha256']) or
-            not 0<=(cutoff-parse_time(meta['retrieved_at'])).total_seconds()<=300):return None
+            not 0<=(cutoff-parse_time(meta['retrieved_at'])).total_seconds()<=900):return None
         members=[p for p in snapshot['roster']['players'] if p['team_id']==team]
         expected={p['player_id']:normalized(p['name']) for p in members}
         if len(official['players'])!=len(expected) or len(set(expected.values()))!=len(expected):return None
@@ -28,11 +28,17 @@ def resolution(snapshot,profiles,reference,game,team):
         if len(observed)!=len(reference['rosters'][team]):return None
         nba_only=names-observed;espn_only=observed-names
         if not (nba_only or espn_only) or nba_only!={normalized(n) for n in review['nba_only']} or espn_only!={normalized(n) for n in review['espn_only']}:return None
-        ids=set(review['quarantine_player_ids']);disputed={p['player_id'] for p in members if normalized(p['name']) in nba_only}
+        alias_ids=set()
+        for alias in review.get('name_aliases',[]):
+            if (alias['player_id'] not in expected or expected[alias['player_id']]!=normalized(alias['nba_name']) or
+                not (normalized(alias['nba_name'])==normalized(alias['espn_name']+' Jr.') or normalized(alias['espn_name'])==normalized(alias['nba_name']+' Jr.')) or
+                normalized(alias['nba_name']) not in nba_only or normalized(alias['espn_name']) not in espn_only):return None
+            alias_ids.add(alias['player_id'])
+        ids=set(review['quarantine_player_ids']);disputed={p['player_id'] for p in members if normalized(p['name']) in nba_only}-alias_ids
         starters=set(projected_lineups(snapshot['roster']['players'],profiles['players'])[team]['player_ids'])
         if not disputed<=ids or not ids<=expected.keys() or ids & starters:return None
         return dict(code='roster_membership_review',team_id=team,quarantine_player_ids=sorted(ids),
-            detail='Roster disagreement retained for review; disputed players have no numeric forecast. '+review['reason'],
+            detail=('A researched player-name suffix alias is verified. ' if alias_ids else 'Roster disagreement retained for review; disputed players have no numeric forecast. ')+review['reason'],
             nba_only=review['nba_only'],espn_only=review['espn_only'],evidence=meta,reviewer=review['reviewer'])
     except (ValueError,KeyError,TypeError):return None
 

@@ -76,8 +76,9 @@ def dashboard_data(directory):
                         preflight=snapshot.get('preflight'),injury_coverage_warnings=snapshot.get('injury_coverage_warnings',[]),
                         availability_supplements=snapshot.get('availability_supplements',[]))
                     game['forecasts'][stage]=view
-                    if game['game_id'] not in chosen or rank>chosen[game['game_id']]:
-                        chosen[game['game_id']]=rank;game['forecast']=view
+                    default_rank=(stage=='final',*rank)
+                    if game['game_id'] not in chosen or default_rank>chosen[game['game_id']]:
+                        chosen[game['game_id']]=default_rank;game['forecast']=view
     if not players:
         roster=read_optional(folder/'roster.json',{})
         players=roster.get('players',[]);roster_observed=roster.get('observed_at')
