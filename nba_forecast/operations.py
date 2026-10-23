@@ -202,6 +202,7 @@ def _tick(folder,history,report):
                 report['errors'].append(dict(task='preflight',game_id=job['game_id'],issues=verification['issues']))
                 continue
             snapshot['preflight']=verification
+            profiles=build_profiles(snapshot,usable)
             prediction=forecast(snapshot,usable)
             run_id=save_run(db,snapshot,usable,prediction)
             # The immutable operation_key in the run is authoritative if interrupted here.

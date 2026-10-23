@@ -1571,6 +1571,10 @@ pre {
 .preflight-status { padding:14px 18px; border:1px solid #dce3ec; border-radius:10px; background:#f7f9fc; line-height:1.5; }
 .preflight-status.blocked { background:#fff8ed; border-color:#edd7b1; }
 .preflight-status.passed { background:#f1f8f4; border-color:#bdd9c6; }
+.availability-update { padding:14px 18px; margin-bottom:12px; border:1px solid #bdd9c6; border-radius:10px; background:#f1f8f4; line-height:1.6; }
+.availability-update p { font-size:13px; }
+.availability-update a { color:#2266be; }
+.availability-update.superseded { background:#fff8ed; border-color:#edd7b1; }
 .preflight-status > span { display:block; color:#657183; font-size:12px; }
 .preflight-status p, .preflight-status li { font-size:13px; }
 .preflight-status ul { padding-left:18px; }

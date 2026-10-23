@@ -28,6 +28,8 @@ def dashboard_data(directory):
         g['injury_capture']=capture if item and g.get('start_time') and parse_time(item['start_time'])==parse_time(g['start_time']) else None
         audit=read_optional(folder/'preflight'/g['game_id']/'latest.json',None)
         g['preflight']=audit if audit and g.get('start_time') and parse_time(audit['start_time'])==parse_time(g['start_time']) else None
+        update=read_optional(folder/'availability'/g['game_id']/'latest.json',None)
+        g['availability_update']=update if update and g.get('start_time') and parse_time(update['start_time'])==parse_time(g['start_time']) else None
 
     db=folder/'forecast.sqlite';players=[];roster_observed=None;roster_rank=None
     if db.exists():
@@ -71,7 +73,8 @@ def dashboard_data(directory):
                         stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],predictions=predictions,
                         review_queue=[q for q in forecast['review_queue'] if q['game_id']==game['game_id']],
                         injury_check=check,context=snapshot.get('schedule_context',{}),lineups=lineups,
-                        preflight=snapshot.get('preflight'),injury_coverage_warnings=snapshot.get('injury_coverage_warnings',[]))
+                        preflight=snapshot.get('preflight'),injury_coverage_warnings=snapshot.get('injury_coverage_warnings',[]),
+                        availability_supplements=snapshot.get('availability_supplements',[]))
                     game['forecasts'][stage]=view
                     if game['game_id'] not in chosen or rank>chosen[game['game_id']]:
                         chosen[game['game_id']]=rank;game['forecast']=view

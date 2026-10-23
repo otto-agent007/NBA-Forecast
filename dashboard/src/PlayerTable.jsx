@@ -115,7 +115,7 @@ export default function PlayerTable({
               <TeamMark id={team.team_id} code={team.team_code} />
               <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players · Projected five, unconfirmed</span>
             </th></tr>
-            {team.unavailable > 0 && <tr className="coverage-warning"><td colSpan={columns}>Availability unresolved for {team.unavailable} players. Unsupported forecasts are withheld; captured season averages remain visible.</td></tr>}
+            {team.unavailable > 0 && <tr className="coverage-warning"><td colSpan={columns}>Availability unresolved for {team.unavailable} players in this saved forecast. Unsupported forecasts are withheld; captured season averages remain visible.</td></tr>}
             {team.unfilled_slots > 0 && !query.trim() && filter === "all" && <tr className="coverage-warning"><td colSpan={columns}>{team.unfilled_slots} of 5 starting slots await sufficient evidence. No lineup has been confirmed.</td></tr>}
             {team.groups.map((group) => (
             <React.Fragment key={group.key}>
@@ -197,7 +197,7 @@ export default function PlayerTable({
         <Icon name="info" />
         <span>
           Dashes mean unsupported estimates. Conditional projections use a
-          complete-report not-listed assumption; participation is not confirmed.
+          verified report not-listed assumption; participation is not confirmed.
           {" "}Each team has five projected starting slots, selected before filters.
           Upcoming lineups remain unconfirmed. Season PPG is an observed average,
           not a forecast; its tooltip identifies the season and captured games.

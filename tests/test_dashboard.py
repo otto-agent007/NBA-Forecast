@@ -19,10 +19,13 @@ class DashboardTests(unittest.TestCase):
             game=s['games'][0];root=folder/'preflight'/game['game_id'];root.mkdir(parents=True)
             audit=dict(game_id=game['game_id'],start_time=game['start_time'],status='blocked',issues=[])
             (root/'latest.json').write_text(json.dumps(audit))
+            availability=folder/'availability'/game['game_id'];availability.mkdir(parents=True)
+            (availability/'latest.json').write_text(json.dumps({**audit,'teams':[{'team_id':game['home_team_id'],'status':'no_injuries_reported'}]}))
             data=dashboard_data(d)
             self.assertEqual(data['games'][0]['preflight']['status'],'blocked')
             self.assertEqual(data['players'][0]['observed_stats']['points_average'],18.5)
             self.assertIsNone(data['games'][0]['forecast'])
+            self.assertEqual(len(data['games'][0]['availability_update']['teams']),1)
             audit['start_time']='2026-10-23T20:00:00Z';(root/'latest.json').write_text(json.dumps(audit))
             self.assertIsNone(dashboard_data(d)['games'][0]['preflight'])
     def test_preliminary_remains_available_after_a_final_run_is_saved(self):

@@ -49,9 +49,12 @@ The automatic loop captures a daily injury report at 9 AM Pacific and each
 game's final checkpoint at T−30. Preliminary forecasts remain inspectable
 alongside finals, with player outlooks grouped by team and five projected starters.
 Automated and live CLI runs cross-check schedule and roster membership against
-ESPN, require complete official injury coverage for both teams, and validate the
+ESPN, verify injury information for both teams, and validate the
 projected fives before running the model. Missing or conflicting evidence blocks
 the run and appears in the dashboard. Projected starters remain unconfirmed.
+When the official PDF omits a healthy team's block, an explicit empty injury list
+in the verified game-specific ESPN report can support conditional projections.
+Missing fields, unsubmitted reports and roster Active labels cannot do this.
 Back up `data/forecast.sqlite` and `data/`: they are ignored by Git. GitHub CI tests
 Python 3.11–3.13; PRs are reviewed before merging.
 

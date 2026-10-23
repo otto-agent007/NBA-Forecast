@@ -103,7 +103,7 @@ def parse_report(text,schedule,roster,evidence):
         for d,m,t in sorted(coverage,key=str):
             if not any(i.get('team_id') in (None,t) and i.get('date',d)==d and i.get('matchup',m)==m for i in issues):
                 complete_teams.append(dict(date=d,matchup=m,team_id=t))
-    return dict(schema_version=1,parser_version=PARSER_VERSION,pages_complete=pages_complete,complete_teams=complete_teams,evidence=evidence,rows=unique,issues=issues,
+    return dict(schema_version=1,parser_version=PARSER_VERSION,pages_complete=pages_complete,heading_matches=heading_matches,complete_teams=complete_teams,evidence=evidence,rows=unique,issues=issues,
                 team_coverage=[dict(date=d,matchup=m,team_id=t) for d,m,t in sorted(coverage,key=str)],
                 policy='Exact name/team/game joins only. Omitted players remain unknown.')
 

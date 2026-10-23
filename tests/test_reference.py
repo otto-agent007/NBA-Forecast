@@ -48,3 +48,19 @@ class ReferenceTests(unittest.TestCase):
         for payload in ({'team':{'id':'9'}},{'team':{'id':'15'},'season':{'displayName':'2025-26'}}):
             with self.subTest(payload=payload), patch('nba_forecast.reference.fetch_reference',side_effect=[(board,{}),(payload,{})]):
                 with self.assertRaises(ValueError):collect_references(s,'unused')
+
+    def test_missing_official_team_loads_exact_event_summary(self):
+        from tests.test_empty_injuries import fixture
+        s,_,_,summary,meta=fixture();g=s['games'][0]
+        board={'events':[dict(id='401909848',date=g['start_time'],competitions=[dict(id='401909848',competitors=summary['header']['competitions'][0]['competitors'])])]}
+        def fetch(url,*args,**kwargs):
+            if 'scoreboard?' in url:return board,meta
+            if 'summary?' in url:return summary,meta
+            tid='T1' if '/teams/1/' in url else 'T2'
+            return {'team':{'id':'1' if tid=='T1' else '2'},'season':{'displayName':'2026-27'},
+                'athletes':[{'fullName':p['name']} for p in s['roster']['players'] if p['team_id']==tid]},meta
+        with patch('nba_forecast.reference.fetch_reference',side_effect=fetch) as request:
+            result=collect_references(s,'unused')
+        self.assertEqual(len(result['no_injuries']),1)
+        self.assertEqual(result['no_injuries'][0]['team_id'],'T2')
+        self.assertEqual(sum('summary?event=401909848' in c.args[0] for c in request.call_args_list),1)

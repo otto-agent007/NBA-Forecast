@@ -337,10 +337,12 @@ def forecast(snapshot, history):
             p["flags"].append("no_scoring_opportunity_evidence")
             continue
         p.update(status="projected", reason="Evidence-based baseline; review listed role and rotation flags.")
-        if player.get("status_basis") == "not_listed_complete_report":
+        if player.get("status_basis") in ("not_listed_complete_report","not_listed_verified_empty_report"):
             p["flags"].append("availability_not_listed")
             p["reason"] = ("Conditional on participation: player was not listed in the complete injury report; "
                            "participation is not confirmed. Review listed role and rotation flags.")
+            if player.get('status_basis')=='not_listed_verified_empty_report':
+                p['reason']='Conditional on participation: a verified game-specific team report lists no injuries. Participation and starting lineup are not confirmed.'
         if len(played) < 5:
             p["flags"].append("short_history")
         if rows[-1]["team_id"] != team or any(r["team_id"] != team for r in current):

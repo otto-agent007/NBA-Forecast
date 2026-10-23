@@ -95,7 +95,7 @@ class PreflightTests(unittest.TestCase):
         from unittest.mock import patch
         from nba_forecast.preflight import run_preflight
         s,p,_=evidence()
-        with tempfile.TemporaryDirectory() as folder,patch('nba_forecast.preflight.collect_references',side_effect=OSError('offline')):
+        with tempfile.TemporaryDirectory() as folder,patch('nba_forecast.preflight.verify_extractions',return_value=s['injury_extractions']),patch('nba_forecast.preflight.collect_references',side_effect=OSError('offline')):
             result=run_preflight(s,[],p,folder)
             self.assertEqual(result['status'],'blocked')
             root=Path(folder)/'preflight'/s['games'][0]['game_id']

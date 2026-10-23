@@ -19,7 +19,7 @@ def code(value):return ALIASES.get(value,value)
 
 
 def fetch_reference(url,directory,max_age=300):
-    if not re.fullmatch(re.escape(BASE)+r'(scoreboard\?dates=\d{8}|teams/\d{1,3}/roster)',url):
+    if not re.fullmatch(re.escape(BASE)+r'(scoreboard\?dates=\d{8}|teams/\d{1,3}/roster|summary\?event=\d{6,12})',url):
         raise ValueError('reference URL is not an allowlisted public ESPN endpoint')
     folder=Path(directory);key=hashlib.sha256(url.encode()).hexdigest();pointer=folder/(key+'.json')
     now=datetime.now(timezone.utc)
@@ -44,7 +44,8 @@ def fetch_reference(url,directory,max_age=300):
 
 
 def collect_references(snapshot,directory):
-    games=[];rosters={};sources=[];boards={}
+    from .availability import needs_empty_report,summary_no_injuries
+    games=[];rosters={};sources=[];boards={};empty=[]
     for game in snapshot['games']:
         date=parse_time(game['start_time']).astimezone(ZoneInfo('America/New_York')).strftime('%Y%m%d')
         new_date=date not in boards
@@ -58,12 +59,14 @@ def collect_references(snapshot,directory):
             if set(sides)!={'home','away'}:continue
             normalized=dict(home=code(sides['home']['abbreviation']),away=code(sides['away']['abbreviation']),
                             start_time=competition.get('date') or event['date'],state=competition.get('status',event.get('status',{})).get('type',{}).get('state'),
-                            status_name=competition.get('status',event.get('status',{})).get('type',{}).get('name'))
+                            status_name=competition.get('status',event.get('status',{})).get('type',{}).get('name'),
+                            provider_event_id=event.get('id') or competition.get('id'))
             if new_date:games.append(normalized)
             if (normalized['home'],normalized['away'])==(game.get('home_tricode'),game.get('away_tricode')):
-                candidates.append(sides)
+                candidates.append((sides,normalized))
         if len(candidates)!=1:continue
-        for side,team in candidates[0].items():
+        sides,matched=candidates[0]
+        for side,team in sides.items():
             tid=game[side+'_team_id']
             if tid in rosters:continue
             payload,meta=fetch_reference(BASE+'teams/'+str(team['id'])+'/roster',directory,max_age=900)
@@ -72,4 +75,7 @@ def collect_references(snapshot,directory):
             names=[p.get('fullName') or p['displayName'] for p in payload.get('athletes',[])]
             if not names:raise ValueError('reference roster is empty')
             rosters[tid]=names;sources.append(meta)
-    return dict(games=games,rosters=rosters,sources=sources)
+        if any(needs_empty_report(snapshot,game,game[s+'_team_id']) for s in ('home','away')):
+            payload,meta=fetch_reference(BASE+'summary?event='+str(matched['provider_event_id']),directory)
+            empty.extend(summary_no_injuries(payload,game,snapshot['season'],meta));sources.append(meta)
+    return dict(games=games,rosters=rosters,sources=sources,no_injuries=empty)

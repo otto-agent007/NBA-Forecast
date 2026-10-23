@@ -94,6 +94,8 @@ and compares NBA evidence with ESPN's public scoreboard and team roster feeds:
   from the archived PDF after verifying its hash, official URL and publication
   chronology. Supplied coverage labels alone cannot pass. Applied availability
   must agree with the report or carry a matching newer sourced review.
+  A clean missing team block can instead use the explicit zero-injury fallback
+  described below; this does not override official submitted statuses or errors.
 - Each team must have five unique eligible projected starter IDs supported by
   captured role/minutes evidence. Out players cannot occupy a starting slot.
 
@@ -120,6 +122,32 @@ slots, never invented names. Team buttons expose either roster directly;
 observed Season PPG stays visible when projections are withheld, with season,
 sample size and observation time in its tooltip. These averages can be newer
 than a selected historical forecast and are not that run's model inputs.
+
+## Explicit zero-injury reports
+
+A team can have no player rows in the NBA PDF even when it has no injuries to
+report. For a clean absent team block, preflight additionally requests ESPN's
+exact game summary and requires an explicit team entry with `injuries: []`.
+It validates event ID, regular-season year/type, tipoff and home/away teams,
+archives the bounded response and hash, and requires retrieval within five
+minutes of cutoff and before tipoff. Missing team/list fields never imply zero.
+The official PDF must still verify and cover the basketball date; unsubmitted,
+conflicting or unparsed team sections block supplementation. Existing official
+or reviewed player statuses are preserved, including reviewed unknown status.
+
+Eligible unknown players receive a conditional Not listed basis. They can get
+supported numeric forecasts, with the same participation caveat as omitted
+players in a complete official team report. Fresh roster, matchup, final-window
+and five-starter checks still apply. The source provides no publication time;
+only its actual retrieval time is asserted. The live CLI uses this same gate.
+
+`availability/GAME_ID/records/` archives each captured update and supersession;
+`latest.json` exposes the latest matching-game state. Rejected/conflicting team
+reports never become positive UI claims. Nonempty or unavailable refreshes
+supersede an older zero-injury claim while retaining the archive. A recovery
+after tipoff is displayed separately and cannot produce a backdated forecast or
+change a historical run's inputs. Daily 9 AM and T-30 official PDF archives remain
+unchanged.
 
 ## Schedule and context
 

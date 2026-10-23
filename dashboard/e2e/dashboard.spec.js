@@ -177,3 +177,25 @@ test("Bucks information stays accessible with five projected starters and a visi
   await expect(team.locator('.player-row[data-role="bench"]')).toHaveCount(1);
   expect(errors).toEqual([]);
 });
+
+test('recovered zero-injury update is visible without rewriting the saved forecast', async ({ page }) => {
+  const staged = structuredClone(dashboard);
+  staged.games[0].availability_update = { captured_after_tipoff: true, teams: [{
+    team_id: '1610612747', status: 'no_injuries_reported', retrieved_at: '2026-10-22T03:00:00Z',
+    source_url: 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=401909848',
+  }] };
+  staged.games[0].forecast.predictions[0].status = 'needs_review';
+  staged.games[0].forecast.predictions[0].points_mean = null;
+  await page.route('**/api/dashboard', route => route.fulfill({json:staged}));
+  await page.goto('/');
+  const update = page.getByLabel('Latest injury information');
+  await expect(update).toContainText('Los Angeles Lakers: No injuries reported');
+  await expect(update).toContainText('Recovered after tipoff');
+  await expect(update.getByRole('link', {name:'Source'})).toHaveAttribute('href',staged.games[0].availability_update.teams[0].source_url);
+  await expect(page.locator('tbody[data-team-id="1610612747"] .points')).toHaveText('—');
+  staged.games[0].availability_update.teams = [];
+  staged.games[0].availability_update.status = 'superseded';
+  await page.getByRole('button', {name:'Refresh data',exact:true}).click();
+  await expect(update).toContainText('previous zero-injury listing has been superseded');
+  await expect(update.getByText('No injuries reported', {exact:true})).toHaveCount(0);
+});

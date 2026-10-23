@@ -11,8 +11,9 @@ from .reference import collect_references
 from .rotation import projected_lineups
 from .schedule import atomic_json,canonical
 from .validation import parse_time,validate_inputs
+from .availability import apply_no_injuries,needs_empty_report,report_current,record_availability_update,BASIS
 
-PREFLIGHT_VERSION='independent-inputs-2'
+PREFLIGHT_VERSION='independent-inputs-3'
 
 
 def validate_extraction(extraction,cutoff):
@@ -60,7 +61,7 @@ def check_inputs(snapshot,history,profiles,reference):
         except (ValueError,KeyError,TypeError) as exc:issue('injury_provenance_invalid',str(exc))
     for source in reference.get('sources',[]):
         age=(cutoff-parse_time(source['retrieved_at'])).total_seconds()
-        max_age=300 if '/scoreboard?' in source.get('source_url','') else 900
+        max_age=300 if any(path in source.get('source_url','') for path in ('/scoreboard?','/summary?')) else 900
         if not 0<=age<=max_age:issue('reference_time_invalid','Independent source is future-known or exceeds its freshness limit.')
     if not reference.get('sources'):issue('reference_missing','Independent source evidence is unavailable.')
     lineups=projected_lineups(snapshot['roster']['players'],profiles['players'])
@@ -83,7 +84,16 @@ def check_inputs(snapshot,history,profiles,reference):
                 if extra:detail+=' ESPN only: '+', '.join(extra[:5])+'.'
                 issue('roster_not_confirmed',detail,tid)
             covering=[e for e in extractions if e.get('pages_complete') and any(c['team_id']==tid and c['date']==day and c['matchup']==matchup for c in e.get('complete_teams',[]))]
-            if not covering:issue('injury_coverage_missing','Official injury report does not completely cover this team for this game/date.',tid)
+            if not covering:
+                empty=[r for r in reference.get('no_injuries',[]) if report_current(r,snapshot,game,tid)]
+                if len(empty)!=1 or not needs_empty_report(snapshot,game,tid):
+                    issue('injury_coverage_missing','No complete official report or verified game-specific zero-injury report covers this team/date.',tid)
+                else:
+                    report=empty[0]
+                    for player in players:
+                        if player.get('status_basis')!=BASIS:continue
+                        if player['status']!='available' or player.get('status_source_url')!=report['source_url'] or player.get('status_observed_at')!=report['retrieved_at']:
+                            issue('availability_conflict','Conditional zero-injury availability differs from its verified source.',tid)
             else:
                 latest=max(covering,key=lambda e:parse_time(e['evidence']['published_at']))
                 statuses={r['player_id']:r['status'] for r in latest.get('rows',[]) if r['game_id']==game['game_id']}
@@ -108,15 +118,22 @@ def run_preflight(snapshot,history,profiles,directory,*,cache_dir=None):
     phase='reference_unavailable'
     reference={}
     try:
-        reference=collect_references(snapshot,Path(directory)/'references')
         phase='injury_archive_unverified'
         verified=verify_extractions(snapshot,cache_dir or Path(directory)/'raw')
-        snapshot['as_of']=datetime.now(timezone.utc).isoformat()
         checked=deepcopy(snapshot);checked['injury_extractions']=verified
+        phase='reference_unavailable'
+        reference=collect_references(checked,Path(directory)/'references')
+        snapshot['as_of']=datetime.now(timezone.utc).isoformat()
+        checked['as_of']=snapshot['as_of']
+        checked=apply_no_injuries(checked,reference.get('no_injuries',[]))
+        snapshot['roster']=deepcopy(checked['roster'])
+        snapshot['availability_supplements']=deepcopy(checked['availability_supplements'])
+        record_availability_update(directory,checked,reference.get('no_injuries',[]),reference.get('sources',[]))
         result=check_inputs(checked,history,profiles,reference)
     except (ValueError,OSError,KeyError,TypeError) as exc:
         result=dict(schema_version=1,version=PREFLIGHT_VERSION,status='blocked',checked_at=datetime.now(timezone.utc).isoformat(),
                     issues=[dict(code=phase,detail=str(exc),team_id=None)],lineups={},sources=reference.get('sources',[]))
+        record_availability_update(directory,snapshot,[],reference.get('sources',[]))
     digest=hashlib.sha256(canonical(result)).hexdigest()
     for game in snapshot['games']:
         root=Path(directory)/'preflight'/game['game_id']
