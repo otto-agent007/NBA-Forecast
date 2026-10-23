@@ -1552,3 +1552,443 @@ pre {
     overflow-x: auto;
   }
 }
+
+/* Historical clutch comparisons reuse the dashboard's navy / blue language. */
+.clutch {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+.clutch-intro {
+  background: #101f37;
+  border-radius: 12px;
+  color: #fff;
+  padding: 34px 38px;
+  display: flex;
+  justify-content: space-between;
+  gap: 30px;
+  align-items: center;
+}
+.clutch-eyebrow {
+  display: block;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.6px;
+  color: #5f7b9b;
+  margin-bottom: 12px;
+}
+.clutch-intro .clutch-eyebrow {
+  color: #82b8ff;
+}
+.clutch-intro h2 {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 46px;
+  line-height: 1.02;
+  letter-spacing: 0.3px;
+  margin-bottom: 15px;
+}
+.clutch-intro p {
+  color: #bbcadc;
+  max-width: 530px;
+  line-height: 1.7;
+  margin-bottom: 0;
+}
+.clutch-archive {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border-left: 1px solid #40516a;
+  padding-left: 35px;
+  min-width: 235px;
+}
+.clutch-archive strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 58px;
+  line-height: 1;
+  color: #85baff;
+}
+.clutch-archive span {
+  font-size: 13px;
+  color: #d2deed;
+}
+.clutch-archive b {
+  font-size: 12px;
+  margin-top: 14px;
+}
+.clutch-archive small {
+  color: #9db0c9;
+  font-size: 10px;
+}
+.clutch-notice {
+  border-left: 3px solid #4386d5;
+  background: #edf4fe;
+  padding: 15px 18px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.clutch-panel {
+  padding: 28px;
+  background: #fff;
+  border: 1px solid #e0e7f0;
+  border-radius: 10px;
+  min-width: 0;
+}
+.clutch-panel h2 {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 29px;
+  margin-bottom: 12px;
+}
+.clutch-panel h3 {
+  font-size: 15px;
+  margin-top: 24px;
+}
+.clutch-muted {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #5f7087;
+}
+.clutch-section-head,
+.clutch-trend-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.clutch label {
+  font-size: 11px;
+  color: #4a607a;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+}
+.clutch select,
+.clutch-controls input:not([type="checkbox"]) {
+  font: inherit;
+  font-size: 12px;
+  min-height: 38px;
+  border: 1px solid #cdd9e6;
+  border-radius: 6px;
+  padding: 9px 12px;
+  background: white;
+  color: #142238;
+  max-width: 100%;
+}
+.clutch select:focus-visible {
+  outline: 3px solid #4998fa;
+  outline-offset: 2px;
+}
+.clutch-explorer {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 28px;
+  margin: 24px 0;
+  border-top: 1px solid #edf0f5;
+  padding-top: 18px;
+}
+.clutch-chart {
+  min-width: 0;
+}
+.clutch-chart svg {
+  width: 100%;
+  height: auto;
+}
+.clutch-chart svg text {
+  fill: #61758e;
+  font-size: 11px;
+}
+.clutch-chart svg .clutch-axis-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.clutch-chart circle[role="button"] {
+  cursor: pointer;
+}
+.clutch-chart circle:focus {
+  stroke: #101f37;
+  stroke-width: 3px;
+  outline: none;
+}
+.clutch-selection {
+  background: #f6f8fc;
+  padding: 18px;
+  border-radius: 8px;
+}
+.clutch-selection h3 {
+  margin-top: 0;
+}
+.clutch-selected {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid #e2e9f1;
+  padding: 9px 0;
+  gap: 8px;
+}
+.clutch-selected button {
+  font-size: 12px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px;
+}
+.clutch-selected button[aria-pressed="true"] {
+  font-weight: 800;
+}
+.clutch-dot {
+  height: 8px;
+  width: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+}
+.clutch-controls {
+  display: flex;
+  align-items: end;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin: 22px 0 12px;
+}
+.clutch-controls label:first-child {
+  flex: 1;
+  min-width: 190px;
+}
+.clutch-controls .clutch-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding-bottom: 10px;
+  white-space: nowrap;
+}
+.clutch input[type="checkbox"] {
+  accent-color: #226dcc;
+  width: 16px;
+  height: 16px;
+}
+.clutch-table {
+  font-size: 12px;
+  min-width: 850px;
+  width: 100%;
+  border-collapse: collapse;
+}
+.clutch-table th {
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  background: #f6f8fb;
+  color: #5d7189;
+  white-space: nowrap;
+}
+.clutch-table th,
+.clutch-table td {
+  padding: 13px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e9edf3;
+}
+.clutch-table td {
+  white-space: nowrap;
+}
+.clutch-table .text-button {
+  font-size: 12px;
+  text-align: left;
+  padding: 0;
+}
+.clutch-table small {
+  display: block;
+  color: #98621a;
+  margin-top: 5px;
+}
+.clutch-badge {
+  font-size: 10px;
+  background: #eaf5f1;
+  color: #256b59;
+  padding: 5px 7px;
+  border-radius: 4px;
+}
+.clutch-badge.limited {
+  background: #fff4e3;
+  color: #895916;
+}
+.clutch-pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  padding-top: 16px;
+}
+.clutch-pagination span {
+  margin-right: auto;
+  color: #64778e;
+}
+.clutch-pagination button {
+  padding: 7px 11px;
+  border: 1px solid #d6e0eb;
+  border-radius: 5px;
+}
+.clutch button:disabled {
+  cursor: default;
+}
+.clutch-trends {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 18px 0;
+}
+.clutch-trends > div {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 20px;
+  background: #f5f8fd;
+  border-top: 3px solid #4386d5;
+  border-radius: 4px;
+}
+.clutch-trends span {
+  font-size: 12px;
+  font-weight: 700;
+}
+.clutch-trends strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 34px;
+}
+.clutch-trends small {
+  font-size: 11px;
+  color: #63758b;
+}
+.clutch details {
+  margin-top: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.clutch summary {
+  font-weight: 700;
+  cursor: pointer;
+  padding: 8px 0;
+}
+.clutch details .table-scroll {
+  margin: 15px 0;
+}
+.clutch-decompositions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin: 18px 0 24px;
+}
+.clutch-decompositions > div {
+  border: 1px solid #dce6f1;
+  padding: 20px;
+  border-radius: 8px;
+}
+.clutch-decompositions h4 {
+  font-size: 12px;
+  color: #667a91;
+  margin: 0 0 12px;
+}
+.clutch-decompositions strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 30px;
+}
+.clutch-decompositions dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  font-size: 12px;
+  margin-bottom: 0;
+}
+.clutch-decompositions dd {
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+.clutch-method code {
+  overflow-wrap: anywhere;
+  font-size: 10px;
+}
+.clutch-method details {
+  margin: 0;
+}
+.clutch-empty {
+  padding: 30px;
+  background: white;
+  border: 1px solid #e1e7ef;
+}
+@media (max-width: 900px) {
+  .top-inner {
+    gap: 30px;
+  }
+  .topbar nav {
+    gap: 20px;
+  }
+  .clutch-explorer {
+    grid-template-columns: 1fr;
+  }
+  .clutch-selection {
+    max-width: none;
+  }
+  .clutch-intro {
+    padding: 25px;
+  }
+  .clutch-intro h2 {
+    font-size: 38px;
+  }
+}
+@media (max-width: 650px) {
+  .clutch {
+    gap: 16px;
+  }
+  .clutch-intro {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 22px;
+  }
+  .clutch-archive {
+    border-left: 0;
+    border-top: 1px solid #40516a;
+    padding: 20px 0 0;
+    min-width: 0;
+  }
+  .clutch-archive strong {
+    font-size: 42px;
+  }
+  .clutch-archive b {
+    margin-top: 3px;
+  }
+  .clutch-panel {
+    padding: 16px;
+  }
+  .clutch-section-head,
+  .clutch-trend-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .clutch-controls {
+    gap: 12px;
+  }
+  .clutch-controls > label {
+    width: 100%;
+  }
+  .clutch-controls .clutch-check {
+    width: auto;
+  }
+  .clutch-trends {
+    gap: 6px;
+  }
+  .clutch-trends > div {
+    padding: 12px 8px;
+  }
+  .clutch-trends strong {
+    font-size: 27px;
+  }
+  .clutch-trends small {
+    font-size: 10px;
+  }
+  .clutch-decompositions {
+    grid-template-columns: 1fr;
+  }
+  .clutch-pagination {
+    gap: 6px;
+  }
+  .clutch-pagination button {
+    padding: 7px;
+  }
+}
