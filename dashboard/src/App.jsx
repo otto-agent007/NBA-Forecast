@@ -298,6 +298,7 @@ export default function App() {
                   >
                     <div id="player-area">
                       <PlayerTable
+                        key={`${tab}-${game?.game_id || "pool"}`}
                         players={players}
                         query={query}
                         setQuery={setQuery}

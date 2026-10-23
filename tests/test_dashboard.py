@@ -8,6 +8,23 @@ from nba_forecast.store import save_run
 from tests.test_store import inputs,NOW
 
 class DashboardTests(unittest.TestCase):
+    def test_audit_and_observed_stats_preserve_provenance_and_rescheduled_audit_is_hidden(self):
+        s,_,_=inputs()
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);(folder/'schedule').mkdir();(folder/'players').mkdir()
+            (folder/'schedule/latest.json').write_text(json.dumps({'season':s['season'],'games':s['games']}))
+            (folder/'roster.json').write_text(json.dumps(s['roster']))
+            pid=s['roster']['players'][0]['player_id']
+            (folder/'players/index.json').write_text(json.dumps({'player_summaries':{pid:{'points_average':18.5}}}))
+            game=s['games'][0];root=folder/'preflight'/game['game_id'];root.mkdir(parents=True)
+            audit=dict(game_id=game['game_id'],start_time=game['start_time'],status='blocked',issues=[])
+            (root/'latest.json').write_text(json.dumps(audit))
+            data=dashboard_data(d)
+            self.assertEqual(data['games'][0]['preflight']['status'],'blocked')
+            self.assertEqual(data['players'][0]['observed_stats']['points_average'],18.5)
+            self.assertIsNone(data['games'][0]['forecast'])
+            audit['start_time']='2026-10-23T20:00:00Z';(root/'latest.json').write_text(json.dumps(audit))
+            self.assertIsNone(dashboard_data(d)['games'][0]['preflight'])
     def test_preliminary_remains_available_after_a_final_run_is_saved(self):
         from copy import deepcopy
         from datetime import timedelta

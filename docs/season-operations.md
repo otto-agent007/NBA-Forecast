@@ -16,6 +16,7 @@ tick captures that game's official checkpoint and saves a final-stage run;
 five-minute refreshes can retain subsequent late updates as independent runs.
 The dashboard lets you inspect the latest preliminary and final forecasts
 separately. Unknown availability and unsupported production remain blank.
+Saving either stage now also requires the cross-check below to pass.
 
 Every captured check is retained under `injuries/games/GAME_ID/records/`,
 including checks for which roster or parsing failures prevent forecasting.
@@ -43,8 +44,8 @@ python -m nba_forecast benchmarks --db data/operations/production/forecast.sqlit
 
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:
-preliminary runs can retain unknown availability, while final extraction failures
-block the final job and are retried. No paid model/API dependency is installed.
+extraction failures block new forecasts and are retried. Injury captures remain
+available even when a forecast is blocked. No paid model/API dependency is installed.
 
 The tick refreshes the NBA season schedule, finds per-game jobs in the next
 24 hours, and saves one preliminary or final run for each due game. The final
@@ -76,6 +77,49 @@ rebuilding a missing profile or computing a selected run's benchmark. Existing
 immutable inputs and hashes retain their original format. The ledger still
 stores full inputs for every run, so storage and backup capacity must account
 for repeated history snapshots.
+
+## Preforecast cross-check
+
+Before the automated tick or a `forecast --mode live` call executes the model,
+a separate deterministic preflight gate validates the existing input contracts
+and compares NBA evidence with ESPN's public scoreboard and team roster feeds:
+
+- Matchup, home/away teams, exact tipoff and an unstarted scheduled status must agree.
+- Every roster name on each playing team must match the independent team/season
+  roster after exact normalization. Differences are reported for review; one
+  provider never silently overwrites the other.
+- The verified official injury extraction must completely cover both teams for
+  this exact matchup and Eastern basketball date. A next-day report for the same
+  team cannot satisfy today's game. The gate re-extracts coverage and statuses
+  from the archived PDF after verifying its hash, official URL and publication
+  chronology. Supplied coverage labels alone cannot pass. Applied availability
+  must agree with the report or carry a matching newer sourced review.
+- Each team must have five unique eligible projected starter IDs supported by
+  captured role/minutes evidence. Out players cannot occupy a starting slot.
+
+Failures block model execution and ledger insertion, retaining the injury
+checkpoint and an archived audit under `preflight/GAME_ID/records/`. Blocked jobs
+retry on later ticks. New validator versions invalidate completed job keys.
+Independent response bytes, retrieval times and SHA256 hashes are preserved
+under `references/`; schedule responses are reused for at most five minutes and
+rosters for fifteen. An unavailable reference blocks the forecast. Demo and
+replay modes remain offline and do not assert this live cross-check passed.
+Live CLI forecasts use `--cache-dir` (default `data/raw`) to locate those
+hash-named injury PDFs; use the same directory used for `injury-check` and
+`apply-injuries`.
+
+Passing verifies input consistency, not official lineup confirmation or model
+accuracy. Questionable players remain withheld. The dashboard distinguishes a
+saved run's gate result from the latest attempt; older saved runs are immutable
+and labeled unverified when they predate the gate.
+
+Player outlooks select one projected five per team, preferring the latest
+captured starters and then supported role/minutes evidence. Selection happens
+before search, status filters or sorting. Sparse evidence leaves unresolved
+slots, never invented names. Team buttons expose either roster directly;
+observed Season PPG stays visible when projections are withheld, with season,
+sample size and observation time in its tooltip. These averages can be newer
+than a selected historical forecast and are not that run's model inputs.
 
 ## Schedule and context
 

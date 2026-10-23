@@ -114,6 +114,7 @@ test("player outlook separates teams and places starters before bench by minutes
   staged.games[0].forecast.predictions = [
     { ...game.forecast.predictions[0], rotation_role: { label: "bench", recent_minutes: 15 }, expected_minutes: 15 },
     { ...game.forecast.predictions[0], player_id: "103", name: "Zach Starter", rotation_role: { label: "starter", recent_minutes: 35 }, expected_minutes: 35 },
+    ...[104,105,106,107].map((id) => ({ ...game.forecast.predictions[0], player_id: String(id), name: `Starter ${id}`, expected_minutes: 25, rotation_role: { label: "starter", recent_minutes: 25 } })),
     game.forecast.predictions[1],
   ];
   await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
@@ -143,4 +144,36 @@ test("preliminary forecast remains selectable alongside the final checkpoint", a
   await page.getByRole("button", { name: "Final forecast", exact: true }).click();
   await expect(page.locator(".player-row .points").first()).toHaveText("30");
   await expect(page.getByRole('link', { name: 'Official injury report' })).toHaveAttribute('href', 'https://example.test/final.pdf');
+});
+
+
+test("Bucks information stays accessible with five projected starters and a visible cross-check block", async ({ page }) => {
+  const staged = structuredClone(dashboard);
+  const bucks = Array.from({ length: 18 }, (_, i) => ({
+    player_id: String(200+i), name: `Bucks Player ${i}`, team_id: "1610612749",
+    observed_stats: { points_average: 20-i/2, games: 2, season: "2026-27" },
+  }));
+  staged.players.push(...bucks);
+  const g = staged.games[0];
+  g.home_team_id = "1610612749"; g.home_name = "Milwaukee Bucks"; g.home_tricode = "MIL";
+  g.forecast.predictions = bucks.map((p,i) => ({ ...p, status: "needs_review", availability: "unknown", points_mean: null,
+    rotation_role: { label: "starter", observations: 5, recent_minutes: 40-i }, projected_starter: i < 5 }));
+  g.preflight = { status: "blocked", checked_at: "2026-10-22T01:00:00Z", issues: [{ team_id: "1610612749", detail: "Official injury report does not completely cover this team for this game/date." }] };
+  await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
+  const errors = []; page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/");
+  await expect(page.getByText("New forecast blocked by cross-check", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "View Milwaukee Bucks", exact: true }).click();
+  const team = page.locator('tbody[data-team-id="1610612749"]');
+  await expect(team.locator('.player-row')).toHaveCount(18);
+  await expect(team.locator('.player-row[data-role="starter"]')).toHaveCount(5);
+  await expect(team.locator('.player-row[data-role="bench"]')).toHaveCount(13);
+  await expect(team.locator('.observed-ppg').first()).toHaveText("20");
+  await expect(team.locator('.points').first()).toHaveText("—");
+  await page.getByRole("button", { name: "Sort by projected points" }).click();
+  await expect(team.locator('.player-row[data-role="starter"]')).toHaveCount(5);
+  await page.getByRole("textbox", { name: "Search players" }).fill("Bucks Player 17");
+  await expect(team.locator('.player-row[data-role="starter"]')).toHaveCount(0);
+  await expect(team.locator('.player-row[data-role="bench"]')).toHaveCount(1);
+  expect(errors).toEqual([]);
 });

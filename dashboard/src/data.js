@@ -80,7 +80,7 @@ export function gamePlayers(data, game) {
     [game.home_team_id, game.away_team_id].includes(p.team_id),
   );
   const roster = new Map(members.map((p) => [p.player_id, p]));
-  for (const p of predictions.values()) roster.set(p.player_id, p);
+  for (const p of predictions.values()) roster.set(p.player_id, { ...roster.get(p.player_id), ...p });
   return [...roster.values()].map((p) => ({
     ...p,
     ...predictions.get(p.player_id),
@@ -142,7 +142,7 @@ export function filterPlayers(
 
 const rotationMinutes = (p) => p.expected_minutes ?? p.rotation_role?.recent_minutes ?? -1;
 const surname = (name) => name.trim().replace(/\s+(Jr\.?|Sr\.?|II|III|IV)$/i, "").split(/\s+/).at(-1);
-export function groupPlayers(players) {
+export function groupPlayers(players, allPlayers = players) {
   const teams = new Map();
   for (const p of players) {
     if (!teams.has(p.team_id)) teams.set(p.team_id, {
@@ -151,12 +151,24 @@ export function groupPlayers(players) {
     });
     teams.get(p.team_id).players.push(p);
   }
-  return [...teams.values()].sort((a, b) => a.team_order - b.team_order || a.team_code.localeCompare(b.team_code)).map((team) => ({
-    ...team,
-    groups: [["starter", "Starters"], ["bench", "Bench"], ["unknown", "Role unverified"]]
-      .map(([key, label]) => ({ key, label, players: team.players.filter((p) => (p.rotation_role?.label || "unknown") === key) }))
-      .filter((g) => g.players.length),
-  }));
+  return [...teams.values()].sort((a, b) => a.team_order - b.team_order || a.team_code.localeCompare(b.team_code)).map((team) => {
+    const pool = allPlayers.filter((p) => p.team_id === team.team_id);
+    const explicit = pool.some((p) => typeof p.projected_starter === "boolean");
+    const supported = (p) => p.rotation_role?.observations > 0 || rotationMinutes(p) > 0;
+    const eligible = pool.filter((p) => p.status !== "out" && (explicit ? p.projected_starter : supported(p)));
+    const latest = Math.max(...eligible.map((p) => Date.parse(p.rotation_role?.last_game_time) || -Infinity));
+    const wasStarter = (p) => Number(Boolean(Number.isFinite(latest) && Date.parse(p.rotation_role?.last_game_time) === latest && p.rotation_role?.last_game_started === true));
+    const ids = new Set([...eligible].sort((a,b) => wasStarter(b)-wasStarter(a) ||
+      Number(b.rotation_role?.label === "starter")-Number(a.rotation_role?.label === "starter") ||
+      rotationMinutes(b)-rotationMinutes(a) || a.name.localeCompare(b.name)).slice(0,5).map((p) => p.player_id));
+    const role = (p) => ids.has(p.player_id) ? "starter" : supported(p) ? "bench" : "unknown";
+    return { ...team, unfilled_slots: 5-ids.size, total: pool.length,
+      unavailable: pool.filter((p) => p.availability === "unknown" || (p.status === "needs_review" && !p.availability)).length,
+      groups: [["starter", "Starters"], ["bench", "Bench"], ["unknown", "Role unverified"]]
+        .map(([key, label]) => ({ key, label, players: team.players.filter((p) => role(p) === key) }))
+        .filter((g) => g.players.length),
+    };
+  });
 }
 export function health(runner, now = Date.now()) {
   if (!runner) return { label: "No runner evidence", kind: "warn" };

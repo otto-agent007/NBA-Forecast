@@ -37,6 +37,7 @@ class DailyAutomationTests(unittest.TestCase):
             return dict(rows=[dict(player_id=pid,team_id='1610612738',game_id='0022600001',status='available',reported_status='Available')],
                         team_coverage=[],evidence=evidence,issues=[])
         with tempfile.TemporaryDirectory() as d:
+            self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
             folder=Path(d);atomic_json(folder/'schedule/latest.json',schedule)
             with patch('nba_forecast.operations._now',side_effect=lambda:clock[0]),patch('nba_forecast.store._now',side_effect=lambda:datetime.fromisoformat(clock[0].replace('Z','+00:00'))),patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster',return_value=roster),patch('nba_forecast.operations.capture_daily',return_value={'state':'captured'}),patch('nba_forecast.operations.fetch_injury_check',side_effect=injury_check),patch('nba_forecast.operations.pdf_text',return_value='text'),patch('nba_forecast.operations.parse_report',side_effect=parsed),patch('nba_forecast.player_sync.sync_player_data',return_value={'errors':[]}),patch('nba_forecast.postgame.build_postgames',return_value={'errors':[]}):
                 preliminary=run_tick(folder,history)

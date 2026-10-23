@@ -1,5 +1,5 @@
 import PlayerPortrait from "./PlayerPortrait";
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { filterPlayers, groupPlayers, number, statusLabel } from "./data";
 import { Icon, TeamMark } from "./Icons";
 export function Status({ player }) {
@@ -24,18 +24,26 @@ export default function PlayerTable({
   title = "Player outlook",
   expanded = false,
 }) {
+  const [teamId, setTeamId] = useState("all");
+  const allTeams = useMemo(() => groupPlayers(players), [players]);
   const rows = useMemo(
-    () => filterPlayers(players, query, filter, sort),
-    [players, query, filter, sort],
+    () => filterPlayers(players, query, filter, sort).filter((p) => teamId === "all" || p.team_id === teamId),
+    [players, query, filter, sort, teamId],
   );
-  const teams = useMemo(() => groupPlayers(rows), [rows]);
-  const columns = expanded ? 13 : 5;
+  const teams = useMemo(() => groupPlayers(rows, players), [rows, players]);
+  const columns = expanded ? 14 : 6;
   return (
     <section className="player-section">
       <div className="section-heading">
         <h2>{title}</h2>
         <span className="count">{rows.length} players</span>
       </div>
+      {allTeams.length === 2 && <div className="team-selector" aria-label="Team outlook selector">
+        <button aria-pressed={teamId === "all"} onClick={() => setTeamId("all")}>Both teams</button>
+        {allTeams.map((team) => <button key={team.team_id} aria-label={`View ${team.team_name || team.team_code}`} aria-pressed={teamId === team.team_id} onClick={() => setTeamId(team.team_id)}>
+          <TeamMark id={team.team_id} code={team.team_code} />{team.team_name || team.team_code}<small>{team.total} players</small>
+        </button>)}
+      </div>}
       <div className="table-toolbar">
         <div className="filters" aria-label="Player status filter">
           {[
@@ -71,6 +79,7 @@ export default function PlayerTable({
               <th scope="col">Player</th>
               {expanded && <th scope="col">Matchup</th>}
               <th scope="col">Status</th>
+              <th scope="col" className="numeric">Season PPG</th>
               <th scope="col" className="numeric">
                 Min
               </th>
@@ -104,13 +113,15 @@ export default function PlayerTable({
           <tbody key={team.team_id} data-team-id={team.team_id}>
             <tr className="team-heading"><th colSpan={columns} scope="rowgroup">
               <TeamMark id={team.team_id} code={team.team_code} />
-              <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players</span>
+              <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players · Projected five, unconfirmed</span>
             </th></tr>
+            {team.unavailable > 0 && <tr className="coverage-warning"><td colSpan={columns}>Availability unresolved for {team.unavailable} players. Unsupported forecasts are withheld; captured season averages remain visible.</td></tr>}
+            {team.unfilled_slots > 0 && !query.trim() && filter === "all" && <tr className="coverage-warning"><td colSpan={columns}>{team.unfilled_slots} of 5 starting slots await sufficient evidence. No lineup has been confirmed.</td></tr>}
             {team.groups.map((group) => (
             <React.Fragment key={group.key}>
             <tr className="role-heading"><th colSpan={columns} scope="rowgroup">{group.label}</th></tr>
             {group.players.map((p) => (
-              <tr key={p.player_id} className="player-row">
+              <tr key={p.player_id} className="player-row" data-role={group.key}>
                 <td>
                   <button className="player-button" onClick={() => onSelect(p)}>
                     <PlayerPortrait key={p.player_id} player={p} />
@@ -131,6 +142,7 @@ export default function PlayerTable({
                 <td>
                   <Status player={p} />
                 </td>
+                <td className="numeric observed-ppg" title={p.observed_stats ? `${p.observed_stats.season} · ${p.observed_stats.games} captured games · Observed as of ${p.observed_stats.as_of || "saved capture"}; not a game forecast` : "No captured season statistics"}>{number(p.observed_stats?.points_average)}</td>
                 <td className="numeric">{number(p.expected_minutes)}</td>
                 <td className="numeric">{number(p.expected_fga)}</td>
                 <td
@@ -186,8 +198,9 @@ export default function PlayerTable({
         <span>
           Dashes mean unsupported estimates. Conditional projections use a
           complete-report not-listed assumption; participation is not confirmed.
-          {" "}Starter and bench groups describe recent captured roles; upcoming
-          lineups are unconfirmed. Players within each group are ordered by minutes.
+          {" "}Each team has five projected starting slots, selected before filters.
+          Upcoming lineups remain unconfirmed. Season PPG is an observed average,
+          not a forecast; its tooltip identifies the season and captured games.
         </span>
       </div>
     </section>

@@ -1562,3 +1562,16 @@ pre {
     overflow-x: auto;
   }
 }
+
+.team-selector { display:flex; gap:8px; flex-wrap:wrap; padding:0 20px 16px; }
+.team-selector button { display:flex; align-items:center; gap:8px; border:1px solid var(--line, #ddd); border-radius:8px; padding:9px 12px; background:white; font:inherit; cursor:pointer; }
+.team-selector button[aria-pressed="true"] { background:#edf5ff; border-color:#2266be; }
+.team-selector small { color:#657183; }
+.coverage-warning td { white-space:normal; padding:12px 20px; color:#7b5614; background:#fff9ed; font-size:12px; line-height:1.6; }
+.preflight-status { padding:14px 18px; border:1px solid #dce3ec; border-radius:10px; background:#f7f9fc; line-height:1.5; }
+.preflight-status.blocked { background:#fff8ed; border-color:#edd7b1; }
+.preflight-status.passed { background:#f1f8f4; border-color:#bdd9c6; }
+.preflight-status > span { display:block; color:#657183; font-size:12px; }
+.preflight-status p, .preflight-status li { font-size:13px; }
+.preflight-status ul { padding-left:18px; }
+@media (max-width:600px) { .team-selector { padding:0 12px 12px; } .team-selector button { font-size:12px; flex-wrap:wrap; } }

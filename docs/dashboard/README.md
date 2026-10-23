@@ -73,3 +73,11 @@ The tests cover saved role-review queue membership, refreshing new or corrected
 postgame evidence for an unchanged game, and cancellation when switching games.
 Refresh reloads postgame evidence as well as the main dashboard capture. The
 review filter includes projected players who appear in the saved role queue.
+
+Player outlooks select at most five supported projected starters per team before
+filtering or sorting. Unfilled starting slots remain explicit; no official lineup
+is implied. Use the team buttons to inspect either roster. Season PPG remains
+visible when game projections are withheld, with captured season/sample details
+in the tooltip. The cross-check panel distinguishes the latest input-validation
+attempt from the validation attached to the selected saved forecast. Legacy runs
+remain visible and are labeled unverified.

@@ -15,6 +15,7 @@ from tests.test_model import row
 class OperationsTests(unittest.TestCase):
     def setUp(self):
         self.daily=self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}))
+        self.preflight=self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
     def test_duplicate_tick_and_crash_recovery_do_not_duplicate_run(self):
         schedule=normalize_season(payload([game()]),NOW);schedule['version']='v1'
         roster=inputs()[0]['roster']
@@ -112,6 +113,7 @@ class OperationsTests(unittest.TestCase):
 
 class EvidenceTickTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.schedule=normalize_season(payload([game()]),NOW)
         self.schedule['version']='v1'
@@ -126,6 +128,14 @@ class EvidenceTickTests(unittest.TestCase):
         self.enterContext(patch('nba_forecast.store._now',return_value=datetime.fromisoformat(NOW.replace('Z','+00:00'))))
         self.enterContext(patch('nba_forecast.player_sync.sync_player_data',return_value={'errors':[]}))
         self.enterContext(patch('nba_forecast.postgame.build_postgames',return_value={'errors':[]}))
+
+    def test_blocked_preflight_prevents_model_execution_and_ledger_save(self):
+        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.operations.run_preflight',return_value={
+            'status':'blocked','issues':[{'code':'injury_coverage_missing','detail':'Missing team report'}]}),patch('nba_forecast.operations.forecast') as model:
+            result=run_tick(self.folder,[])
+        model.assert_not_called()
+        self.assertEqual(result['created_runs'],0)
+        self.assertTrue(any(e['task']=='preflight' for e in result['errors']))
 
     def saved(self):
         with sqlite3.connect(self.folder/'forecast.sqlite') as conn:

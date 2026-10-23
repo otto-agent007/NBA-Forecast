@@ -9,6 +9,7 @@ import sqlite3
 import re
 from urllib.parse import urlsplit,unquote
 from .validation import parse_time
+from .rotation import projected_lineups
 
 
 def read_optional(path,default):
@@ -25,6 +26,8 @@ def dashboard_data(directory):
         capture=read_optional(folder/'injuries/games'/g['game_id']/'latest.json',None)
         item=next((i for i in (capture or {}).get('games',[]) if i['game_id']==g['game_id']),None)
         g['injury_capture']=capture if item and g.get('start_time') and parse_time(item['start_time'])==parse_time(g['start_time']) else None
+        audit=read_optional(folder/'preflight'/g['game_id']/'latest.json',None)
+        g['preflight']=audit if audit and g.get('start_time') and parse_time(audit['start_time'])==parse_time(g['start_time']) else None
 
     db=folder/'forecast.sqlite';players=[];roster_observed=None;roster_rank=None
     if db.exists():
@@ -60,12 +63,15 @@ def dashboard_data(directory):
                         p['status_source_url']=evidence.get('status_source_url')
                     roles=read_optional(folder/'runs'/row['run_id']/'profiles.json',{})
                     player_roles={p['player_id']:p for p in roles.get('players',[])}
+                    lineups=projected_lineups(snapshot['roster']['players'],roles.get('players',[]))
                     for p in predictions:
                         p['rotation_role']=player_roles.get(p['player_id'],{}).get('rotation_role')
+                        p['projected_starter']=p['player_id'] in lineups.get(p['team_id'],{}).get('player_ids',[])
                     view=dict(team_roles=[t for t in roles.get('teams',[]) if t['team_id'] in (game['home_team_id'],game['away_team_id'])],run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
                         stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],predictions=predictions,
                         review_queue=[q for q in forecast['review_queue'] if q['game_id']==game['game_id']],
-                        injury_check=check,context=snapshot.get('schedule_context',{}))
+                        injury_check=check,context=snapshot.get('schedule_context',{}),lineups=lineups,
+                        preflight=snapshot.get('preflight'),injury_coverage_warnings=snapshot.get('injury_coverage_warnings',[]))
                     game['forecasts'][stage]=view
                     if game['game_id'] not in chosen or rank>chosen[game['game_id']]:
                         chosen[game['game_id']]=rank;game['forecast']=view
@@ -77,8 +83,12 @@ def dashboard_data(directory):
     team_names={g[side+'_team_id']:g.get(side+'_name') for g in games for side in ('home','away')}
     player_index=read_optional(folder/'players/index.json',None)
     rotations=(player_index or {}).get('rotation_roles',{})
+    summaries=(player_index or {}).get('player_summaries',{})
     players=[{**{k:p[k] for k in ('player_id','name','team_id')},'team_code':team_codes.get(p['team_id']),
-              'team_name':team_names.get(p['team_id']),'rotation_role':rotations.get(p['player_id'])} for p in players]
+              'team_name':team_names.get(p['team_id']),'rotation_role':rotations.get(p['player_id']),
+              'observed_stats':summaries.get(p['player_id'])} for p in players]
+    pool_lineups=projected_lineups(players,players)
+    for p in players:p['projected_starter']=p['player_id'] in pool_lineups[p['team_id']]['player_ids']
     return dict(schema_version=1,generated_at=datetime.now(timezone.utc).isoformat(),source_mode='saved_operations',
                 season=schedule.get('season'),schedule_observed_at=schedule.get('observed_at'),coverage=schedule.get('coverage',{}),
                 games=games,players=players,roster_observed_at=roster_observed,

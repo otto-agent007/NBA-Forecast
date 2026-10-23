@@ -5,6 +5,8 @@ export default function ForecastStages({ game, selected, onSelect }) {
   const stages = { ...(game.forecasts || {}) };
   if (game.forecast) stages[game.forecast.stage] ||= game.forecast;
   const view = stages[selected];
+  const audit = game.preflight;
+  const teamName = (id) => id === game.home_team_id ? game.home_name : id === game.away_team_id ? game.away_name : "Inputs";
   return (
     <section className="forecast-stages" aria-label="Forecast checkpoints">
       <div className="forecast-stage-buttons">
@@ -18,6 +20,13 @@ export default function ForecastStages({ game, selected, onSelect }) {
       <p className="forecast-stage-summary">{view
         ? `${selected === 'final' ? 'Final' : 'Preliminary'} forecast · Saved ${stamp(view.created_at)}. Earlier runs remain available.`
         : 'Preliminary forecasts are saved before the final T−30 checkpoint. Unsupported estimates stay blank.'}</p>
+      <div className={`preflight-status ${audit?.status || "unverified"}`} role="status">
+        <strong>{audit?.status === "blocked" ? "New forecast blocked by cross-check" : audit?.status === "passed" ? "Latest input cross-check passed" : "Awaiting input cross-check"}</strong>
+        {audit && <span>Checked {stamp(audit.checked_at)}</span>}
+        {audit?.issues?.length > 0 && <ul>{audit.issues.map((issue, i) => <li key={i}>{teamName(issue.team_id)}: {issue.detail}</li>)}</ul>}
+        <p>{view?.preflight?.status === "passed" ? "This saved forecast passed its preflight checks. Starting fives are projections, not confirmed lineups." : view ? "This saved forecast predates the cross-check gate and is unverified. New runs require matching schedule, roster and complete injury evidence for both teams." : "No forecast saved. New runs require matching schedule, roster and complete injury evidence for both teams. Starting fives remain unconfirmed."}</p>
+        {audit?.sources?.length > 0 && <small>{audit.sources.length} archived independent source captures · ESPN schedule and team rosters, checked against NBA evidence.</small>}
+      </div>
     </section>
   );
 }

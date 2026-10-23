@@ -84,6 +84,10 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=2):
         atomic_json(output/(pid+'.json'),page)
     summary=dict(as_of=now,season=season,players=len(pages['players']),history_rows=len(history),
                  rotation_roles={pid:page['rotation_role'] for pid,page in pages['players'].items()},
+                 player_summaries={pid:{'season':s['season'],'games':s['gp'],'points_average':s['averages']['pts'],
+                     'minutes_average':s['averages']['minutes'],'as_of':now}
+                     for pid,page in pages['players'].items()
+                     for s in [page['current_season'] if page['current_season']['gp'] else page['prior_season']]},
                  current_season_final_games=len(targets),shot_games_verified=sum(not s.get('missing_reason') for s in shots),
                  shot_games_attempted=fetched,errors=errors,policy='Observed final regular-season data; partial coverage is explicit.')
     atomic_json(output/'index.json',summary)

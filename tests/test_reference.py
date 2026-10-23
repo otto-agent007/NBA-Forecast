@@ -1,0 +1,50 @@
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from datetime import datetime, timezone
+from nba_forecast.reference import BASE, collect_references, fetch_reference
+
+
+class ReferenceTests(unittest.TestCase):
+    def test_unapproved_urls_never_open(self):
+        with tempfile.TemporaryDirectory() as folder, patch('urllib.request.build_opener') as opener:
+            for url in ('https://example.test/roster', BASE+'teams/15/roster?token=x', BASE+'teams/../roster'):
+                with self.assertRaises(ValueError):fetch_reference(url,folder)
+            opener.assert_not_called()
+
+    def test_fresh_cache_checks_hash_and_retains_original_retrieval_time(self):
+        with tempfile.TemporaryDirectory() as folder, patch('urllib.request.build_opener') as opener:
+            root=Path(folder);url=BASE+'scoreboard?dates=20261023';raw=b'{"events":[]}'
+            meta=dict(source_url=url,sha256=hashlib.sha256(raw).hexdigest(),retrieved_at=datetime.now(timezone.utc).isoformat())
+            (root/'raw').mkdir();path=root/'raw'/(meta['sha256']+'.json');path.write_bytes(raw)
+            (root/(hashlib.sha256(url.encode()).hexdigest()+'.json')).write_text(json.dumps(meta))
+            payload,saved=fetch_reference(url,root)
+            self.assertEqual(payload,{'events':[]});self.assertEqual(saved,meta);opener.assert_not_called()
+            path.write_bytes(b'{}')
+            with self.assertRaisesRegex(ValueError,'hash mismatch'):fetch_reference(url,root)
+
+    def test_same_day_board_is_loaded_once_for_multi_game_slate(self):
+        games=[];events=[]
+        for n in range(2):
+            start=f'2026-10-23T2{n}:00:00Z';home=f'H{n}';away=f'A{n}'
+            games.append(dict(start_time=start,home_tricode=home,away_tricode=away,home_team_id=home,away_team_id=away))
+            events.append(dict(date=start,competitions=[dict(status={'type':{'state':'pre','name':'STATUS_SCHEDULED'}},competitors=[
+                dict(homeAway='home',team=dict(id=str(2*n),abbreviation=home)),dict(homeAway='away',team=dict(id=str(2*n+1),abbreviation=away))])]))
+        def fetch(url,*args,**kwargs):
+            if 'scoreboard?' in url:return {'events':events},{'source_url':url}
+            return {'team':{'id':url.split('/')[-2]},'season':{'displayName':'2026-27'},'athletes':[{'fullName':'A Player'}]},{'source_url':url}
+        with patch('nba_forecast.reference.fetch_reference',side_effect=fetch) as request:
+            result=collect_references({'season':'2026-27','games':games},'unused')
+        self.assertEqual(len(result['games']),2);self.assertEqual(len(result['rosters']),4)
+        self.assertEqual(sum('scoreboard?' in c.args[0] for c in request.call_args_list),1)
+
+    def test_wrong_roster_team_or_season_is_rejected(self):
+        s={'season':'2026-27','games':[dict(start_time='2026-10-23T20:00:00Z',home_tricode='MIL',away_tricode='CHI',home_team_id='h',away_team_id='a')]}
+        board={'events':[{'date':s['games'][0]['start_time'],'competitions':[{'competitors':[
+            {'homeAway':'home','team':{'id':'15','abbreviation':'MIL'}},{'homeAway':'away','team':{'id':'4','abbreviation':'CHI'}}]}]}]}
+        for payload in ({'team':{'id':'9'}},{'team':{'id':'15'},'season':{'displayName':'2025-26'}}):
+            with self.subTest(payload=payload), patch('nba_forecast.reference.fetch_reference',side_effect=[(board,{}),(payload,{})]):
+                with self.assertRaises(ValueError):collect_references(s,'unused')

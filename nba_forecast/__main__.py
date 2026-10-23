@@ -53,6 +53,7 @@ def _parser():
         if name == 'forecast':
             cmd.add_argument('--stage', choices=('preliminary','final'), default='preliminary')
             cmd.add_argument('--injury-check')
+            cmd.add_argument('--cache-dir',default='data/raw',help='Archived injury PDFs for the live preflight cross-check')
             cmd.add_argument('--db', required=True)
             cmd.add_argument('--mode', choices=('live', 'replay', 'demo'), default='live')
     evaluate = sub.add_parser('evaluate')
@@ -148,6 +149,13 @@ def main(argv=None):
             else:
                 from .model import forecast
                 from .store import save_run
+                if args.mode == 'live':
+                    if args.scope != 'league':raise ValueError('live runs require league scope')
+                    from .preflight import run_preflight
+                    from .profiles import build_profiles
+                    check=run_preflight(snapshot,history,build_profiles(snapshot,history),Path(args.db).parent,cache_dir=args.cache_dir)
+                    if check['status']!='passed':raise ValueError('preflight blocked: '+ '; '.join(i['detail'] for i in check['issues']))
+                    snapshot['preflight']=check
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)

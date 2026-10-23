@@ -16,6 +16,7 @@ from .model import forecast, MODEL_VERSION
 from .store import save_run,evaluate_run,performance_report
 from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check
+from .preflight import run_preflight,PREFLIGHT_VERSION
 from .validation import parse_time,validate_history,validate_inputs,_source
 
 
@@ -152,7 +153,7 @@ def _tick(folder,history,report):
         # Refresh evidence throughout the day, then every five minutes near tipoff.
         seconds=300 if job['stage']=='final' else 900
         slot=int(parse_time(_now()).timestamp())//seconds
-        job['key']+=f':model:{MODEL_VERSION}:parser:{PARSER_VERSION}:slot:{slot}'
+        job['key']+=f':model:{MODEL_VERSION}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
         path=folder/'reviews'/(job['game_id']+'.json')
         if path.exists():
             review=json.loads(path.read_text());reviews[job['game_id']]=review
@@ -196,6 +197,11 @@ def _tick(folder,history,report):
                 report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
             usable=eligible_history(snapshot,history)
             profiles=build_profiles(snapshot,usable)
+            verification=run_preflight(snapshot,usable,profiles,folder)
+            if verification['status']!='passed':
+                report['errors'].append(dict(task='preflight',game_id=job['game_id'],issues=verification['issues']))
+                continue
+            snapshot['preflight']=verification
             prediction=forecast(snapshot,usable)
             run_id=save_run(db,snapshot,usable,prediction)
             # The immutable operation_key in the run is authoritative if interrupted here.
