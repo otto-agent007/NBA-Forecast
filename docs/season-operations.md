@@ -17,6 +17,10 @@ five-minute refreshes can retain subsequent late updates as independent runs.
 The dashboard lets you inspect the latest preliminary and final forecasts
 separately. Unknown availability and unsupported production remain blank.
 Saving either stage now also requires the cross-check below to pass.
+The live dashboard reloads saved evidence every 30 seconds without overlapping
+requests, preserving the selected game, filters and any explicitly selected
+forecast stage. Its default view switches to the final when that run arrives.
+Static snapshot previews remain fixed until manually refreshed.
 
 Every captured check is retained under `injuries/games/GAME_ID/records/`,
 including checks for which roster or parsing failures prevent forecasting.

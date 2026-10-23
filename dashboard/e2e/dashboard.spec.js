@@ -146,6 +146,41 @@ test("preliminary forecast remains selectable alongside the final checkpoint", a
   await expect(page.getByRole('link', { name: 'Official injury report' })).toHaveAttribute('href', 'https://example.test/final.pdf');
 });
 
+test("an open dashboard automatically shows a newly saved final forecast", async ({ page }) => {
+  await page.clock.install();
+  let response = structuredClone(dashboard);
+  await page.route("**/api/dashboard", (route) => route.fulfill({ json: response }));
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Final forecast", exact: true })).toBeDisabled();
+  const preliminary = structuredClone(response.games[0].forecast);
+  const final = { ...structuredClone(preliminary), stage: "final",
+    created_at: "2026-10-22T01:30:00Z",
+    predictions: preliminary.predictions.map((p) => ({ ...p, points_mean: 30 })) };
+  response.games[0].forecast = final;
+  response.games[0].forecasts = { preliminary, final };
+  await page.clock.runFor(30000);
+  await expect(page.getByRole("button", { name: "Final forecast", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".player-row .points").first()).toHaveText("30");
+});
+
+test("automatic refresh preserves an explicitly selected preliminary and player search", async ({ page }) => {
+  await page.clock.install();
+  const response = structuredClone(dashboard);
+  const preliminary = structuredClone(response.games[0].forecast);
+  const final = { ...structuredClone(preliminary), stage: "final" };
+  response.games[0].forecast = final;
+  response.games[0].forecasts = { preliminary, final };
+  await page.route("**/api/dashboard", (route) => route.fulfill({ json: response }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Preliminary forecast", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search players" }).fill("Role Player");
+  response.games[0].forecasts.preliminary.predictions[0].points_mean = 24;
+  await page.clock.runFor(30000);
+  await expect(page.getByRole("button", { name: "Preliminary forecast", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("textbox", { name: "Search players" })).toHaveValue("Role Player");
+  await expect(page.locator(".player-row .points").first()).toHaveText("24");
+});
+
 
 test("Bucks information stays accessible with five projected starters and a visible cross-check block", async ({ page }) => {
   const staged = structuredClone(dashboard);

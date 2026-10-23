@@ -1,7 +1,7 @@
 import Postgame from "./Postgame";
 import Projections from "./Projections";
 import ForecastStages from "./ForecastStages";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, TeamMark } from "./Icons";
 import PlayerTable from "./PlayerTable";
 import PlayerDetail from "./PlayerDetail";
@@ -30,7 +30,10 @@ export default function App() {
     [detail, setDetail] = useState(null),
     [refreshRevision, setRefreshRevision] = useState(0),
     [now, setNow] = useState(Date.now());
-  async function reload() {
+  const refreshInFlight = useRef(false);
+  const reload = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setLoading(true);
     setError("");
     try {
@@ -57,14 +60,19 @@ export default function App() {
     } catch (e) {
       setError(e.message);
     } finally {
+      refreshInFlight.current = false;
       setLoading(false);
     }
-  }
+  }, []);
   useEffect(() => {
     reload();
-    const timer = setInterval(() => setNow(Date.now()), 30000);
+    const staticMode = new URLSearchParams(location.search).get("snapshot") === "1";
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      if (!staticMode) reload();
+    }, 30000);
     return () => clearInterval(timer);
-  }, []);
+  }, [reload]);
   const games = useMemo(
     () => data?.games.filter((g) => gameDay(g) === date) || [],
     [data, date],
