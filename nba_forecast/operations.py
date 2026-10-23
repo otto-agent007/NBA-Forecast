@@ -9,9 +9,9 @@ import sqlite3
 from .data import fetch_roster,fetch_json,boxscore_url,normalize_boxscore
 from .schedule import fetch_schedule,due_jobs,game_context,atomic_json,canonical
 from .injuries import fetch_injury_check
-from .injury_parser import pdf_text,parse_report,apply_report
+from .injury_parser import pdf_text,parse_report,apply_report,PARSER_VERSION
 from .profiles import build_profiles,eligible_history
-from .model import forecast
+from .model import forecast, MODEL_VERSION
 from .store import save_run,evaluate_run,performance_report
 from .benchmarks import benchmark_report
 from .validation import parse_time,validate_history,validate_inputs
@@ -42,6 +42,8 @@ def apply_review(snapshot,review):
         for key in ('status','status_observed_at','status_source_url'):p[key]=update[key]
         p['status_published_at']=update.get('status_published_at',update['status_observed_at'])
         p['status_game_id']=review['game_id']
+        p['status_basis']='sourced_review'
+        p['reported_status']=update['status'].capitalize()
     out['role_adjustments']=review.get('role_adjustments',[])
     out['review_input']=deepcopy(review)
     validate_inputs(out,[])
@@ -87,6 +89,8 @@ def _tick(folder,history,report):
         if key and key not in state['jobs']:
             state['jobs'][key]=run['run_id'];report['recovered_runs']+=1
     atomic_json(statepath,state)
+    from .player_sync import enrich_final_cache
+    enrich_final_cache(folder)
     combined={(r['game_id'],r['player_id']):r for r in history}
     for p in sorted(cache.glob('*.json')):
         rows=json.loads(p.read_text());validate_history(rows)
@@ -95,12 +99,17 @@ def _tick(folder,history,report):
     jobs=due_jobs(schedule,_now());by_id={g['game_id']:g for g in schedule['games']}
     reviews={}
     for job in jobs:
+        # Refresh evidence throughout the day, then every five minutes near tipoff.
+        seconds=300 if job['stage']=='final' else 900
+        slot=int(parse_time(_now()).timestamp())//seconds
+        job['key']+=f':model:{MODEL_VERSION}:parser:{PARSER_VERSION}:slot:{slot}'
         path=folder/'reviews'/(job['game_id']+'.json')
         if path.exists():
             review=json.loads(path.read_text());reviews[job['game_id']]=review
             job['key']+=':review:'+hashlib.sha256(canonical(review)).hexdigest()
     needed=[j for j in jobs if j['key'] not in state['jobs']]
     roster=fetch_roster(schedule['season'],cache_dir=raw) if needed else None
+    if roster:atomic_json(folder/'roster.json',roster)
     for job in needed:
         try:
             game=by_id[job['game_id']]
@@ -111,11 +120,11 @@ def _tick(folder,history,report):
                 check=fetch_injury_check(snapshot,raw);snapshot['as_of']=_now()
                 snapshot['injury_check']=check
                 for item in check['games']:
-                    evidence=item['anchor_report'] if job['stage']=='final' else item['latest_report']
+                    evidence=item['latest_report'] or item.get('anchor_report')
                     if evidence:
                         text=pdf_text(raw/(evidence['sha256']+'.pdf'),evidence['sha256'])
                         parsed=parse_report(text,schedule,roster,evidence)
-                        snapshot=apply_report(snapshot,parsed)
+                        snapshot=apply_report(snapshot,parsed,allow_not_listed=True)
                         report['warnings'].extend(dict(forecast_game_id=job['game_id'],**i) for i in parsed['issues'])
             except (ValueError,OSError) as exc:
                 if job['stage']=='final':raise
@@ -166,7 +175,17 @@ def _tick(folder,history,report):
         start=game['start_time']
         if start and game['status']!='postponed' and parse_time(state['tracking_started_at'])<parse_time(start)<=parse_time(_now()):
             key=f"{game['game_id']}:{start}:final"
-            if not any(k==key or k.startswith(key+':review:') for k in state['jobs']):report['missed_final_games'].append(game['game_id'])
+            if not any(k==key or k.startswith(key+':') for k in state['jobs']):report['missed_final_games'].append(game['game_id'])
     atomic_json(statepath,state)
     atomic_json(folder/'performance.json',performance_report(db))
     atomic_json(folder/'benchmarks.json',benchmark_report(db))
+    if (folder/'roster.json').exists():
+        try:
+            from .player_sync import sync_player_data
+            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=2)
+            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
+            from .postgame import build_postgames
+            report['postgame']=build_postgames(folder)
+            report['warnings'].extend(dict(task='postgame',**e) for e in report['postgame']['errors'])
+        except Exception as exc:
+            report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))

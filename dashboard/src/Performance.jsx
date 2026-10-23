@@ -1,0 +1,153 @@
+import React from "react";
+import { number, stamp } from "./data";
+export default function Performance({ data }) {
+  const report = data.performance,
+    groups = report?.groups || [],
+    count = report?.sample_counts?.evaluated || 0;
+  return (
+    <div className="performance">
+      <div className="performance-intro">
+        <h2>How the model is doing</h2>
+        <p>Prospective results from predictions saved before tipoff.</p>
+      </div>
+      {!count ? (
+        <div className="empty performance-empty">
+          <span className="empty-score">—</span>
+          <h3>Evidence before a scorecard.</h3>
+          <p>
+            No evaluated player-games yet. Accuracy and calibration will appear
+            here after saved forecasts are matched to final boxscores.
+          </p>
+        </div>
+      ) : (
+        groups.map((g) => (
+          <section
+            className="performance-group"
+            key={g.season + g.model_version}
+          >
+            <h3>
+              {g.season} · {g.model_version}
+            </h3>
+            <div className="metric-band">
+              {[
+                ["Evaluated", g.sample_counts.evaluated],
+                ["Points MAE", g.metrics.points_mae],
+                ["Minutes MAE", g.metrics.minutes_mae],
+                [
+                  "80% coverage",
+                  g.metrics.interval80_coverage == null
+                    ? null
+                    : g.metrics.interval80_coverage * 100,
+                ],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>
+                    {number(value)}
+                    {label === "80% coverage" && value != null ? "%" : ""}
+                  </strong>
+                </div>
+              ))}
+            </div>
+            <p>
+              Includes out predictions; inspect status groups before
+              interpreting aggregate accuracy. Intervals remain heuristic.
+            </p>
+            {g.metrics.per_stat && (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Statistic</th>
+                      <th>Outcomes</th>
+                      <th>MAE</th>
+                      <th>Bias</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(g.metrics.per_stat).map(([k, v]) => (
+                      <tr key={k}>
+                        <td>{k.toUpperCase()}</td>
+                        <td>{v.count}</td>
+                        <td>{number(v.mae)}</td>
+                        <td>{number(v.mean_signed_error)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <details>
+              <summary>Error breakdown and status groups</summary>
+              <pre>
+                {JSON.stringify(
+                  {
+                    status_groups: g.status_groups,
+                    diagnostics: g.diagnostics,
+                  },
+                  null,
+                  2,
+                )}
+              </pre>
+            </details>
+          </section>
+        ))
+      )}
+      <div className="performance-bottom">
+        <section>
+          <h3>Coverage comes first</h3>
+          <dl>
+            <dt>Selected predictions</dt>
+            <dd>{report?.sample_counts?.predictions ?? "—"}</dd>
+            <dt>Awaiting results</dt>
+            <dd>{report?.sample_counts?.pending ?? "—"}</dd>
+            <dt>Withheld / excluded</dt>
+            <dd>{report?.sample_counts?.excluded ?? "—"}</dd>
+          </dl>
+        </section>
+        <section>
+          <h3>Compare against the basics</h3>
+          <p>
+            Player average and minutes × scoring rate, compared on the same
+            supported player-games.
+          </p>
+          {data.benchmarks?.groups?.length ? (
+            data.benchmarks.groups.map((g) => (
+              <div key={g.season + g.model_version}>
+                <p>
+                  {g.season} · {g.metrics.paired_n} paired outcomes
+                </p>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Method</th>
+                      <th>Points MAE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ["model", "Model"],
+                      ["player_average", "Player average"],
+                      ["minutes_rate", "Minutes × rate"],
+                    ].map(([k, label]) => (
+                      <tr key={k}>
+                        <td>{label}</td>
+                        <td>{number(g.metrics[k]?.mae)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))
+          ) : (
+            <p className="muted">Waiting for paired outcomes.</p>
+          )}
+        </section>
+      </div>
+      <p className="tiny">
+        Report generated {stamp(report?.generated_at)}. No automatic tuning or
+        accuracy claim.
+      </p>
+    </div>
+  );
+}

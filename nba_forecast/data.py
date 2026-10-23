@@ -23,6 +23,7 @@ MAX_BYTES = 12 * 1024 * 1024
 DEFAULT_CACHE = Path(".nba_forecast/raw")
 STAT_FIELDS = {"fgm": "fieldGoalsMade", "fga": "fieldGoalsAttempted", "fg3m": "threePointersMade", "fg3a": "threePointersAttempted", "ftm": "freeThrowsMade", "fta": "freeThrowsAttempted", "tov": "turnovers", "pts": "points"}
 
+OPTIONAL_STAT_FIELDS = {"reb": "reboundsTotal", "ast": "assists", "stl": "steals", "blk": "blocks"}
 
 def _timestamp(value):
     if not isinstance(value, str):
@@ -45,12 +46,20 @@ def _allowed_url(url, allow_roster=False):
         return
     if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}_\d{2}[AP]M\.pdf", url):
         return
+    if url.startswith("https://stats.nba.com/stats/leaguedashplayerclutch?"):
+        from .clutch import clutch_url
+        match = re.search(r"(?:[?&])Season=(20\d{2}-\d{2})(?:&|$)", url)
+        if match and url == clutch_url(match[1]):
+            return
+        raise ValueError("Clutch URL must use the complete canonical regular-season request")
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment:
         raise ValueError("Only exact allowlisted HTTPS NBA URLs are accepted")
     if url == SCHEDULE_URL or (allow_roster and url == ROSTER_URL):
         return
     if parsed.netloc == "cdn.nba.com" and re.fullmatch(r"/static/json/liveData/boxscore/boxscore_002\d{7}\.json", parsed.path):
+        return
+    if parsed.netloc == "cdn.nba.com" and re.fullmatch(r"/static/json/liveData/playbyplay/playbyplay_002\d{7}\.json", parsed.path):
         return
     raise ValueError("Source URL is not an allowlisted NBA endpoint")
 
@@ -80,6 +89,21 @@ def archive_payload(raw, source_url, known_at, directory):
     return {**metadata, "raw_path": str(raw_path), "provenance_path": str(meta_path)}
 
 
+def _record_fetch_failure(cache_dir, url, category, exc, attempt=None, status=None):
+    """Keep bounded metadata, never request headers or remote response bodies."""
+    record = {"observed_at": datetime.now(timezone.utc).isoformat(),
+              "source_url": url, "category": category,
+              "exception_type": type(exc).__name__, "attempt": attempt, "status": status}
+    try:
+        folder = Path(cache_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        with (folder / "fetch-failures.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record) + "\n")
+    except OSError:
+        # Diagnostics must not replace the original retrieval exception.
+        pass
+
+
 def _fetch(url, cache_dir, allow_roster=False):
     _allowed_url(url, allow_roster=allow_roster)
     opener = urllib.request.build_opener(_NoRedirects())
@@ -93,11 +117,13 @@ def _fetch(url, cache_dir, allow_roster=False):
             archive_payload(raw, url, observed, cache_dir)
             return raw, observed
         except HTTPError as exc:
+            _record_fetch_failure(cache_dir, url, "http", exc, attempt + 1, exc.code)
             if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
-                raise ValueError(f"NBA source returned HTTP {exc.code}; cached files can be used offline") from exc
+                raise ValueError(f"NBA source {url} returned HTTP {exc.code}; cached files can be used offline") from exc
         except (URLError, TimeoutError) as exc:
+            _record_fetch_failure(cache_dir, url, "network", exc, attempt + 1)
             if attempt == 2:
-                raise ValueError("NBA source unavailable after 3 bounded attempts") from exc
+                raise ValueError(f"NBA source {url} unavailable after 3 bounded attempts ({type(exc).__name__})") from exc
         time.sleep(0.25 * (attempt + 1))
     raise ValueError("NBA source unavailable")
 
@@ -108,7 +134,8 @@ def fetch_json(url, *, cache_dir=DEFAULT_CACHE):
     try:
         payload = json.loads(raw)
     except (ValueError, UnicodeDecodeError) as exc:
-        raise ValueError("NBA response was not valid JSON") from exc
+        _record_fetch_failure(cache_dir, url, "invalid_json", exc)
+        raise ValueError(f"NBA response from {url} was not valid JSON; inspect archived payload") from exc
     if not isinstance(payload, dict):
         raise ValueError("NBA response must contain a JSON object")
     return payload
@@ -161,6 +188,7 @@ def normalize_boxscore(payload, source_url, known_at):
                 stats = player["statistics"]
                 row = {"game_id": game_id, "season": season, "season_type": "Regular Season", "game_time": game_time, "known_at": known_at, "source_url": source_url, "player_id": str(player["personId"]), "name": player["name"], "team_id": str(team["teamId"]), "opponent_id": str(opponent["teamId"]), "minutes": _minutes(stats["minutes"]), "status": "played" if played == "1" else "dnp"}
                 row.update({field: stats[source] for field, source in STAT_FIELDS.items()})
+                row.update({field: stats.get(source) for field, source in OPTIONAL_STAT_FIELDS.items()})
                 if 'starter' in player:
                     if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
                     row['starter']=player['starter']=='1'
@@ -214,6 +242,12 @@ def normalize_roster(players, observed_at, season):
             normalized.append({"player_id": player_id, "name": f"{player['PLAYER_FIRST_NAME']} {player['PLAYER_LAST_NAME']}".strip(), "team_id": str(player["TEAM_ID"]), "status": "unknown"})
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Incomplete NBA roster response: {exc}") from exc
+    source_players={str(p['PERSON_ID']):p for p in players}
+    bio_fields={'team_code':'TEAM_ABBREVIATION','position':'POSITION','jersey':'JERSEY_NUMBER','height':'HEIGHT','weight':'WEIGHT','college':'COLLEGE','country':'COUNTRY','draft_year':'DRAFT_YEAR','draft_round':'DRAFT_ROUND','draft_number':'DRAFT_NUMBER'}
+    for row in normalized:
+        source=source_players[row['player_id']]
+        row['bio']={k:source.get(v) for k,v in bio_fields.items()}
+        row['team_code']=source.get('TEAM_ABBREVIATION')
     teams = sorted({player["team_id"] for player in normalized})
     if set(teams) != {str(team) for team in range(1610612737, 1610612767)}:
         raise ValueError("Official active roster must contain all 30 NBA teams")

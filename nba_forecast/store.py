@@ -20,6 +20,10 @@ PROJECTION_FIELDS = (
     'usage_proxy', 'points_mean', 'points_sd', 'points_lower80', 'points_upper80',
 )
 
+OPTIONAL_PROJECTION_FIELDS = ('expected_reb', 'expected_ast', 'expected_fg3m', 'expected_stl', 'expected_blk')
+STAT_PROJECTIONS = {'reb': 'expected_reb', 'ast': 'expected_ast', 'fg3m': 'expected_fg3m',
+                    'stl': 'expected_stl', 'blk': 'expected_blk', 'tov': 'expected_tov'}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -139,6 +143,17 @@ def _validate_forecast(snapshot, forecast):
                     raise ValueError('forecast projections must be finite nonnegative numbers')
                 elif status == 'out' and value != 0:
                     raise ValueError('out projections must be zero')
+            for key in OPTIONAL_PROJECTION_FIELDS:
+                if key not in row:  # v0.1 immutable ledgers remain valid.
+                    continue
+                value = row[key]
+                if status in ('no_game', 'needs_review') and value is not None:
+                    raise ValueError('unsupported optional projections must be null')
+                if status == 'out' and value != 0:
+                    raise ValueError('out optional projections must be zero')
+                if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                          or not math.isfinite(value) or value < 0):
+                    raise ValueError('optional projections must be finite nonnegative numbers or null')
             if status in ('projected', 'out'):
                 if not row['points_lower80'] <= row['points_mean'] <= row['points_upper80']:
                     raise ValueError('forecast interval must contain its mean')
@@ -191,12 +206,19 @@ def save_run(db_path, snapshot, history, forecast, mode='live', scope='league'):
 
 def _metrics(rows):
     count = len(rows)
+    per_stat = {}
+    for stat in STAT_PROJECTIONS:
+        errors = [r.get('stat_errors', {}).get(stat) for r in rows]
+        errors = [e for e in errors if e is not None]
+        per_stat[stat] = {'count': len(errors),
+                          'mae': sum(abs(e) for e in errors) / len(errors) if errors else None,
+                          'mean_signed_error': sum(errors) / len(errors) if errors else None}
     if not count:
         return dict(count=0, points_mae=None, points_rmse=None, mean_signed_error=None,
                     minutes_mae=None, interval80_coverage=None, interval80_mean_width=None,
-                    interval_count=0)
+                    interval_count=0, per_stat=per_stat)
     return dict(
-        count=count,
+        count=count, per_stat=per_stat,
         points_mae=sum(abs(r['points_error']) for r in rows) / count,
         points_rmse=math.sqrt(sum(r['points_error'] ** 2 for r in rows) / count),
         mean_signed_error=sum(r['points_error'] for r in rows) / count,
@@ -261,7 +283,19 @@ def _report(run, forecast, actuals, revision, evaluated_at):
             minutes_component = (predicted_minutes - minutes) * predicted_rate
             # This algebra remains defined for a final DNP (zero actual minutes).
             rate_component = minutes * predicted_rate - points
+        stat_errors, stat_feedback = {}, {}
+        for stat, field in STAT_PROJECTIONS.items():
+            predicted, actual = prediction.get(field), observed.get(stat)
+            error = predicted - actual if predicted is not None and actual is not None else None
+            stat_errors[stat] = error
+            rate = predicted / predicted_minutes if predicted is not None and predicted_minutes > 0 else None
+            stat_feedback[stat] = {
+                'predicted': predicted, 'actual': actual, 'error': error,
+                'minutes_component': (predicted_minutes - minutes) * rate if rate is not None and error is not None else None,
+                'rate_component': minutes * rate - actual if rate is not None and error is not None else None,
+            }
         matched.append({
+            'stat_errors': stat_errors, 'stat_feedback': stat_feedback,
             **identity, 'forecast_status': status, 'actual_status': observed['status'],
             'predicted_points': predicted_points, 'actual_points': points,
             'predicted_minutes': predicted_minutes, 'actual_minutes': minutes,

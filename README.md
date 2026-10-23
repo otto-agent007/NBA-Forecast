@@ -47,3 +47,11 @@ Injury extraction is conservative: omission never means available.
 `tick` runs the loop once; persistent Linux timer templates are in `deploy/systemd/`.
 Back up `data/forecast.sqlite` and `data/`: they are ignored by Git. GitHub CI tests
 Python 3.11–3.13; PRs are reviewed before merging.
+
+## Dashboard
+
+Game-day matchups, team logos, player projections and performance: see [setup and usage](docs/dashboard/README.md).
+
+Player profiles, shot charts, expanded stats and continuous operation: [guide](docs/player-intelligence.md).
+
+Postgame recap and model-feedback workflow: [guide](docs/postgame.md).

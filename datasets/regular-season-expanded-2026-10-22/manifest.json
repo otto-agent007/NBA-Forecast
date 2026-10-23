@@ -1,0 +1,18 @@
+{
+  "normalizer": "expanded-boxscore-v1",
+  "rows": 43650,
+  "games": 1244,
+  "players": 645,
+  "seasons": [
+    "2025-26",
+    "2026-27"
+  ],
+  "sha256": "c3f499e4e4d250d7451b9f804c1a206f00cc6f6f8d769fb8bb6c7eeb76b03f99",
+  "known_through": "2026-10-22T05:28:12.423546+00:00",
+  "optional_stat_coverage": {
+    "reb": 43650,
+    "ast": 43650,
+    "stl": 43650,
+    "blk": 43650
+  }
+}

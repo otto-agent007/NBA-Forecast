@@ -35,9 +35,10 @@ from datetime import datetime
 from math import sqrt
 from statistics import fmean, pvariance
 
-MODEL_VERSION = "regular-season-baseline-0.1.0"
+MODEL_VERSION = "regular-season-baseline-0.2.1"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
+    "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
     "usage_proxy", "points_mean", "points_sd", "points_lower80", "points_upper80",
 )
 EFFICIENCY_DEFAULTS = {
@@ -116,6 +117,33 @@ def _opportunities(previous, current):
         "minutes_before_adjustment": minutes, "per_minute_rates": rates.copy(),
         "observed_minutes_variance": observed_variance,
     }
+
+
+def _multistat(previous, current):
+    """Exposure-weighted rates, regularized with fixed modeling constants.
+
+    Missing observations never enter the denominator. Prior exposure is capped
+    at 600 minutes; current evidence decays slowly to resist isolated outliers.
+    Defaults are regularizers, not asserted league averages or player evidence.
+    """
+    result = {}
+    for stat, default in (("reb", .15), ("ast", .09), ("stl", .025), ("blk", .02)):
+        prior = [r for r in previous if r.get(stat) is not None and r["minutes"] > 0]
+        present = [r for r in current if r.get(stat) is not None and r["minutes"] > 0]
+        prior_minutes = sum(r["minutes"] for r in prior)
+        scale = min(1., 600 / prior_minutes) if prior_minutes else 1.
+        weighted = [(r, scale) for r in prior] + [(r, .97 ** age) for age, r in enumerate(reversed(present))]
+        exposure = sum(r["minutes"] * w for r, w in weighted)
+        count = sum(r[stat] * w for r, w in weighted)
+        result[stat] = {
+            "rate": (count + 60 * default) / (exposure + 60) if exposure else None,
+            "observed_games": len(weighted), "weighted_minutes": exposure,
+            "weighted_count": count, "default_rate": default, "pseudo_minutes": 60,
+            "prior_minutes_cap": 600, "current_decay_per_game": .97,
+            "game_ids": [r["game_id"] for r, _ in weighted],
+            "uncertainty_method": "uncalibrated_heuristic_poisson_plus_minutes",
+        }
+    return result
 
 
 def _complete_team_games(history):
@@ -205,6 +233,13 @@ def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance
                       points_mean=points, points_sd=sd,
                       points_lower80=max(0.0, points - 1.2815515655 * sd),
                       points_upper80=points + 1.2815515655 * sd)
+    prediction["expected_fg3m"] = fg3a * shooting["three_point"]["percentage"]
+    for stat, evidence in prediction["components"]["multistat"].items():
+        rate = evidence["rate"]
+        mean = minutes * rate if rate is not None else None
+        prediction["expected_" + stat] = mean
+        evidence["heuristic_sd"] = (sqrt(mean + rate ** 2 * minute_variance)
+                                     if mean is not None and minutes > 0 else 0.0 if mean == 0 else None)
     prediction["components"]["scoring"] = {
         "expected_two_point_attempts": fga - fg3a, "expected_three_point_attempts": fg3a,
         "expected_free_throw_attempts": fta, "opponent_multiplier": factor,
@@ -302,6 +337,10 @@ def forecast(snapshot, history):
             p["flags"].append("no_scoring_opportunity_evidence")
             continue
         p.update(status="projected", reason="Evidence-based baseline; review listed role and rotation flags.")
+        if player.get("status_basis") == "not_listed_complete_report":
+            p["flags"].append("availability_not_listed")
+            p["reason"] = ("Conditional on participation: player was not listed in the complete injury report; "
+                           "participation is not confirmed. Review listed role and rotation flags.")
         if len(played) < 5:
             p["flags"].append("short_history")
         if rows[-1]["team_id"] != team or any(r["team_id"] != team for r in current):
@@ -336,10 +375,24 @@ def forecast(snapshot, history):
             p["flags"].append("recent_dnp_role_review")
         minutes, rates, variance, opportunities = _opportunities(previous, current)
         shooting = _shooting(previous, current)
+        p["components"]["multistat"] = _multistat(previous, current)
+        recent_role = (current or previous)[-5:]
+        starts = [r["starter"] for r in recent_role if "starter" in r]
+        p["components"]["rotation_role"] = {
+            "label": ("frequent_starter" if sum(starts) >= 3 else "mixed_or_bench" if len(starts) >= 3 else "unknown"),
+            "method": "Descriptive last-five-game evidence; no inferred coaching decisions.",
+            "game_ids": [r["game_id"] for r in recent_role],
+            "starter_observations": len(starts), "starts": sum(starts),
+            "recent_mean_minutes": fmean(r["minutes"] for r in recent_role),
+            "recent_dnp_count": sum(r["status"] == "dnp" for r in recent_role),
+        }
         adjustment = adjustments.get((pid, game["game_id"]))
         if adjustment:
             p["components"]["manual_adjustment"] = deepcopy(adjustment)
             minutes += adjustment["minutes_delta"]
+            if "minutes_cap" in adjustment:
+                minutes = min(minutes, adjustment["minutes_cap"])
+                p["flags"].append("minutes_restriction")
             rates = {k: v * adjustment["opportunity_multiplier"] for k, v in rates.items()}
             p["flags"].append("manual_role_adjustment")
         minutes = min(48.0, max(0.0, minutes))
