@@ -8,6 +8,29 @@ from nba_forecast.store import save_run
 from tests.test_store import inputs,NOW
 
 class DashboardTests(unittest.TestCase):
+    def test_preliminary_remains_available_after_a_final_run_is_saved(self):
+        from copy import deepcopy
+        from datetime import timedelta
+        from nba_forecast.injuries import checkpoints,report_links
+        s,h,f=inputs()
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);(folder/'schedule').mkdir()
+            (folder/'schedule/latest.json').write_text(json.dumps({'season':s['season'],'games':s['games']}))
+            with patch('nba_forecast.store._now',return_value=NOW):pre=save_run(folder/'forecast.sqlite',s,h,f)
+            final_s=deepcopy(s);final_f=deepcopy(f)
+            final_s['forecast_stage']=final_f['forecast_stage']='final'
+            final_s['as_of']=final_f['as_of']='2026-10-22T17:35:00Z'
+            url='https://ak-static.cms.nba.com/referee/injury/Injury-Report_2026-10-22_01_30PM.pdf'
+            check={'checked_at':'2026-10-22T17:35:00Z','games':checkpoints(s['games'],report_links(url,'2026-10-22T17:35:00Z'),'2026-10-22T17:35:00Z')}
+            check['games'][0]['anchor_report'].update(sha256='a'*64,retrieved_at=check['checked_at'])
+            final_s['injury_check']=check
+            with patch('nba_forecast.store._now',return_value=NOW+timedelta(hours=5,minutes=35)):
+                final=save_run(folder/'forecast.sqlite',final_s,h,final_f)
+            result=dashboard_data(d)['games'][0]
+            self.assertEqual(result['forecast']['run_id'],final)
+            self.assertEqual(result.get('forecasts',{}).get('preliminary',{}).get('run_id'),pre)
+            self.assertEqual(result['forecasts']['final']['run_id'],final)
+
     def test_empty_directory_does_not_create_database(self):
         with tempfile.TemporaryDirectory() as d:
             value=dashboard_data(d)

@@ -8,11 +8,27 @@ import {
   dateKey,
   initialDay,
   safeSource,
+  groupPlayers,
 } from "../src/data.js";
 test("unknown projections are not zero", () => {
   assert.equal(number(null), "—");
   assert.equal(number(0), "0");
   assert.equal(number(NaN), "—");
+});
+
+test("outlook groups teams, starters before bench, and minutes before first names", () => {
+  const rows = [
+    { player_id: "1", name: "Adam Bench", team_id: "A", team_code: "AAA", rotation_role: { label: "bench" }, expected_minutes: 20 },
+    { player_id: "2", name: "Zach Starter", team_id: "A", team_code: "AAA", rotation_role: { label: "starter" }, expected_minutes: 35 },
+    { player_id: "3", name: "Aaron Starter", team_id: "A", team_code: "AAA", rotation_role: { label: "starter" }, expected_minutes: 25 },
+    { player_id: "4", name: "Other Team", team_id: "B", team_code: "BBB" },
+  ];
+  const groups = groupPlayers(filterPlayers(rows, "", "all", "rotation"));
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].groups[0].label, "Starters");
+  assert.deepEqual(groups[0].groups[0].players.map((p) => p.player_id), ["2", "3"]);
+  assert.equal(groups[0].groups[1].label, "Bench");
+  assert.equal(groups[1].groups[0].label, "Role unverified");
 });
 test("filter and numeric sort preserve unsupported rows", () => {
   let rows = [

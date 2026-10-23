@@ -1,7 +1,7 @@
 import PlayerPortrait from "./PlayerPortrait";
 import React, { useMemo } from "react";
-import { filterPlayers, number, statusLabel } from "./data";
-import { Icon } from "./Icons";
+import { filterPlayers, groupPlayers, number, statusLabel } from "./data";
+import { Icon, TeamMark } from "./Icons";
 export function Status({ player }) {
   return (
     <span
@@ -28,6 +28,8 @@ export default function PlayerTable({
     () => filterPlayers(players, query, filter, sort),
     [players, query, filter, sort],
   );
+  const teams = useMemo(() => groupPlayers(rows), [rows]);
+  const columns = expanded ? 13 : 5;
   return (
     <section className="player-section">
       <div className="section-heading">
@@ -80,7 +82,7 @@ export default function PlayerTable({
                   className="sort"
                   aria-label="Sort by projected points"
                   aria-pressed={sort === "points"}
-                  onClick={() => setSort(sort === "points" ? "name" : "points")}
+                  onClick={() => setSort(sort === "points" ? "rotation" : "points")}
                 >
                   Points {sort === "points" ? "↓" : ""}
                 </button>
@@ -98,9 +100,17 @@ export default function PlayerTable({
                 ))}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((p) => (
-              <tr key={p.player_id}>
+          {teams.map((team) => (
+          <tbody key={team.team_id} data-team-id={team.team_id}>
+            <tr className="team-heading"><th colSpan={columns} scope="rowgroup">
+              <TeamMark id={team.team_id} code={team.team_code} />
+              <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players</span>
+            </th></tr>
+            {team.groups.map((group) => (
+            <React.Fragment key={group.key}>
+            <tr className="role-heading"><th colSpan={columns} scope="rowgroup">{group.label}</th></tr>
+            {group.players.map((p) => (
+              <tr key={p.player_id} className="player-row">
                 <td>
                   <button className="player-button" onClick={() => onSelect(p)}>
                     <PlayerPortrait key={p.player_id} player={p} />
@@ -150,7 +160,10 @@ export default function PlayerTable({
                   ))}
               </tr>
             ))}
+            </React.Fragment>
+            ))}
           </tbody>
+          ))}
         </table>
         {!rows.length && (
           <div className="empty small">
@@ -173,6 +186,8 @@ export default function PlayerTable({
         <span>
           Dashes mean unsupported estimates. Conditional projections use a
           complete-report not-listed assumption; participation is not confirmed.
+          {" "}Starter and bench groups describe recent captured roles; upcoming
+          lineups are unconfirmed. Players within each group are ordered by minutes.
         </span>
       </div>
     </section>

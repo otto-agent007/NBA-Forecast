@@ -46,28 +46,61 @@ def checkpoints(games, reports, checked_at):
     return result
 
 
-def fetch_injury_check(snapshot,cache_dir='data/raw'):
+def fetch_injury_check(snapshot,cache_dir='data/raw',*,capture_cache=None):
     season=snapshot['season']
     if not re.fullmatch(r'20\d{2}-\d{2}',season):raise ValueError('invalid season')
     url=f'https://official.nba.com/nba-injury-report-{season}-season/'
-    raw,observed=_fetch(url,cache_dir)
-    reports=report_links(raw.decode('utf-8'),observed)
+    cache=capture_cache if capture_cache is not None else {}
+    key=('index',season)
+    entry=cache.get(key)
+    if isinstance(entry,Exception):raise entry
+    if entry:
+        for game in snapshot['games']:
+            target=parse_time(game['start_time'])-timedelta(minutes=30)
+            if parse_time(entry[1])<target<=parse_time(snapshot.get('as_of',entry[1])):
+                entry=None;break
+    if entry is None:
+        try:
+            raw,observed=_fetch(url,cache_dir)
+            reports=report_links(raw.decode('utf-8'),observed)
+            entry=(raw,observed,reports);cache[key]=entry
+        except (ValueError,OSError) as exc:
+            cache[key]=exc;raise
+    raw,observed,reports=entry
     checks=checkpoints(snapshot['games'],reports,observed)
-    captured={}
+    captured=cache.setdefault('pdfs',{})
     for check in checks:
         for name in ('anchor_report','latest_report'):
             report=check[name]
             if report is None:continue
             source=report['source_url']
             if source not in captured:
-                pdf,retrieved=_fetch(source,cache_dir)
-                if not pdf.startswith(b'%PDF-'):raise ValueError('official injury report response is not a PDF')
-                captured[source]={'sha256':hashlib.sha256(pdf).hexdigest(),'retrieved_at':retrieved}
+                try:
+                    pdf,retrieved=_fetch(source,cache_dir)
+                    if not pdf.startswith(b'%PDF-'):raise ValueError('official injury report response is not a PDF')
+                    captured[source]={'sha256':hashlib.sha256(pdf).hexdigest(),'retrieved_at':retrieved}
+                except (ValueError,OSError) as exc:
+                    captured[source]=exc;raise
+            if isinstance(captured[source],Exception):raise captured[source]
             report.update(captured[source])
     return {'schema_version':1,'policy':'per-game-t-minus-30','index_url':url,
             'index_observed_at':observed,'index_sha256':hashlib.sha256(raw).hexdigest(),
             'checked_at':datetime.now(timezone.utc).isoformat(),'games':checks,
             'availability_applied':False}
+
+
+def fetch_daily_report(season,cache_dir='data/raw'):
+    """Capture the newest published official report, independently of a slate."""
+    if not re.fullmatch(r'20\d{2}-\d{2}',season):raise ValueError('invalid season')
+    url=f'https://official.nba.com/nba-injury-report-{season}-season/'
+    raw,observed=_fetch(url,cache_dir)
+    reports=report_links(raw.decode('utf-8'),observed)
+    if not reports:raise ValueError('official injury index has no published report')
+    report=dict(reports[-1]);pdf,retrieved=_fetch(report['source_url'],cache_dir)
+    if not pdf.startswith(b'%PDF-'):raise ValueError('official injury report response is not a PDF')
+    report.update(sha256=hashlib.sha256(pdf).hexdigest(),retrieved_at=retrieved)
+    return dict(schema_version=1,season=season,index_url=url,index_observed_at=observed,
+                index_sha256=hashlib.sha256(raw).hexdigest(),checked_at=retrieved,report=report)
 
 
 def validate_final_check(snapshot, check):

@@ -1,5 +1,6 @@
 import Postgame from "./Postgame";
 import Projections from "./Projections";
+import ForecastStages from "./ForecastStages";
 import React, { useEffect, useMemo, useState } from "react";
 import { Icon, TeamMark } from "./Icons";
 import PlayerTable from "./PlayerTable";
@@ -24,7 +25,8 @@ export default function App() {
     [selected, setSelected] = useState(""),
     [query, setQuery] = useState(""),
     [filter, setFilter] = useState("all"),
-    [sort, setSort] = useState("name"),
+    [sort, setSort] = useState("rotation"),
+    [forecastStage, setForecastStage] = useState("latest"),
     [detail, setDetail] = useState(null),
     [refreshRevision, setRefreshRevision] = useState(0),
     [now, setNow] = useState(Date.now());
@@ -67,7 +69,13 @@ export default function App() {
     () => data?.games.filter((g) => gameDay(g) === date) || [],
     [data, date],
   );
-  const game = games.find((g) => g.game_id === selected) || games[0];
+  const selectedGame = games.find((g) => g.game_id === selected) || games[0];
+  const game = useMemo(() => {
+    if (!selectedGame || forecastStage === "latest") return selectedGame;
+    const saved = selectedGame.forecasts?.[forecastStage] ||
+      (selectedGame.forecast?.stage === forecastStage ? selectedGame.forecast : null);
+    return { ...selectedGame, forecast: saved };
+  }, [selectedGame, forecastStage]);
   const players = useMemo(() => {
     if (!data) return [];
     if (tab === "Games") return gamePlayers(data, game);
@@ -167,6 +175,7 @@ export default function App() {
                 aria-label={`${g.away_tricode || "TBD"} at ${g.home_tricode || "TBD"}`}
                 onClick={() => {
                   setSelected(g.game_id);
+                  setForecastStage("latest");
                   chooseTab(tab === "Postgame" ? "Postgame" : "Games");
                 }}
               >
@@ -225,6 +234,7 @@ export default function App() {
               onChange={(e) => {
                 setDate(e.target.value);
                 setSelected("");
+                setForecastStage("latest");
                 setFilter("all");
               }}
             />
@@ -273,6 +283,7 @@ export default function App() {
             ) : (
               <>
                 {tab === "Games" && game && <Matchup game={game} />}
+                {tab === "Games" && game && <ForecastStages game={selectedGame} selected={game.forecast?.stage} onSelect={setForecastStage} />}
                 {tab === "Games" && !game ? (
                   <div className="empty">
                     <h2>No games on this date</h2>

@@ -1,5 +1,37 @@
 # Schedule-driven operations
 
+## Daily and final checkpoints
+
+The automatic tick captures the latest official injury PDF at **9:00 AM
+America/Los_Angeles** each day, including days with no scheduled games. It
+archives the index/PDF bytes and provenance, records one daily capture under
+`injuries/daily/`, and retries failures on subsequent ticks. Restarting after
+9 AM captures the report then, with the actual retrieval time; it never
+backdates a missed capture. `injuries/status.json` exposes waiting, captured
+or retrying state to the dashboard.
+
+Each scheduled game gets preliminary forecasts before its final window,
+refreshed in 15-minute slots. At tipoff minus 30 minutes, the next automatic
+tick captures that game's official checkpoint and saves a final-stage run;
+five-minute refreshes can retain subsequent late updates as independent runs.
+The dashboard lets you inspect the latest preliminary and final forecasts
+separately. Unknown availability and unsupported production remain blank.
+
+Every captured check is retained under `injuries/games/GAME_ID/records/`,
+including checks for which roster or parsing failures prevent forecasting.
+`final.json` preserves the first fresh T−30 checkpoint for the scheduled start;
+`latest.json` tracks later checks. Rescheduling creates a new checkpoint while
+the original records remain archived. A one-minute persistent timer targets
+T−30 within its polling resolution; source latency and host outages can delay
+it. NBA can publish further updates after our final checkpoint.
+
+If a calendar/roster endpoint fails, the tick labels use of the saved calendar
+or a roster still within the existing 48-hour freshness bound. Observation
+times are preserved. Without a usable roster, it retains injury evidence and
+withholds forecasts. Daily injury capture is independent of calendar access.
+Source failures and retry status remain visible; enabling a timer alone does
+not establish that every scheduled capture succeeded.
+
 ## Commands
 
 ```bash

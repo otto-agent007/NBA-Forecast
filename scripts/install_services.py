@@ -19,7 +19,9 @@ def quote(value):
     if any(c in s for c in '\n\r\x00'):raise ValueError('invalid unit path')
     return '"'+s.replace('\\','\\\\').replace('"','\\"').replace('%','%%')+'"'
 folder=Path(a.unit_directory);folder.mkdir(parents=True,exist_ok=True)
-base=f'WorkingDirectory={quote(repo)}\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n'
+# WorkingDirectory is a literal path setting, not an ExecStart argument list.
+quote(repo)  # Validate controls; quotes would become part of this setting's path.
+base=f'WorkingDirectory={str(repo).replace("%","%%")}\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n'
 common=f'{quote(sys.executable)} -m nba_forecast'
 files={
  'nba-forecast.service':f'[Unit]\nDescription=NBA Forecast evidence and feedback tick\n[Service]\nType=oneshot\n{base}ExecStart={common} tick --directory {quote(directory)} --history {quote(history)}\nTimeoutStartSec=10min\n',

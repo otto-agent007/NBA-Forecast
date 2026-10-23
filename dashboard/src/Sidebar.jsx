@@ -3,13 +3,18 @@ import { Icon } from "./Icons";
 import { stamp, timeLabel, health, safeSource } from "./data";
 export default function Sidebar({ game, data, onReview, now }) {
   const forecast = game?.forecast,
-    check = forecast?.injury_check;
-  const report = check?.anchor_report;
+    latestCheck = game?.injury_capture?.games?.find((c) => c.game_id === game?.game_id),
+    check = latestCheck || forecast?.injury_check;
+  const evidence = forecast?.injury_check;
+  const report = evidence?.latest_report || evidence?.anchor_report;
+  const daily = data.injury_capture;
+  const dailySource = safeSource(daily?.capture?.report?.source_url);
+  const sourceWarnings = (data.runner?.warnings || []).filter((w) => ['schedule', 'roster'].includes(w.task));
   const h = health(data.runner, now);
   const start = game?.start_time ? Date.parse(game.start_time) : null;
   const before = start && now < start;
   const final =
-    forecast?.stage === "final"
+    (game?.forecasts?.final || forecast?.stage === "final")
       ? "Saved"
       : before && now < start - 1800000
         ? "Waiting for T−30"
@@ -24,6 +29,7 @@ export default function Sidebar({ game, data, onReview, now }) {
     <aside className="sidebar">
       <h2>Pregame checklist</h2>
       <div className="checklist">
+        <Check icon="clock" label="Daily report · 9 AM Pacific" value={daily?.state === 'captured' ? 'Captured' : daily?.state === 'error' ? 'Retrying' : 'Pending'} kind={daily?.state === 'captured' ? 'good' : 'warn'} />
         <Check
           icon="check"
           label="Schedule"
@@ -32,8 +38,8 @@ export default function Sidebar({ game, data, onReview, now }) {
         />
         <Check
           icon="info"
-          label="Injury report"
-          value={report ? "Review needed" : "Not captured"}
+          label="T−30 injury report"
+          value={check?.phase === 'final_review' && check?.report_status === 'captured_pending_review' ? "Captured" : report ? "Preliminary" : "Not captured"}
           kind="warn"
         />
         <Check
@@ -79,6 +85,10 @@ export default function Sidebar({ game, data, onReview, now }) {
         ))}
       <section className="evidence-block">
         <h3>Evidence freshness</h3>
+        {sourceWarnings.map((w) => <p className="warning" key={w.task}>
+          {w.task === 'schedule' ? 'Calendar refresh unavailable. Using the saved schedule with its original capture time.'
+            : 'Roster refresh unavailable. Only saved roster evidence within 48 hours can support a forecast.'}
+        </p>)}
         <dl>
           <dt>Schedule</dt>
           <dd>{stamp(data.schedule_observed_at)}</dd>
@@ -92,6 +102,7 @@ export default function Sidebar({ game, data, onReview, now }) {
             Official injury report <Icon name="arrow" size={14} />
           </a>
         )}
+        {dailySource && <p><a href={dailySource} target="_blank" rel="noreferrer">Daily injury report ↗</a><br /><small>Captured {stamp(daily.capture.checked_at)}</small></p>}
         {check?.later_report_available && (
           <p className="warning">
             A later injury report is available. Review changes before relying on

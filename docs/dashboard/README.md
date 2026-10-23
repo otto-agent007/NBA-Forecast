@@ -15,6 +15,12 @@ Run the existing operational pipeline separately to update evidence.
 
 - **Games:** choose a date and matchup; review availability, source times and the
   T−30 checkpoint. Refresh reloads saved files, not NBA feeds or paid models.
+  Outlooks are separated by team, with **Starters**, **Bench**, and **Role
+  unverified** groups. These describe the last five captured appearances on the
+  player's current team; they do not confirm the upcoming starting lineup.
+  Players are ordered by projected/recent minutes, with surname tie-breaks.
+  The preliminary/final controls retain the earlier forecast after a final is
+  saved. Daily report status shows the 9 AM Pacific capture and its source.
 - **Projections:** compare all players on the selected slate, filter by status,
   search players or team codes, sort by projected points and open player details.
   Minutes, FGA, NBA points and heuristic 80% ranges come from saved forecasts.

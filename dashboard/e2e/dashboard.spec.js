@@ -107,3 +107,40 @@ test("switching games cancels a pending recap and keeps the newly selected game"
   await failed;
   await expect(page.locator(".postgame-final")).toContainText("New game");
 });
+
+test("player outlook separates teams and places starters before bench by minutes", async ({ page }) => {
+  const staged = structuredClone(dashboard);
+  staged.runner = { status: 'partial', finished_at: '2026-10-22T06:00:00Z', warnings: [{ task: 'schedule' }] };
+  staged.games[0].forecast.predictions = [
+    { ...game.forecast.predictions[0], rotation_role: { label: "bench", recent_minutes: 15 }, expected_minutes: 15 },
+    { ...game.forecast.predictions[0], player_id: "103", name: "Zach Starter", rotation_role: { label: "starter", recent_minutes: 35 }, expected_minutes: 35 },
+    game.forecast.predictions[1],
+  ];
+  await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Los Angeles Lakers", exact: true })).toBeVisible();
+  const lakers = page.locator('tbody[data-team-id="1610612747"]');
+  await expect(lakers.locator(".role-heading")).toHaveText(["Starters", "Bench"]);
+  await expect(lakers.locator(".player-button").first()).toContainText("Zach Starter");
+  await expect(page.getByText('Calendar refresh unavailable.', { exact: false })).toBeVisible();
+});
+
+test("preliminary forecast remains selectable alongside the final checkpoint", async ({ page }) => {
+  const staged = structuredClone(dashboard);
+  const preliminary = staged.games[0].forecast;
+  preliminary.injury_check = { latest_report: { source_url: 'https://example.test/preliminary.pdf', published_at: '2026-10-22T00:30:00Z' } };
+  const final = { ...structuredClone(preliminary), stage: "final", predictions: preliminary.predictions.map((p) => ({ ...p, points_mean: 30 })) };
+  final.injury_check = { anchor_report: { source_url: 'https://example.test/final.pdf', published_at: '2026-10-22T01:30:00Z' } };
+  staged.games[0].forecasts = { preliminary, final };
+  staged.games[0].forecast = final;
+  staged.games[0].injury_capture = { games: [{ game_id: gameId, ...final.injury_check }] };
+  await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Preliminary forecast", exact: true }).click();
+  await expect(page.locator(".forecast-stage-summary")).toContainText("Preliminary");
+  await expect(page.getByRole('link', { name: 'Official injury report' })).toHaveAttribute('href', 'https://example.test/preliminary.pdf');
+  await expect(page.locator(".player-row .points").first()).toHaveText("20");
+  await page.getByRole("button", { name: "Final forecast", exact: true }).click();
+  await expect(page.locator(".player-row .points").first()).toHaveText("30");
+  await expect(page.getByRole('link', { name: 'Official injury report' })).toHaveAttribute('href', 'https://example.test/final.pdf');
+});

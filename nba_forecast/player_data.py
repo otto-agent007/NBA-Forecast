@@ -1,6 +1,7 @@
 """Observed player pages; every denominator is explicit and cutoff bounded."""
 import math
 from .data import _timestamp
+from .rotation import rotation_role
 
 FIELDS = ('minutes','pts','reb','ast','stl','blk','tov','fgm','fga','fg3m','fg3a','ftm','fta')
 
@@ -57,5 +58,5 @@ def build_player_pages(roster, history, season, as_of, shots=None):
         located = sum(s.get('x') is not None and s.get('y') is not None for s in chart_rows)
         chart = {'shots': chart_rows, 'coverage': {'attempts': len(chart_rows), 'located_attempts': located, 'games': eligible_games}, 'missing_reason': '; '.join(sorted(set(missing_reasons))) if missing_reasons else ('No verified shot data available' if not chart_rows else None), 'coordinate_system': 'NBA legacy coordinates; 10 units per foot, hoop origin', 'observed_only': True}
         recent = sorted((r for r in rows if r['season'] == season), key=lambda r: (r['game_time'], r['game_id']), reverse=True)[:10]
-        players[pid] = {**person, 'player_id': pid, 'current_season': _summary(rows, season), 'prior_season': _summary(rows, prior), 'recent_games': [{**r, **{f: r.get(f) if r['status'] == 'played' else None for f in FIELDS}} for r in recent], 'shot_chart': chart}
+        players[pid] = {**person, 'player_id': pid, 'rotation_role': rotation_role(person,rows), 'current_season': _summary(rows, season), 'prior_season': _summary(rows, prior), 'recent_games': [{**r, **{f: r.get(f) if r['status'] == 'played' else None for f in FIELDS}} for r in recent], 'shot_chart': chart}
     return {'season': season, 'as_of': as_of, 'players': players}

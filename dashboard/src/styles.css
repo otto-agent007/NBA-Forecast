@@ -5,6 +5,16 @@
   font-synthesis: none;
   font-size: 14px;
 }
+.team-heading th { background: #edf3fb; padding: 18px 20px; border-top: 2px solid #dce6f3; }
+.team-heading h3 { display: inline; margin: 0 10px; font-size: 16px; }
+.team-heading span { color: #64748b; font-size: 11px; font-weight: 400; }
+.role-heading th { padding: 11px 20px; background: #f7f9fc; color: #52637a; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.forecast-stages { margin: 20px 0; background: white; border: 1px solid #dce6f3; border-radius: 7px; padding: 16px; }
+.forecast-stage-buttons { display: flex; gap: 10px; }
+.forecast-stage-buttons button { flex: 1; text-align: left; padding: 12px; border: 1px solid #dce6f3; border-radius: 5px; font-weight: 600; }
+.forecast-stage-buttons button[aria-pressed="true"] { background: #edf5ff; border-color: #2472d5; color: #1261cb; }
+.forecast-stage-buttons small { display: block; font-size: 10px; font-weight: 400; margin-top: 7px; }
+.forecast-stage-summary { margin: 12px 0 0; font-size: 11px; color: #64748b; line-height: 1.6; }
 * {
   box-sizing: border-box;
 }

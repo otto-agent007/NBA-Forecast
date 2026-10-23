@@ -13,6 +13,8 @@ from tests.test_store import inputs
 from tests.test_model import row
 
 class OperationsTests(unittest.TestCase):
+    def setUp(self):
+        self.daily=self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}))
     def test_duplicate_tick_and_crash_recovery_do_not_duplicate_run(self):
         schedule=normalize_season(payload([game()]),NOW);schedule['version']='v1'
         roster=inputs()[0]['roster']
@@ -40,6 +42,7 @@ class OperationsTests(unittest.TestCase):
             r=run_tick(d,[])
             self.assertEqual(r['status'],'error');self.assertTrue(r['errors'])
             self.assertEqual(run_tick(d,[])['status'],'error')
+            self.assertEqual(self.daily.call_count,2,'daily collection must not depend on schedule access')
 
     def test_review_evidence_is_game_specific_and_cannot_replace_newer_status(self):
         from nba_forecast.operations import apply_review
@@ -65,7 +68,8 @@ class OperationsTests(unittest.TestCase):
         for p,t in zip(roster['players'],roster['team_ids']):p['team_id']=t;p['status']='unknown'
         roster['observed_at']=NOW
         evidence=dict(published_at=NOW,retrieved_at=NOW,source_url='https://example.test/report',sha256='a'*64)
-        check={'games':[{'latest_report':evidence}]}
+        check={'checked_at':NOW,'games':[{'game_id':'0022600001','start_time':schedule['games'][0]['start_time'],
+                'phase':'preliminary','report_status':'captured_pending_review','latest_report':evidence}]}
         parsed={'rows':[],'team_coverage':[],'evidence':evidence,'issues':[{'kind':'missing_team_coverage','game_id':'0022600001'}]}
         with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster',return_value=roster),patch('nba_forecast.operations._now',return_value=NOW),patch('nba_forecast.store._now',return_value=__import__('datetime').datetime.fromisoformat(NOW.replace('Z','+00:00'))),patch('nba_forecast.operations.fetch_injury_check',return_value=check),patch('nba_forecast.operations.pdf_text',return_value='text'),patch('nba_forecast.operations.parse_report',return_value=parsed):
             result=run_tick(d,[])
@@ -154,7 +158,8 @@ class EvidenceTickTests(unittest.TestCase):
     def test_tick_skips_superseded_availability_but_retains_other_review_inputs(self):
         evidence=dict(published_at='2026-10-21T11:30:00Z',retrieved_at='2026-10-21T11:31:00Z',
                       source_url='https://example.test/report',sha256='a'*64)
-        check={'games':[{'latest_report':evidence}]}
+        check={'checked_at':NOW,'games':[{'game_id':'0022600001','start_time':self.schedule['games'][0]['start_time'],
+                'phase':'preliminary','report_status':'captured_pending_review','latest_report':evidence}]}
         parsed={'rows':[dict(player_id=self.pid,team_id='1610612738',game_id='0022600001',status='out',reported_status='Out')],
                 'team_coverage':[],'evidence':evidence,'issues':[]}
         other=next(p['player_id'] for p in self.roster['players'] if p['team_id']=='1610612752')

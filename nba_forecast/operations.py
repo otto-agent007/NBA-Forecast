@@ -15,6 +15,7 @@ from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
 from .store import save_run,evaluate_run,performance_report
 from .benchmarks import benchmark_report
+from .injury_capture import capture_daily,record_check
 from .validation import parse_time,validate_history,validate_inputs,_source
 
 
@@ -109,7 +110,20 @@ def run_tick(directory,history):
 
 def _tick(folder,history,report):
     validate_history(history)
-    schedule=fetch_schedule(folder/'schedule');report['schedule_version']=schedule['version']
+    # Daily evidence must still be collected when the calendar endpoint fails.
+    now=parse_time(_now());year=now.year if now.month>=7 else now.year-1
+    season=f'{year}-{(year+1)%100:02d}'
+    try:report['daily_injuries']=capture_daily(folder,season,_now())
+    except (ValueError,OSError) as exc:
+        report['errors'].append(dict(task='daily_injuries',error=str(exc)))
+    try:schedule=fetch_schedule(folder/'schedule')
+    except (ValueError,OSError) as exc:
+        saved=folder/'schedule/latest.json'
+        if not saved.exists():raise
+        schedule=json.loads(saved.read_text())
+        if schedule['season']!=season:raise ValueError('cached calendar belongs to another season') from exc
+        report['warnings'].append(dict(task='schedule',error=str(exc),action='Using saved calendar; observation time remains unchanged.'))
+    report['schedule_version']=schedule['version']
     statepath=folder/'state.json';state=json.loads(statepath.read_text()) if statepath.exists() else {'jobs':{}}
     db=folder/'forecast.sqlite';raw=folder/'raw';cache=folder/'finals';cache.mkdir(exist_ok=True)
     runs=ledger_runs(db)
@@ -144,8 +158,17 @@ def _tick(folder,history,report):
             review=json.loads(path.read_text());reviews[job['game_id']]=review
             job['key']+=':review:'+hashlib.sha256(canonical(review)).hexdigest()
     needed=[j for j in jobs if j['key'] not in state['jobs']]
-    roster=fetch_roster(schedule['season'],cache_dir=raw) if needed else None
+    roster=None
+    if needed:
+        try:roster=fetch_roster(schedule['season'],cache_dir=raw)
+        except (ValueError,OSError) as exc:
+            saved=folder/'roster.json'
+            candidate=json.loads(saved.read_text()) if saved.exists() else None
+            if candidate and 0<=(parse_time(_now())-parse_time(candidate['observed_at'])).total_seconds()<=48*3600:
+                roster=candidate
+            report['warnings'].append(dict(task='roster',error=str(exc),action='Using recent saved roster.' if roster else 'Forecast withheld; injury capture still runs.'))
     if roster:atomic_json(folder/'roster.json',roster)
+    capture_cache={}
     for job in needed:
         try:
             game=by_id[job['game_id']]
@@ -153,11 +176,12 @@ def _tick(folder,history,report):
                           forecast_stage=job['stage'],operation_key=job['key'],schedule_version=schedule['version'],
                           schedule_context=game_context(schedule,game['game_id']))
             try:
-                check=fetch_injury_check(snapshot,raw);snapshot['as_of']=_now()
+                check=fetch_injury_check(snapshot,raw,capture_cache=capture_cache);snapshot['as_of']=_now()
                 snapshot['injury_check']=check
+                record_check(folder,check,job['stage'])
                 for item in check['games']:
                     evidence=item['latest_report'] or item.get('anchor_report')
-                    if evidence:
+                    if evidence and roster is not None:
                         text=pdf_text(raw/(evidence['sha256']+'.pdf'),evidence['sha256'])
                         parsed=parse_report(text,schedule,roster,evidence)
                         snapshot=apply_report(snapshot,parsed,allow_not_listed=True)
@@ -165,6 +189,7 @@ def _tick(folder,history,report):
             except (ValueError,OSError) as exc:
                 if job['stage']=='final':raise
                 report['warnings'].append(dict(game_id=job['game_id'],error=str(exc),action='Preliminary availability remains unresolved.'))
+            if roster is None:raise ValueError('No roster observed within 48 hours; injury checkpoint retained, forecast withheld')
             snapshot['as_of']=_now()
             if job['game_id'] in reviews:
                 snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
