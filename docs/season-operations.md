@@ -123,6 +123,30 @@ observed Season PPG stays visible when projections are withheld, with season,
 sample size and observation time in its tooltip. These averages can be newer
 than a selected historical forecast and are not that run's model inputs.
 
+## Early-season minutes and roster review
+
+Model `regular-season-baseline-0.3.0` keeps prior-year DNPs in saved history and
+participation counts, but estimates a healthy role from prior appearances.
+Current-season DNPs still affect role estimates and trigger review. Current-team
+observations establish a traded player's minutes role; older teams still inform
+shooting and per-minute production. A new-team DNP without a positive-minute
+role is withheld unless a sourced adjustment is supplied. Profiles and forecasts
+use the same estimator. The existing 240-minute team budget remains, so a raw
+role estimate may be scaled in the final team rotation.
+
+Roster disagreements block by default. A short-lived `roster-reviews/GAME_ID.json`
+list can name an explicitly researched peripheral disagreement, including game,
+tipoff, team, observation/expiry, reviewer/reason, exact NBA-only and ESPN-only
+names, and `quarantine_player_ids`. It requires a fresh hash-archived official
+NBA team roster whose complete player ID/name set matches the captured roster.
+The exception cannot include a projected starter, ignore undeclared differences,
+accept stale evidence, or project a disputed player. NBA-only discrepancies must
+be quarantined as unknown; ESPN-only candidates receive no numeric forecast.
+The original disagreement is preserved as a warning, and both the selected saved
+run's warning and the latest attempt remain inspectable. This is a disclosed
+source adjudication, not a claim of full independent agreement. A changed review
+file triggers a new immutable job; expiry or new source differences blocks it.
+
 ## Explicit zero-injury reports
 
 A team can have no player rows in the NBA PDF even when it has no injuries to

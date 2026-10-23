@@ -1,4 +1,4 @@
-"""Auditable, deterministic v0.1 scoring baseline (standard library only).
+"""Auditable, deterministic v0.3 scoring baseline (standard library only).
 
 This is an evidence-only baseline, not a claim of betting edge. ``forecast``
 expects the validated contract in docs/design.md but independently excludes
@@ -7,7 +7,10 @@ other than the snapshot season and its immediate predecessor.
 
 Minutes and opportunity totals use at most six prior-season pseudo-games. Their
 weight decays by 0.70 per current-season game; current games decay by 0.75 per
-older game. DNPs are observed zero minutes, not fabricated missing observations.
+older game. Prior-season DNPs remain in the audit but do not dilute healthy role
+minutes. Current-season DNPs remain observed role evidence. Once a current-team
+role is observed, earlier teams do not supply its minutes prior. Older shooting
+and per-minute production evidence remains regularized separately.
 Shooting changes more slowly: current attempts decay by 0.985 per older game;
 previous attempts are capped at 250 two-point, 200 three-point, and 100 free-throw
 attempts. Fixed regularization defaults are 0.52/0.35/0.75 with 40/50/20 pseudo
@@ -35,7 +38,7 @@ from datetime import datetime
 from math import sqrt
 from statistics import fmean, pvariance
 
-MODEL_VERSION = "regular-season-baseline-0.2.1"
+MODEL_VERSION = "regular-season-baseline-0.3.0"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -95,7 +98,9 @@ def _shooting(previous, current):
     return result
 
 
-def _opportunities(previous, current):
+def _opportunities(previous, current, team_id=None):
+    prior_dnp=sum(r['status']=='dnp' for r in previous)
+    previous=[r for r in previous if r['status']=='played' and r['minutes']>0]
     prior_weight = min(len(previous), 6) * 0.70 ** len(current)
     weighted = [(r, 0.75 ** age) for age, r in enumerate(reversed(current))]
     # Each previous row gets an equal fraction of the prior pseudo-game mass.
@@ -104,18 +109,34 @@ def _opportunities(previous, current):
     mass = sum(w for _, w in weighted)
     totals = {field: sum(r[field] * w for r, w in weighted)
               for field in ("minutes", "fga", "fg3a", "fta", "tov")}
-    minutes = totals["minutes"] / mass if mass else 0.0
+    # Participation is assessed separately. Prior-year absences do not describe
+    # a healthy player's rotation minutes. A new team supplies its own role;
+    # older teams still inform per-minute production and shooting efficiency.
+    role_previous=previous;role_current=current
+    current_team=[r for r in current if r['team_id']==team_id] if team_id else []
+    if current_team:
+        role_previous=[r for r in previous if r['team_id']==team_id]
+        role_current=current_team
+    role_prior_weight=min(len(role_previous),6)*.70**len(role_current)
+    role_weighted=[(r,.75**age) for age,r in enumerate(reversed(role_current))]
+    if role_previous:role_weighted += [(r,role_prior_weight/len(role_previous)) for r in role_previous]
+    role_mass=sum(w for _,w in role_weighted)
+    minutes=sum(r['minutes']*w for r,w in role_weighted)/role_mass if role_mass else 0.
     rates = {field: totals[field] / totals["minutes"] if totals["minutes"] else 0.0
              for field in ("fga", "fg3a", "fta", "tov")}
     # A 4-minute prior SD stabilizes small samples without creating production.
-    observed_variance = (sum(w * (r["minutes"] - minutes) ** 2 for r, w in weighted)
-                         / mass if mass else 0.0)
-    minute_variance = (observed_variance * mass + 16.0 * 4) / (mass + 4)
+    observed_variance = (sum(w * (r["minutes"] - minutes) ** 2 for r, w in role_weighted)
+                         / role_mass if role_mass else 0.0)
+    minute_variance = (observed_variance * role_mass + 16.0 * 4) / (role_mass + 4)
     return minutes, rates, minute_variance, {
         "prior_effective_games": prior_weight, "current_weight": mass - prior_weight,
         "prior_decay_per_current_game": 0.70, "current_decay_per_game": 0.75,
         "minutes_before_adjustment": minutes, "per_minute_rates": rates.copy(),
         "observed_minutes_variance": observed_variance,
+        "prior_dnp_excluded":prior_dnp,"role_prior_effective_games":role_prior_weight,
+        "role_current_team_game_ids":[r['game_id'] for r in current_team],
+        "role_prior_team_ids":sorted({r['team_id'] for r in role_previous}),
+        "role_team_id":team_id,"role_minutes_policy":"Prior appearances and current-team role; current-season DNPs remain role evidence.",
     }
 
 
@@ -327,6 +348,9 @@ def forecast(snapshot, history):
         if player["status"] in ("questionable", "unknown"):
             p["reason"] = "Availability must be resolved before assigning minutes."
             p["flags"].append("availability_" + player["status"])
+            if player.get('status_basis')=='roster_membership_review':
+                p['reason']='Roster membership discrepancy is quarantined for source review; no numeric forecast.'
+                p['flags'].append('roster_membership_review')
             continue
         if not played:
             p["reason"] = "No positive-minute current/previous regular-season evidence."
@@ -345,11 +369,11 @@ def forecast(snapshot, history):
                 p['reason']='Conditional on participation: a verified game-specific team report lists no injuries. Participation and starting lineup are not confirmed.'
         if len(played) < 5:
             p["flags"].append("short_history")
-        if rows[-1]["team_id"] != team or any(r["team_id"] != team for r in current):
+        if any(r["team_id"] != team for r in previous+current):
             p["flags"].append("team_change")
         # Prefer an established current-season role over a stale prior-season
         # comparison; the most recent three games can then reveal a new role.
-        baseline = current[-13:-3] if len(current) >= 6 else previous
+        baseline = current[-13:-3] if len(current) >= 6 else [r for r in previous if r['status']=='played' and r['minutes']>0]
         recent = current[-3:] if len(current) >= 6 else current[-5:]
         if baseline and recent:
             old_minutes = fmean(r["minutes"] for r in baseline)
@@ -375,7 +399,14 @@ def forecast(snapshot, history):
             }
         if any(r["status"] == "dnp" for r in current[-3:]):
             p["flags"].append("recent_dnp_role_review")
-        minutes, rates, variance, opportunities = _opportunities(previous, current)
+        minutes, rates, variance, opportunities = _opportunities(previous, current,team)
+        if (any(r['team_id']==team for r in current) and
+            not any(r['team_id']==team and r['minutes']>0 for r in previous+current) and
+            not adjustments.get((pid,game['game_id']))):
+            p.update(status='needs_review',reason='No positive-minute appearance in the new team role; reviewed rotation evidence is required.')
+            p['flags'].append('new_team_role_unobserved')
+            p['components']['opportunities']=opportunities
+            continue
         shooting = _shooting(previous, current)
         p["components"]["multistat"] = _multistat(previous, current)
         recent_role = (current or previous)[-5:]

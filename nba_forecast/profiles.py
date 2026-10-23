@@ -22,17 +22,19 @@ def build_profiles(snapshot,history):
         rows=by_player[p['player_id']];current=[r for r in rows if r['season']==snapshot['season']]
         previous=[r for r in rows if r['season']!=snapshot['season']];recent=current[-5:]
         supported=any(r['minutes']>0 for r in rows)
-        minutes,rates,variance,components=_opportunities(previous,current)
+        minutes,rates,variance,components=_opportunities(previous,current,p['team_id'])
         flags=[]
         if not supported:flags.append('cold_start')
         if not current:flags.append('current_role_unobserved')
-        if rows and rows[-1]['team_id']!=p['team_id']:flags.append('team_change')
-        if recent and previous and abs(fmean(r['minutes'] for r in recent)-fmean(r['minutes'] for r in previous))>=5:
+        if any(r['team_id']!=p['team_id'] for r in rows):flags.append('team_change')
+        previous_played=[r for r in previous if r['status']=='played' and r['minutes']>0]
+        if recent and previous_played and abs(fmean(r['minutes'] for r in recent)-fmean(r['minutes'] for r in previous_played))>=5:
             flags.append('minutes_change')
         rotation=rotation_role(p,rows)
         profile=dict(player_id=p['player_id'],name=p['name'],team_id=p['team_id'],availability=p['status'],
                      previous_games=len(previous),current_games=len(current),recent_game_ids=[r['game_id'] for r in recent],
                      expected_minutes_baseline=minutes if supported else None,
+                     role_minutes_evidence=components,
                      fga_per_minute=rates['fga'] if supported else None,fta_per_minute=rates['fta'] if supported else None,
                      recent_minutes=fmean(r['minutes'] for r in recent) if recent else None,
                      recent_fga=fmean(r['fga'] for r in recent) if recent else None,

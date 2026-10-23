@@ -12,8 +12,10 @@ from .rotation import projected_lineups
 from .schedule import atomic_json,canonical
 from .validation import parse_time,validate_inputs
 from .availability import apply_no_injuries,needs_empty_report,report_current,record_availability_update,BASIS
+from .roster_review import apply_roster_reviews,resolution
+import json
 
-PREFLIGHT_VERSION='independent-inputs-3'
+PREFLIGHT_VERSION='independent-inputs-4'
 
 
 def validate_extraction(extraction,cutoff):
@@ -49,7 +51,7 @@ def verify_extractions(snapshot,cache_dir):
 
 
 def check_inputs(snapshot,history,profiles,reference):
-    issues=[]
+    issues=[];warnings=[]
     def issue(code,detail,team=None):issues.append(dict(code=code,detail=detail,team_id=team))
     try:validate_inputs(snapshot,history)
     except (ValueError,KeyError,TypeError) as exc:issue('input_contract',str(exc))
@@ -77,12 +79,15 @@ def check_inputs(snapshot,history,profiles,reference):
             expected={normalized(p['name']) for p in players};names=reference.get('rosters',{}).get(tid,[])
             observed={normalized(name) for name in names}
             if not names or expected!=observed or len(observed)!=len(names):
+                adjudication=resolution(snapshot,profiles,reference,game,tid)
+                quarantined=adjudication and all(p['status']=='unknown' and p.get('status_basis')=='roster_membership_review' for p in players if p['player_id'] in adjudication['quarantine_player_ids'])
                 missing=[p['name'] for p in players if normalized(p['name']) not in observed]
                 extra=[name for name in names if normalized(name) not in expected]
                 detail='Independent roster membership differs or is unavailable.'
                 if missing:detail+=' NBA only: '+', '.join(missing[:5])+'.'
                 if extra:detail+=' ESPN only: '+', '.join(extra[:5])+'.'
-                issue('roster_not_confirmed',detail,tid)
+                if quarantined:warnings.append(adjudication)
+                else:issue('roster_not_confirmed',detail,tid)
             covering=[e for e in extractions if e.get('pages_complete') and any(c['team_id']==tid and c['date']==day and c['matchup']==matchup for c in e.get('complete_teams',[]))]
             if not covering:
                 empty=[r for r in reference.get('no_injuries',[]) if report_current(r,snapshot,game,tid)]
@@ -110,7 +115,7 @@ def check_inputs(snapshot,history,profiles,reference):
             if len(ids)!=5 or len(set(ids))!=5 or not set(ids)<=members:
                 issue('starting_five_unresolved','Five distinct eligible projected starters cannot be established.',tid)
     return dict(schema_version=1,version=PREFLIGHT_VERSION,checked_at=snapshot['as_of'],
-                status='blocked' if issues else 'passed',issues=issues,lineups=lineups,sources=reference.get('sources',[]),
+                status='blocked' if issues else 'passed',issues=issues,warnings=warnings,lineups=lineups,sources=reference.get('sources',[]),
                 policy='Inputs cross-checked; projected starters remain unconfirmed. No missing availability is inferred healthy.')
 
 
@@ -122,12 +127,19 @@ def run_preflight(snapshot,history,profiles,directory,*,cache_dir=None):
         verified=verify_extractions(snapshot,cache_dir or Path(directory)/'raw')
         checked=deepcopy(snapshot);checked['injury_extractions']=verified
         phase='reference_unavailable'
-        reference=collect_references(checked,Path(directory)/'references')
+        reviews=[]
+        for game in checked['games']:
+            path=Path(directory)/'roster-reviews'/(game['game_id']+'.json')
+            if path.exists():reviews.extend(json.loads(path.read_text()))
+        checked['roster_reviews']=reviews
+        reference=collect_references(checked,Path(directory)/'references',roster_reviews=reviews)
         snapshot['as_of']=datetime.now(timezone.utc).isoformat()
         checked['as_of']=snapshot['as_of']
         checked=apply_no_injuries(checked,reference.get('no_injuries',[]))
+        checked=apply_roster_reviews(checked,profiles,reference)
         snapshot['roster']=deepcopy(checked['roster'])
         snapshot['availability_supplements']=deepcopy(checked['availability_supplements'])
+        snapshot['roster_reviews']=deepcopy(reviews);snapshot['roster_adjudications']=deepcopy(checked['roster_adjudications'])
         record_availability_update(directory,checked,reference.get('no_injuries',[]),reference.get('sources',[]))
         result=check_inputs(checked,history,profiles,reference)
     except (ValueError,OSError,KeyError,TypeError) as exc:

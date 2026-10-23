@@ -154,6 +154,8 @@ def _tick(folder,history,report):
         seconds=300 if job['stage']=='final' else 900
         slot=int(parse_time(_now()).timestamp())//seconds
         job['key']+=f':model:{MODEL_VERSION}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
+        roster_review=folder/'roster-reviews'/(job['game_id']+'.json')
+        if roster_review.exists():job['key']+=':roster-review:'+hashlib.sha256(roster_review.read_bytes()).hexdigest()
         path=folder/'reviews'/(job['game_id']+'.json')
         if path.exists():
             review=json.loads(path.read_text());reviews[job['game_id']]=review

@@ -64,3 +64,11 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(len(result['no_injuries']),1)
         self.assertEqual(result['no_injuries'][0]['team_id'],'T2')
         self.assertEqual(sum('summary?event=401909848' in c.args[0] for c in request.call_args_list),1)
+
+    def test_official_team_roster_html_is_decoded_without_inventing_availability(self):
+        from nba_forecast.reference import decode_reference
+        team={'info':{'TEAM_ID':1610612752,'SEASON_YEAR':'2026-27'},'roster':[{'TeamID':1610612752,'SEASON':'2026','PLAYER_ID':1,'PLAYER':'A Player'}]}
+        raw=('<html><script id="__NEXT_DATA__" type="application/json">'+json.dumps({'props':{'pageProps':{'team':team}}})+'</script></html>').encode()
+        decoded=decode_reference(raw,'https://www.nba.com/team/1610612752/roster')
+        self.assertEqual(decoded,team)
+        self.assertNotIn('status',decoded['roster'][0])

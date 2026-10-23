@@ -199,3 +199,21 @@ test('recovered zero-injury update is visible without rewriting the saved foreca
   await expect(update).toContainText('previous zero-injury listing has been superseded');
   await expect(update.getByText('No injuries reported', {exact:true})).toHaveCount(0);
 });
+
+test('roster quarantine stays visible while verified player projections remain inspectable', async ({ page }) => {
+  const staged=structuredClone(dashboard);
+  staged.games[0].preflight={status:'passed',checked_at:'2026-10-22T01:00:00Z',warnings:[{
+    team_id:'1610612747',code:'roster_membership_review',detail:'Disputed roster players have no numeric forecast.',
+    nba_only:['Peripheral Player'],espn_only:[],quarantine_player_ids:['999'],
+  }]};
+  staged.games[0].forecast.preflight=structuredClone(staged.games[0].preflight);
+  await page.route('**/api/dashboard',route=>route.fulfill({json:staged}));
+  await page.goto('/');
+  await expect(page.getByText('Cross-check passed with roster review',{exact:true})).toBeVisible();
+  await expect(page.locator('.preflight-status')).toContainText('Peripheral Player');
+  await expect(page.locator('tbody[data-team-id="1610612747"] .points').first()).toHaveText('20');
+  staged.games[0].preflight={status:'passed',checked_at:'2026-10-22T01:15:00Z',warnings:[]};
+  await page.getByRole('button',{name:'Refresh data',exact:true}).click();
+  await expect(page.locator('.saved-roster-review')).toContainText('Peripheral Player');
+  await expect(page.locator('.preflight-status')).toContainText('This saved forecast passed with roster review');
+});
