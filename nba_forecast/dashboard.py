@@ -77,9 +77,11 @@ def serve_dashboard(directory,assets,port=8765):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             path=unquote(urlsplit(self.path).path)
-            if path=='/api/dashboard' or re.fullmatch(r'/api/players/[0-9]+',path) or re.fullmatch(r'/api/postgame/002[0-9]{7}',path):
+            if path in ('/api/dashboard', '/api/clutch') or re.fullmatch(r'/api/players/[0-9]+',path) or re.fullmatch(r'/api/postgame/002[0-9]{7}',path):
                 try:
-                    if path.startswith('/api/postgame/'):
+                    if path == '/api/clutch':
+                        value=clutch_payload(directory)
+                    elif path.startswith('/api/postgame/'):
                         value=read_optional(Path(directory)/'postgame'/(path.rsplit('/',1)[1]+'.json'),dict(missing_reason='No verified postgame timeline captured yet. Run postgame after syncing player data.'))
                     else:
                         value=dashboard_data(directory) if path=='/api/dashboard' else player_payload(directory,path.rsplit('/',1)[1])
@@ -121,3 +123,15 @@ def player_payload(directory,player_id):
                 item['actual']=next((r for r in matched if r['player_id']==player_id and r['game_id']==item['prediction']['game_id']),None)
     page['prediction_history']=sorted(selected.values(),key=lambda r:parse_time(r['prediction']['start_time']),reverse=True)[:20]
     return page
+
+
+def clutch_payload(directory):
+    """Serve only an explicitly generated historical report, without model writes."""
+    report=read_optional(Path(directory)/'clutch.json', None)
+    if report is None:
+        return dict(missing_reason='Historical clutch comparisons have not been prepared yet.')
+    if (report.get('schema_version') != 1 or report.get('forecast_eligible') is not False
+            or report.get('method_version') != 'clutch-descriptive-v1'
+            or not isinstance(report.get('periods'), list) or not isinstance(report.get('players'), list)):
+        raise ValueError('Unsupported clutch report')
+    return report

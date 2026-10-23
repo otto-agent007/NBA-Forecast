@@ -1,3 +1,4 @@
+import Clutch from "./Clutch";
 import Postgame from "./Postgame";
 import Projections from "./Projections";
 import React, { useEffect, useMemo, useState } from "react";
@@ -119,23 +120,30 @@ export default function App() {
             NBA <span>FORECAST</span>
           </a>
           <nav aria-label="Main navigation">
-            {["Games", "Projections", "Players", "Postgame", "Performance"].map(
-              (v) => (
-                <button
-                  key={v}
-                  onClick={() => chooseTab(v)}
-                  className={tab === v ? "active" : ""}
-                  aria-current={tab === v ? "page" : undefined}
-                >
-                  {v}
-                </button>
-              ),
-            )}
+            {[
+              "Games",
+              "Projections",
+              "Players",
+              "Postgame",
+              "Clutch",
+              "Performance",
+            ].map((v) => (
+              <button
+                key={v}
+                onClick={() => chooseTab(v)}
+                className={tab === v ? "active" : ""}
+                aria-current={tab === v ? "page" : undefined}
+              >
+                {v}
+              </button>
+            ))}
           </nav>
-          <span className="season">{data?.season || "2026–27"}</span>
+          <span className="season">
+            {tab === "Clutch" ? "2023–26" : data?.season || "2026–27"}
+          </span>
         </div>
       </header>
-      {data && (
+      {data && tab !== "Clutch" && (
         <div className="game-strip">
           <div className="strip-date">
             <span>
@@ -194,38 +202,44 @@ export default function App() {
         <div className="page-heading">
           <div>
             <h1>
-              {tab === "Games"
-                ? "Game day"
-                : tab === "Players"
-                  ? "The player pool"
-                  : tab === "Projections"
-                    ? "Player projections"
-                    : tab === "Postgame"
-                      ? "Postgame review"
-                      : "Performance"}
+              {tab === "Clutch"
+                ? "Clutch comparisons"
+                : tab === "Games"
+                  ? "Game day"
+                  : tab === "Players"
+                    ? "The player pool"
+                    : tab === "Projections"
+                      ? "Player projections"
+                      : tab === "Postgame"
+                        ? "Postgame review"
+                        : "Performance"}
             </h1>
             <p>
-              {tab === "Games"
-                ? "Every player. Every opportunity."
-                : tab === "Players"
-                  ? `${data?.players.length || 0} players. One place to see the evidence.`
-                  : tab === "Projections"
-                    ? "Your daily slate, backed by saved pregame evidence."
-                    : "Measure the forecast. Improve the next one."}
+              {tab === "Clutch"
+                ? "Historical evidence. Separate dimensions. Transparent uncertainty."
+                : tab === "Games"
+                  ? "Every player. Every opportunity."
+                  : tab === "Players"
+                    ? `${data?.players.length || 0} players. One place to see the evidence.`
+                    : tab === "Projections"
+                      ? "Your daily slate, backed by saved pregame evidence."
+                      : "Measure the forecast. Improve the next one."}
             </p>
           </div>
           <div className="page-actions">
-            <input
-              className="date-input"
-              type="date"
-              aria-label="Game date"
-              value={date}
-              onChange={(e) => {
-                setDate(e.target.value);
-                setSelected("");
-                setFilter("all");
-              }}
-            />
+            {tab !== "Clutch" && (
+              <input
+                className="date-input"
+                type="date"
+                aria-label="Game date"
+                value={date}
+                onChange={(e) => {
+                  setDate(e.target.value);
+                  setSelected("");
+                  setFilter("all");
+                }}
+              />
+            )}
             <button className="primary" onClick={reload} disabled={loading}>
               <Icon name="refresh" />
               {loading ? "Refreshing…" : "Refresh data"}
@@ -247,13 +261,17 @@ export default function App() {
         {data && (
           <>
             <div className="capture-line">
-              {data.source_mode === "static_capture"
-                ? "Saved snapshot"
-                : "Saved operational evidence"}{" "}
+              {tab === "Clutch"
+                ? "Dashboard refreshed"
+                : data.source_mode === "static_capture"
+                  ? "Saved snapshot"
+                  : "Saved operational evidence"}{" "}
               · {stamp(data.generated_at)}{" "}
               <span>Times shown in Pacific Time</span>
             </div>
-            {tab === "Postgame" ? (
+            {tab === "Clutch" ? (
+              <Clutch refreshKey={data.generated_at} />
+            ) : tab === "Postgame" ? (
               <Postgame game={game} />
             ) : tab === "Performance" ? (
               <Performance data={data} />

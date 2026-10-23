@@ -52,3 +52,11 @@ licenses. All routine dashboard calculations are deterministic and use no LLMs.
 
 Validation: `python -m unittest discover -s tests -v`, `npm test --prefix dashboard`,
 and `npm run build --prefix dashboard`. CI runs both Python and frontend checks.
+
+**Clutch:** historical comparisons across the three verified regular seasons,
+with per-dimension ratings, samples, uncertainty, sensitivity and exact scoring
+change explanations. First prepare the report with
+`python -m nba_forecast.clutch_ratings --output <operations-dir>/clutch.json`.
+The read-only `/api/clutch` route serves it independently of forecasts. See
+[methods and reproduction](../clutch-ratings.md) for the snapshot workflow and
+required evaluation gate before any forecast-weight change.
