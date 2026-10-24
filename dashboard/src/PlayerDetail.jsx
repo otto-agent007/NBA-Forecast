@@ -183,7 +183,7 @@ export default function PlayerDetail({ player, onClose }) {
                 </div>
                 <p className="tiny">
                   {player.status === "projected"
-                    ? `${number(player.points_lower80)}–${number(player.points_upper80)} points: heuristic 80% range; not yet calibrated.`
+                    ? `${number(player.points_lower80)}–${number(player.points_upper80)} points: nominal 80% range; ${c.uncertainty?.calibration?.status === 'calibrated' ? c.uncertainty.calibration.audit.label : 'heuristic, not yet calibrated'}.`
                     : "A numeric forecast requires supported availability and role evidence."}
                 </p>
                 {player.availability === "Not listed" && (
@@ -206,6 +206,20 @@ export default function PlayerDetail({ player, onClose }) {
                   {safeSource(c.historical_prior.source?.source_url) && <a href={c.historical_prior.source.source_url} target="_blank" rel="noreferrer">Historical statistics source ↗</a>}
                 </section>}
               </section>
+              {c.game_environment && <section aria-label="Game environment">
+                <h3>Game environment</h3><dl className="profile-facts">
+                  <dt>Expected possessions</dt><dd>{number(c.game_environment.expected_possessions)}</dd>
+                  <dt>Pace adjustment</dt><dd>{number((c.game_environment.pace_factor-1)*100)}%</dd>
+                  <dt>Defense adjustment</dt><dd>{number((c.game_environment.defense_factor-1)*100)}%</dd>
+                  <dt>Rest / travel adjustment</dt><dd>{number((c.game_environment.context_factor-1)*100)}%</dd>
+                </dl><p className="tiny">Possessions are estimated from verified team boxscores. Rest and travel effects are fitted from historical outcomes.</p>
+              </section>}
+              {c.uncertainty?.calibration && <section aria-label="Scoring interval evidence">
+                <h3>Scoring interval evidence</h3><p>{c.uncertainty.calibration.status === 'calibrated'
+                  ? `${c.uncertainty.calibration.audit.label} · ${c.uncertainty.calibration.audit.sample_count} calibration outcomes`
+                  : 'Heuristic fallback: matching calibration evidence is not ready.'}</p>
+                <p className="tiny">Nominal coverage is assessed against outcomes; it is not a guarantee for an individual game.</p>
+              </section>}
               <section>
                 <h3>Role & minutes</h3>
                 <p className="role-label">
@@ -222,8 +236,7 @@ export default function PlayerDetail({ player, onClose }) {
                   <dd>{typeof c.opponent?.factor === 'number' ? c.opponent.factor.toFixed(3) : '—'}</dd>
                 </dl>
                 <p className="tiny">
-                  Opponent adjustment is a bounded points-allowed proxy, not a
-                  claim about a specific defender.
+                  {c.game_environment ? "Opponent adjustment uses possession-adjusted defensive results." : "Opponent adjustment uses a bounded points-allowed proxy."}
                 </p>
                 {c.manual_adjustment && (
                   <p className="tiny">

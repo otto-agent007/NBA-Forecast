@@ -70,6 +70,36 @@ test("runner separates waiting checkpoints from actionable errors", async ({ pag
   await expect(page.getByLabel('Runner issues')).toContainText('GSW@LAL: Roster membership disagrees.');
 });
 
+test("historical validation is separated from prospective calibration evidence", async ({page}) => {
+  const response=structuredClone(dashboard);
+  response.model_upgrade={model_version:'regular-season-baseline-0.5.0',validation:{
+    scope:'Historical reconstruction; injury redistribution requires prospective assessment.',
+    holdout:{baseline:{mae:5.09,n:5664},candidate:{mae:5.08,n:5664},
+      team_baseline:{mae:10.36,n:532},team_candidate:{mae:10.14,n:532},
+      intervals:{coverage:.779,sample_count:5661}}},
+    prospective:{status:'not_ready',sample_count:0,game_count:0,minimum_games:20,minimum_samples:200}};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.goto('/');await page.getByRole('button',{name:'Performance',exact:true}).click();
+  const report=page.getByLabel('Historical model validation');
+  await expect(report).toContainText('77.9%');
+  await expect(report).toContainText('Historical reconstruction');
+  await expect(report).toContainText('0 / 20 games');
+  await expect(report).toContainText('0 / 200 outcomes');
+});
+
+test("player details show applied environment effects and empirical interval evidence",async({page})=>{
+  const response=structuredClone(dashboard);
+  response.games[0].forecast.predictions[0].components={game_environment:{expected_possessions:101.2,pace_factor:1.01,defense_factor:.98,context_factor:.993},
+    uncertainty:{calibration:{status:'calibrated',audit:{label:'empirical retrospective',sample_count:4024}}}};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/players/101',route=>route.fulfill({json:{player_id:'101',missing_reason:'Not synchronized.'}}));
+  await page.goto('/');await page.getByRole('button',{name:'Role Player',exact:false}).click();
+  const environment=page.getByLabel('Game environment');
+  await expect(environment).toContainText('101.2');
+  await expect(environment).toContainText('-0.7%');
+  await expect(page.getByLabel('Scoring interval evidence')).toContainText('empirical retrospective');
+});
+
 test("Refresh reloads newly available and corrected postgame evidence for the same game", async ({ page }) => {
   let response = { missing_reason: "Postgame capture is pending." };
   let requests = 0;

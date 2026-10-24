@@ -178,6 +178,8 @@ def save_run(db_path, snapshot, history, forecast, mode='live', scope='league'):
     creation strictly before every scheduled game. A supplied generated_at has
     no authority. Historical ``replay``/``demo`` runs remain visibly non-live.
     """
+    if mode=='live' and snapshot.get('research_reconstruction'):
+        raise ValueError('Research reconstruction cannot be saved as a live forecast')
     if mode not in ('live', 'replay', 'demo'):
         raise ValueError('mode must be live, replay, or demo')
     if mode == 'live' and scope != 'league':

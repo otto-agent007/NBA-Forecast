@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "artifact_sha256": "e25bec66bd5a9258eccb5a5de0e47afa0b84b3da1d698c25b8672910eee624b2",
+  "model_key": "383c0fe35b920832c7cea742450c8c70ba4a44f0fdcf688ec2770f05ae3ec8be",
+  "files": {
+    "source-manifest.json.gz": {
+      "sha256": "e5091357d5dde0537c2ff272dc8e28dcfeddb3b2778e3368a538ccd80ae5de5c",
+      "bytes": 1001
+    },
+    "artifact.json.gz": {
+      "sha256": "c9fda7d2dd3d8abfe252232e38670c004e468f186c4af529caae20c0e6f71c99",
+      "bytes": 238585
+    },
+    "report.json": {
+      "sha256": "00c4a8ed6799c2b8250756cb24b75b387fb01a228ce0d6182d229055c134c182",
+      "bytes": 31359
+    },
+    "team-games.json.gz": {
+      "sha256": "55df002b38b28684c1c47a85d39baec1efba36d7e7957abb253662aff1339825",
+      "bytes": 215104
+    },
+    "README.md": {
+      "sha256": "f6878d5ed2a8573e15166f69c3b3307edd41ee36df6405e3cb26ca10cb3d44f9",
+      "bytes": 1534
+    },
+    "model-upgrade-verification.json": {
+      "sha256": "6b57721019a18d7421e522e92bc079a16b386653fed521d566366892add931b7",
+      "bytes": 382104
+    },
+    "model-candidate-verification.json": {
+      "sha256": "4ed6ed66c692ee0138f98fe99dad29d39a1560f3f1e155a5b8c23fe98eb218d2",
+      "bytes": 5758
+    }
+  },
+  "local_raw_archive": {
+    "path": "/mnt/2TBHDD/NBA-Forecast/repo/data/operations/model-research/pace-defense-2026-10-23/verified-source-archive.tar.gz",
+    "sha256": "c9d33093997c6a77688803e0c383e7a9cc2a7397247857188fcd570ebcd3686c",
+    "bytes": 61339825
+  },
+  "recovery_scope": "Local same-disk source archive. No remote publication or off-disk backup.",
+  "source_player_history": "datasets/regular-season-expanded-2026-10-22/history.json.gz"
+}

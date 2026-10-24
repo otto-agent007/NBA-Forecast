@@ -1,5 +1,6 @@
 import React from "react";
 import { number, stamp } from "./data";
+import ModelValidation from "./ModelValidation";
 export default function Performance({ data }) {
   const report = data.performance,
     groups = report?.groups || [],
@@ -10,6 +11,7 @@ export default function Performance({ data }) {
         <h2>How the model is doing</h2>
         <p>Prospective results from predictions saved before tipoff.</p>
       </div>
+      <ModelValidation model={data.model_upgrade} />
       {!count ? (
         <div className="empty performance-empty">
           <span className="empty-score">—</span>
@@ -51,7 +53,7 @@ export default function Performance({ data }) {
             </div>
             <p>
               Includes out predictions; inspect status groups before
-              interpreting aggregate accuracy. Intervals remain heuristic.
+              interpreting aggregate accuracy. Interval methods and evidence differ by model version.
             </p>
             {g.metrics.per_stat && (
               <div className="table-scroll">

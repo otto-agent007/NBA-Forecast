@@ -18,6 +18,7 @@ from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check
 from .preflight import run_preflight,PREFLIGHT_VERSION
 from .validation import parse_time,validate_history,validate_inputs,_source
+from .enhancements import load_active,prepare
 
 
 def _now():return datetime.now(timezone.utc).isoformat()
@@ -151,11 +152,14 @@ def _tick(folder,history,report):
     report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
     jobs=[j for j in jobs if not j.get('waiting')]
     reviews={}
+    active_model,model_digest=load_active(folder,_now())
     for job in jobs:
         # Refresh evidence throughout the day, then every five minutes near tipoff.
         seconds=300 if job['stage']=='final' else 900
         slot=int(parse_time(_now()).timestamp())//seconds
-        job['key']+=f':model:{MODEL_VERSION}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
+        version=active_model['model_version'] if active_model else MODEL_VERSION
+        job['key']+=f':model:{version}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
+        if active_model:job['key']+=':configuration:'+active_model['model_key']+':artifact:'+model_digest
         prior_book=folder/'historical-priors.json'
         if prior_book.exists():job['key']+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
         roster_review=folder/'roster-reviews'/(job['game_id']+'.json')
@@ -207,6 +211,7 @@ def _tick(folder,history,report):
                 book=json.loads(prior_path.read_text());teams={game['home_team_id'],game['away_team_id']}
                 player_ids={p['player_id'] for p in roster['players'] if p['team_id'] in teams}
                 snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
+            if active_model:snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
             profiles=build_profiles(snapshot,usable)
             verification=run_preflight(snapshot,usable,profiles,folder)
             if verification['status']!='passed':
@@ -226,6 +231,11 @@ def _tick(folder,history,report):
         except Exception as exc:
             report['errors'].append(dict(task='forecast',game_id=job['game_id'],stage=job['stage'],error=f'{type(exc).__name__}: {exc}'))
     # Prioritize pregame deadlines over downloads and postgame reporting.
+    if active_model:
+        from .outcome_sync import sync_finished_games
+        synced=sync_finished_games(folder,schedule,history,_now());report['final_sync']=synced
+        report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
+        report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
     for game in schedule['games']:
         if game['status']!='final':continue
         path=cache/(game['game_id']+'.json')
@@ -260,6 +270,21 @@ def _tick(folder,history,report):
     atomic_json(statepath,state)
     atomic_json(folder/'performance.json',performance_report(db))
     atomic_json(folder/'benchmarks.json',benchmark_report(db))
+    if active_model:
+        from .prospective_calibration import fit_prospective
+        from .enhancements import install_artifact
+        assessed=fit_prospective(folder,active_model['model_key'],_now())
+        atomic_json(folder/'prospective-calibration-status.json',assessed)
+        report['prospective_calibration']={k:assessed.get(k) for k in ('status','sample_count','game_count','minimum_games','reason')}
+        report['errors'].extend(dict(task='prospective_calibration',detail=e) for e in assessed.get('collection_errors',[]))
+        if assessed['status']=='ready' and assessed.get('residual_evidence_sha256')!=(active_model.get('calibration') or {}).get('residual_evidence_sha256'):
+            updated=deepcopy(active_model);updated['calibration']=assessed;updated['known_at']=_now()
+            digest=install_artifact(folder,updated)
+            atomic_json(folder/'model-upgrade-active.json',dict(artifact_sha256=digest,activated_at=_now()))
+            active_model,model_digest=updated,digest
+        atomic_json(folder/'model-status.json',dict(model_version=active_model['model_version'],
+            model_key=active_model['model_key'],artifact_sha256=model_digest,known_at=active_model['known_at'],
+            validation=active_model.get('validation_report'),prospective=assessed,outcomes=report.get('final_sync')))
     if (folder/'roster.json').exists():
         try:
             from .player_sync import sync_player_data

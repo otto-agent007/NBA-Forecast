@@ -56,18 +56,18 @@ that game ends; they are not permanent player labels.
 5. Change one hypothesis at a time, add a regression test, and bump the model
    version whenever formulas/constants change. Judge new forecasts prospectively;
    do not tune and claim success on the same games. Preserve a simple baseline
-   for future challenger comparisons. No autonomous tuning is enabled.
+  for future challenger comparisons. Point-model parameter selection remains offline.
+  The versioned upgrade can refresh empirical intervals from matched prospective
+  residuals after its minimum sample requirements. See [model upgrade](model-upgrade.md).
 
-## Research backlog, deliberately outside this PR
+## Remaining research
 
-- Measured league-relative/opponent-adjusted possessions and shot profile effects.
-- Empirical minutes distributions and structured injury/lineup ingestion.
+- Detailed shot-location and defender matchup effects.
+- Empirical minutes distributions and prospective injury-allocation evaluation.
 - Rookie priors based on separately validated regular-season evidence.
 - Formal proper scoring rules and rolling-origin challenger comparisons once
   sufficient point-in-time data are available.
-- Assists, rebounds, threes and joint outcomes; calibrated distributions instead
-  of heuristic normal intervals; overtime and blowout scenarios.
-- Optional scheduled collection on a persistent host, with retries and alerts.
+- Joint outcome distributions, overtime and blowout scenarios.
 
-This PR starts the evidence and feedback loop. It does not claim a trained,
-calibrated production model or install a background process.
+The persistent runner and dashboard use the source validation and immutable
+forecast ledger described in [season operations](season-operations.md).

@@ -39,8 +39,8 @@ export default function Projections(props) {
       <PlayerTable {...props} title="Player projections" expanded />
       <p className="projection-disclaimer">
         PTS, REB, AST, 3PM, TO, STL and BLK use saved regular-season evidence.
-        Missing categories stay blank. Ranges are heuristic 80% scoring
-        intervals. Fantasy totals require a selected scoring system.
+        Missing categories stay blank. Nominal 80% scoring intervals carry their
+        calibration or heuristic evidence in player details. Fantasy totals require a selected scoring system.
       </p>
     </section>
   );

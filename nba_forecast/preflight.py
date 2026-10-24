@@ -14,9 +14,10 @@ from .validation import parse_time,validate_inputs
 from .availability import apply_no_injuries,needs_empty_report,report_current,record_availability_update,BASIS
 from .roster_review import apply_roster_reviews,resolution
 from .historical import verify_priors
+from .enhancements import verify_enhancements
 import json
 
-PREFLIGHT_VERSION='independent-inputs-4'
+PREFLIGHT_VERSION='independent-inputs-5'
 
 
 def validate_extraction(extraction,cutoff):
@@ -124,6 +125,8 @@ def run_preflight(snapshot,history,profiles,directory,*,cache_dir=None):
     phase='reference_unavailable'
     reference={}
     try:
+        phase='model_archive_unverified'
+        verify_enhancements(snapshot,directory)
         phase='injury_archive_unverified'
         verify_priors(snapshot,directory)
         verified=verify_extractions(snapshot,cache_dir or Path(directory)/'raw')

@@ -150,6 +150,30 @@ class EvidenceTickTests(unittest.TestCase):
         self.assertEqual(result['created_runs'],0)
         self.assertTrue(any(e['task']=='preflight' for e in result['errors']))
 
+    def test_active_artifact_is_saved_with_forecast_and_status_without_refitting_on_same_evidence(self):
+        from nba_forecast.enhancements import install_artifact
+        artifact=dict(model_version='regular-season-baseline-0.5.0',model_key='test',known_at='2026-10-21T15:00:00Z',
+            parameters={},team_games=[],context_model=None,calibration=None,excluded_history_game_ids=[],validation_report={'scope':'test'})
+        digest=install_artifact(self.folder,artifact)
+        pointer=self.folder/'model-upgrade-active.json'
+        pointer.write_text(json.dumps(dict(artifact_sha256=digest,activated_at=artifact['known_at'])))
+        assessment=dict(status='ready',model_key='test',training_cutoff=NOW,evidence_kind='prospective_saved_forecast',
+            residual_evidence_sha256='evidence',sample_count=200,game_count=20,errors=[])
+        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment):
+            first=run_tick(self.folder,[])
+            self.assertEqual(first['created_runs'],1,first['errors'])
+            saved=self.saved()[0]
+            self.assertEqual(saved['model_enhancements']['artifact_sha256'],digest)
+            upgraded=pointer.read_bytes()
+            status=json.loads((self.folder/'model-status.json').read_text())
+            self.assertNotEqual(status['artifact_sha256'],digest)
+            self.assertEqual(status['validation'],artifact['validation_report'])
+            second=run_tick(self.folder,[])
+            self.assertEqual(second['created_runs'],1,second['errors'])
+            self.assertEqual(pointer.read_bytes(),upgraded)
+            third=run_tick(self.folder,[])
+            self.assertEqual(third['created_runs'],0,third['errors'])
+
     def saved(self):
         with sqlite3.connect(self.folder/'forecast.sqlite') as conn:
             snapshot,history=conn.execute('SELECT snapshot_json,history_json FROM runs ORDER BY rowid DESC LIMIT 1').fetchone()

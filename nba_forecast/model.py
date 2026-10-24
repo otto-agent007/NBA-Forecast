@@ -1,4 +1,4 @@
-"""Auditable, deterministic v0.3 scoring baseline (standard library only).
+"""Auditable deterministic scoring baseline and versioned enhancement dispatch.
 
 This is an evidence-only baseline, not a claim of betting edge. ``forecast``
 expects the validated contract in docs/design.md but independently excludes
@@ -294,6 +294,13 @@ def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance
 
 
 def forecast(snapshot, history):
+    if snapshot.get('model_enhancements'):
+        from .candidate import forecast_candidate
+        return forecast_candidate(snapshot,history)
+    return _baseline_forecast(snapshot,history)
+
+
+def _baseline_forecast(snapshot, history):
     """Return every roster player with auditable projections or explicit abstention.
 
     No I/O, randomness, wall-clock reads, or input mutation. Input validation is
