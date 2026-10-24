@@ -19,6 +19,8 @@ from .injury_capture import capture_daily,record_check
 from .preflight import run_preflight,PREFLIGHT_VERSION
 from .validation import parse_time,validate_history,validate_inputs,_source
 from .enhancements import load_active,prepare
+from .boxscore_model import VERSION as BOX_MODEL_VERSION
+from .shot_profiles import prepare_shot_profiles
 
 
 def _now():return datetime.now(timezone.utc).isoformat()
@@ -148,6 +150,12 @@ def _tick(folder,history,report):
             key=(row['game_id'],row['player_id']);old=combined.get(key)
             if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):combined[key]=row
     history=list(combined.values());validate_history(history)
+    prior_path=folder/'historical-priors.json'
+    if prior_path.exists():
+        book=json.loads(prior_path.read_text())
+        if book.get('boxscore_fields_version')!=1:
+            from .historical import expand_prior_fields
+            atomic_json(prior_path,expand_prior_fields(book,folder))
     jobs=due_jobs(schedule,_now(),include_waiting=True);by_id={g['game_id']:g for g in schedule['games']}
     report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
     jobs=[j for j in jobs if not j.get('waiting')]
@@ -159,6 +167,7 @@ def _tick(folder,history,report):
         slot=int(parse_time(_now()).timestamp())//seconds
         version=active_model['model_version'] if active_model else MODEL_VERSION
         job['key']+=f':model:{version}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
+        job['key']+=':boxscore:'+BOX_MODEL_VERSION
         if active_model:job['key']+=':configuration:'+active_model['model_key']+':artifact:'+model_digest
         prior_book=folder/'historical-priors.json'
         if prior_book.exists():job['key']+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
@@ -212,6 +221,7 @@ def _tick(folder,history,report):
                 player_ids={p['player_id'] for p in roster['players'] if p['team_id'] in teams}
                 snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
             if active_model:snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
+            snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable)
             profiles=build_profiles(snapshot,usable)
             verification=run_preflight(snapshot,usable,profiles,folder)
             if verification['status']!='passed':
@@ -245,6 +255,14 @@ def _tick(folder,history,report):
             rows=normalize_boxscore(payload,url,_now());atomic_json(path,rows)
         except Exception as exc:
             report['errors'].append(dict(task='final_boxscore',game_id=game['game_id'],error=f'{type(exc).__name__}: {exc}'))
+    # Complete/revise player boxes before evaluating the frozen forecasts.
+    if (folder/'roster.json').exists():
+        try:
+            from .player_sync import sync_player_data
+            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=16)
+            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
+        except Exception as exc:
+            report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
     runs=ledger_runs(db)
     for run in runs:
         if run['mode']!='live':continue
@@ -287,14 +305,11 @@ def _tick(folder,history,report):
             validation=active_model.get('validation_report'),prospective=assessed,outcomes=report.get('final_sync')))
     if (folder/'roster.json').exists():
         try:
-            from .player_sync import sync_player_data
-            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=2)
-            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
             from .postgame import build_postgames
             report['postgame']=build_postgames(folder)
             report['warnings'].extend(dict(task='postgame',**e) for e in report['postgame']['errors'])
         except Exception as exc:
-            report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+            report['errors'].append(dict(task='postgame',error=f'{type(exc).__name__}: {exc}'))
     from .daily_review import build_daily_reviews
     report['daily_review']=build_daily_reviews(folder,_now())
     report['errors'].extend(dict(task='daily_review',**e) for e in report['daily_review']['errors'])

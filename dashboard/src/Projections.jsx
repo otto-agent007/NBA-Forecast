@@ -12,11 +12,11 @@ export default function Projections(props) {
           <span className="eyebrow">YOUR DAILY PROJECTION BOARD</span>
           <h2>The whole slate. Every player.</h2>
           <p>
-            Compare scoring opportunities and open a player for the evidence
+            Compare full projected boxscores and open a player for the evidence
             behind their outlook.
           </p>
         </div>
-        <span className="scoring-tag">NBA points · Not fantasy points</span>
+        <span className="scoring-tag">Full NBA boxscore</span>
       </div>
       <div className="projection-summary">
         <div>
@@ -38,9 +38,10 @@ export default function Projections(props) {
       </div>
       <PlayerTable {...props} title="Player projections" expanded />
       <p className="projection-disclaimer">
-        PTS, REB, AST, 3PM, TO, STL and BLK use saved regular-season evidence.
-        Missing categories stay blank. Nominal 80% scoring intervals carry their
-        calibration or heuristic evidence in player details. Fantasy totals require a selected scoring system.
+        Boxscore projections use saved regular-season evidence. Unsupported
+        categories stay blank. MIN:SS represents estimated playing time.
+        Nominal 80% scoring intervals carry their calibration or heuristic
+        evidence in player details.
       </p>
     </section>
   );

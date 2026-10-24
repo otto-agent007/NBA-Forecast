@@ -78,6 +78,24 @@ class ESPNActualTests(unittest.TestCase):
         self.assertEqual(row["minutes"], 31.5)
         self.assertEqual(row["minutes_precision"], "seconds")
 
+    def test_full_box_optional_fields_signed_plus_minus_and_derived_percentages(self):
+        for box in self.summary['boxscore']['players']:
+            group = box['statistics'][0]
+            group['keys'] = group['keys'] + ['defensiveRebounds', 'fouls', 'plusMinus']
+            group['athletes'][0]['stats'].extend(['3', '4', '-12'])
+        row = self.normalize()[0]
+        self.assertEqual([row.get(k) for k in ('oreb','dreb','pf','plus_minus')], [2,3,4,-12])
+        self.assertAlmostEqual(row.get('fg_pct'), 3/7)
+        self.assertAlmostEqual(row.get('fg3_pct'), 1/3)
+        self.assertEqual(row.get('ft_pct'), 1)
+
+    def test_missing_full_box_optional_fields_are_null_and_dnp_can_be_structural_zero(self):
+        rows = {r['player_id']: r for r in self.normalize()}
+        for key in ('dreb','pf','plus_minus'):
+            self.assertIn(key, rows['10'])
+            self.assertIsNone(rows['10'][key])
+            self.assertEqual(rows['30'][key], 0)
+
     def test_status_matchup_date_season_or_event_mismatch_fails(self):
         for change in ["final", "team", "side", "date", "season", "event"]:
             with self.subTest(change=change):

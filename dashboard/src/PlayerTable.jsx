@@ -1,6 +1,7 @@
 import PlayerPortrait from "./PlayerPortrait";
 import React, { useMemo, useState } from "react";
 import { filterPlayers, groupPlayers, number, statusLabel } from "./data";
+import { BOX_SCORE_COLUMNS, boxScoreTitle, boxScoreValue } from "./boxscore";
 import { Icon, TeamMark } from "./Icons";
 export function Status({ player }) {
   return (
@@ -31,7 +32,7 @@ export default function PlayerTable({
     [players, query, filter, sort, teamId],
   );
   const teams = useMemo(() => groupPlayers(rows, players), [rows, players]);
-  const columns = expanded ? 14 : 6;
+  const columns = BOX_SCORE_COLUMNS.length + 3 + (expanded ? 2 : 0);
   return (
     <section className="player-section">
       <div className="section-heading">
@@ -72,57 +73,45 @@ export default function PlayerTable({
           />
         </label>
       </div>
-      <div className="table-scroll">
-        <table>
+      <p className="boxscore-hint">Projected boxscore · Scroll for shooting splits and all stats. MIN:SS is an estimate.</p>
+      <div className="table-scroll boxscore-scroll" role="region" aria-label={`${title} scroll area`} tabIndex={0}>
+        <table className="boxscore-table" aria-label={`${title} full boxscore`}>
           <thead>
             <tr>
-              <th scope="col">Player</th>
+              <th scope="col" className="player-cell">Player</th>
               {expanded && <th scope="col">Matchup</th>}
               <th scope="col">Status</th>
               <th scope="col" className="numeric">Season PPG</th>
-              <th scope="col" className="numeric">
-                Min
-              </th>
-              <th scope="col" className="numeric">
-                FGA
-              </th>
-              <th scope="col" className="numeric">
-                <button
-                  className="sort"
-                  aria-label="Sort by projected points"
-                  aria-pressed={sort === "points"}
-                  onClick={() => setSort(sort === "points" ? "rotation" : "points")}
-                >
-                  Points {sort === "points" ? "↓" : ""}
-                </button>
-              </th>
+              {BOX_SCORE_COLUMNS.map(column => <th key={column.id} scope="col" className="numeric" title={column.description} aria-label={column.label}>
+                {column.id === "pts" ? <button
+                    className="sort"
+                    aria-label="Sort by projected points"
+                    aria-pressed={sort === "points"}
+                    onClick={() => setSort(sort === "points" ? "rotation" : "points")}
+                  >PTS {sort === "points" ? "↓" : ""}</button>
+                  : column.label}
+              </th>)}
               {expanded && (
                 <th scope="col" className="numeric">
                   80% range
                 </th>
               )}
-              {expanded &&
-                ["REB", "AST", "3PM", "TO", "STL", "BLK"].map((k) => (
-                  <th key={k} scope="col" className="numeric">
-                    {k}
-                  </th>
-                ))}
             </tr>
           </thead>
           {teams.map((team) => (
           <tbody key={team.team_id} data-team-id={team.team_id}>
             <tr className="team-heading"><th colSpan={columns} scope="rowgroup">
-              <TeamMark id={team.team_id} code={team.team_code} />
-              <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players · Projected five, unconfirmed</span>
+              <div className="team-heading-content"><TeamMark id={team.team_id} code={team.team_code} />
+              <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players · Projected five, unconfirmed</span></div>
             </th></tr>
-            {team.unavailable > 0 && <tr className="coverage-warning"><td colSpan={columns}>Availability unresolved for {team.unavailable} players in this saved forecast. Unsupported forecasts are withheld; captured season averages remain visible.</td></tr>}
-            {team.unfilled_slots > 0 && !query.trim() && filter === "all" && <tr className="coverage-warning"><td colSpan={columns}>{team.unfilled_slots} of 5 starting slots await sufficient evidence. No lineup has been confirmed.</td></tr>}
+            {team.unavailable > 0 && <tr className="coverage-warning"><td colSpan={columns}><span className="boxscore-row-note">Availability unresolved for {team.unavailable} players in this saved forecast. Unsupported forecasts are withheld; captured season averages remain visible.</span></td></tr>}
+            {team.unfilled_slots > 0 && !query.trim() && filter === "all" && <tr className="coverage-warning"><td colSpan={columns}><span className="boxscore-row-note">{team.unfilled_slots} of 5 starting slots await sufficient evidence. No lineup has been confirmed.</span></td></tr>}
             {team.groups.map((group) => (
             <React.Fragment key={group.key}>
-            <tr className="role-heading"><th colSpan={columns} scope="rowgroup">{group.label}</th></tr>
+            <tr className="role-heading"><th colSpan={columns} scope="rowgroup"><span className="boxscore-row-note">{group.label}</span></th></tr>
             {group.players.map((p) => (
               <tr key={p.player_id} className="player-row" data-role={group.key}>
-                <td>
+                <td className="player-cell">
                   <button className="player-button" onClick={() => onSelect(p)}>
                     <PlayerPortrait key={p.player_id} player={p} />
                     <span>
@@ -143,13 +132,11 @@ export default function PlayerTable({
                   <Status player={p} />
                 </td>
                 <td className="numeric observed-ppg" title={p.observed_stats ? `${p.observed_stats.season} · ${p.observed_stats.games} captured games · Observed as of ${p.observed_stats.as_of || "saved capture"}; not a game forecast` : "No captured season statistics"}>{number(p.observed_stats?.points_average)}</td>
-                <td className="numeric">{number(p.expected_minutes)}</td>
-                <td className="numeric">{number(p.expected_fga)}</td>
-                <td
-                  className={`numeric points ${p.status === "projected" ? "supported" : ""}`}
-                >
-                  {number(p.points_mean)}
-                </td>
+                {BOX_SCORE_COLUMNS.map(column => <td key={column.id} data-stat={column.id}
+                  className={`numeric ${column.id === "pts" ? `points ${p.status === "projected" ? "supported" : ""}` : ""}`}
+                  title={boxScoreTitle(p, column)}>
+                  {boxScoreValue(p, column)}
+                </td>)}
                 {expanded && (
                   <td className="numeric range">
                     {p.status === "projected"
@@ -157,19 +144,6 @@ export default function PlayerTable({
                       : "—"}
                   </td>
                 )}
-                {expanded &&
-                  [
-                    "expected_reb",
-                    "expected_ast",
-                    "expected_fg3m",
-                    "expected_tov",
-                    "expected_stl",
-                    "expected_blk",
-                  ].map((k) => (
-                    <td key={k} className="numeric">
-                      {number(p[k])}
-                    </td>
-                  ))}
               </tr>
             ))}
             </React.Fragment>
@@ -196,7 +170,8 @@ export default function PlayerTable({
       <div className="table-note">
         <Icon name="info" />
         <span>
-          Dashes mean unsupported estimates. Conditional projections use a
+          Dashes mean missing estimates or an undefined shooting percentage.
+          Shooting percentages are undefined with no attempts. Conditional projections use a
           verified report not-listed assumption; participation is not confirmed.
           {" "}Each team has five projected starting slots, selected before filters.
           Upcoming lineups remain unconfirmed. Season PPG is an observed average,

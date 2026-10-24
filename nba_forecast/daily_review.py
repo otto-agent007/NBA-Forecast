@@ -14,7 +14,7 @@ from .validation import parse_time,validate_history
 
 VERSION='daily-review-1.0'
 PACIFIC=ZoneInfo('America/Los_Angeles')
-STATS=dict(pts='points_mean',minutes='expected_minutes',fga='expected_fga',fta='expected_fta',**STAT_PROJECTIONS)
+STATS={'pts':'points_mean','minutes':'expected_minutes',**STAT_PROJECTIONS}
 
 
 def _read(path,default=None):

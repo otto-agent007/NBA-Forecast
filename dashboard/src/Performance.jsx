@@ -76,10 +76,10 @@ export default function Performance({ data,date,onGame,onSelect }) {
                   <tbody>
                     {Object.entries(g.metrics.per_stat).map(([k, v]) => (
                       <tr key={k}>
-                        <td>{k.toUpperCase()}</td>
+                        <td>{{fg_pct:"FG%",fg3_pct:"3P%",ft_pct:"FT%",plus_minus:"+/-"}[k] || k.toUpperCase()}</td>
                         <td>{v.count}</td>
-                        <td>{number(v.mae)}</td>
-                        <td>{number(v.mean_signed_error)}</td>
+                        <td>{number(k.endsWith("_pct") && v.mae != null ? v.mae * 100 : v.mae)}{k.endsWith("_pct") && v.mae != null ? " pp" : ""}</td>
+                        <td>{number(k.endsWith("_pct") && v.mean_signed_error != null ? v.mean_signed_error * 100 : v.mean_signed_error)}{k.endsWith("_pct") && v.mean_signed_error != null ? " pp" : ""}</td>
                       </tr>
                     ))}
                   </tbody>

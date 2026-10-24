@@ -28,6 +28,11 @@ class HistoricalPriorTests(unittest.TestCase):
                 roster_source=archive(roster,Path('references/raw'),'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/1/roster'))
             s=dict(season='2026-27',as_of='2026-10-23T22:30:00Z',roster={'players':[{'player_id':'1','team_id':'T','name':'Test Player'}]},historical_priors={'players':[item]})
             verify_priors(s,root)
+            s['roster']['players'][0]['name']='Tést Player'
+            verify_priors(s,root)  # Same exact NBA ID and normalized archived name.
+            s['roster']['players'][0]['name']='Different Player'
+            with self.assertRaises(ValueError):verify_priors(s,root)
+            s['roster']['players'][0]['name']='Test Player'
             item['team_id']='PREVIOUS_TEAM'
             verify_priors(s,root)  # A stable player identity carries career history across trades.
             counts['PTS']=201

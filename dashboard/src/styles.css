@@ -424,6 +424,97 @@ tbody tr:hover {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+.boxscore-hint {
+  margin: 0 0 10px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.boxscore-scroll {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+  container-type: inline-size;
+}
+.boxscore-scroll:focus-visible {
+  outline: 2px solid #1766cf;
+  outline-offset: 3px;
+}
+.boxscore-table th,
+.boxscore-table td {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.boxscore-table .player-cell,
+.boxscore-table .game-date-cell {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  box-shadow: 2px 0 0 #e1e7f0;
+}
+.boxscore-table th.player-cell,
+.boxscore-table th.game-date-cell {
+  background: #f0f4f9;
+  z-index: 3;
+}
+.boxscore-table .player-cell {
+  min-width: 220px;
+  max-width: 260px;
+}
+.boxscore-table .player-row:hover .player-cell {
+  background: #f7faff;
+}
+.boxscore-table .team-heading-content {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: calc(100cqw - 32px);
+  position: sticky;
+  left: 16px;
+  white-space: normal;
+  gap: 6px;
+}
+.boxscore-table .team-heading-content h3 {
+  margin: 0;
+}
+.boxscore-table .team-heading-content > span {
+  margin-left: 6px;
+}
+.boxscore-table .boxscore-row-note {
+  display: block;
+  position: sticky;
+  left: 16px;
+  width: max-content;
+  max-width: calc(100cqw - 32px);
+  white-space: normal;
+}
+.single-boxscore td {
+  font-size: 14px;
+  font-weight: 600;
+}
+.profile-columns > section {
+  min-width: 0;
+}
+.profile-forecast {
+  grid-column: 1 / -1;
+}
+@media (max-width: 650px) {
+  .boxscore-table .player-cell {
+    min-width: 160px;
+    max-width: 180px;
+  }
+  .boxscore-table .player-button {
+    gap: 8px;
+  }
+  .boxscore-table .player-button > span {
+    white-space: normal;
+  }
+  .boxscore-table .team-heading-content > span {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
 .player-button {
   display: flex;
   align-items: center;

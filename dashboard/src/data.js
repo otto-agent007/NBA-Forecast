@@ -77,7 +77,7 @@ export function gamePlayers(data, game) {
     (game.forecast?.review_queue || []).map((p) => p.player_id),
   );
   const members = data.players.filter((p) =>
-    [game.home_team_id, game.away_team_id].includes(p.team_id),
+    p.roster_membership !== "historical_appearance" && [game.home_team_id, game.away_team_id].includes(p.team_id),
   );
   const roster = new Map(members.map((p) => [p.player_id, p]));
   for (const p of predictions.values()) roster.set(p.player_id, { ...roster.get(p.player_id), ...p });

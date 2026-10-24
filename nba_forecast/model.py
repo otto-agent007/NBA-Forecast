@@ -296,8 +296,12 @@ def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance
 def forecast(snapshot, history):
     if snapshot.get('model_enhancements'):
         from .candidate import forecast_candidate
-        return forecast_candidate(snapshot,history)
-    return _baseline_forecast(snapshot,history)
+        result = forecast_candidate(snapshot,history)
+    else:
+        result = _baseline_forecast(snapshot,history)
+    from .boxscore_model import extend_boxscore
+    from .shot_profiles import apply_shot_profiles
+    return apply_shot_profiles(extend_boxscore(result,snapshot,history),snapshot)
 
 
 def _baseline_forecast(snapshot, history):

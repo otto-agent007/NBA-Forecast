@@ -71,7 +71,7 @@ def dashboard_data(directory):
                         p['rotation_role']=player_roles.get(p['player_id'],{}).get('rotation_role')
                         p['projected_starter']=p['player_id'] in lineups.get(p['team_id'],{}).get('player_ids',[])
                     view=dict(team_roles=[t for t in roles.get('teams',[]) if t['team_id'] in (game['home_team_id'],game['away_team_id'])],run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
-                        stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],predictions=predictions,
+                        stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],boxscore_model_version=forecast.get('boxscore_model_version'),predictions=predictions,
                         totals=game_totals(game,predictions,lineups=snapshot.get('preflight',{}).get('lineups')),
                         saved_totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==game['game_id']),None),
                         review_queue=[q for q in forecast['review_queue'] if q['game_id']==game['game_id']],
@@ -91,11 +91,15 @@ def dashboard_data(directory):
     player_index=read_optional(folder/'players/index.json',None)
     rotations=(player_index or {}).get('rotation_roles',{})
     summaries=(player_index or {}).get('player_summaries',{})
-    players=[{**{k:p[k] for k in ('player_id','name','team_id')},'team_code':team_codes.get(p['team_id']),
+    current_ids={p['player_id'] for p in players}
+    for pid,summary in summaries.items():
+        if pid not in current_ids and summary.get('roster_membership')=='historical_appearance' and summary.get('name') and summary.get('team_id'):
+            players.append(dict(player_id=pid,name=summary['name'],team_id=summary['team_id'],roster_membership='historical_appearance'))
+    players=[{**{k:p[k] for k in ('player_id','name','team_id')},'roster_membership':p.get('roster_membership','current'),'team_code':team_codes.get(p['team_id']),
               'team_name':team_names.get(p['team_id']),'rotation_role':rotations.get(p['player_id']),
               'observed_stats':summaries.get(p['player_id'])} for p in players]
-    pool_lineups=projected_lineups(players,players)
-    for p in players:p['projected_starter']=p['player_id'] in pool_lineups[p['team_id']]['player_ids']
+    pool_lineups=projected_lineups([p for p in players if p['roster_membership']!='historical_appearance'],players)
+    for p in players:p['projected_starter']=p['player_id'] in pool_lineups.get(p['team_id'],{}).get('player_ids',[])
     model_status=read_optional(folder/'model-status.json',None)
     if model_status:model_status['prospective']=read_optional(folder/'prospective-calibration-status.json',None)
     reviews={p.stem:read_optional(p,None) for p in (folder/'daily-reviews').glob('????-??-??.json')}

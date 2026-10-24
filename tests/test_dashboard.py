@@ -8,6 +8,16 @@ from nba_forecast.store import save_run
 from tests.test_store import inputs,NOW
 
 class DashboardTests(unittest.TestCase):
+    def test_played_players_absent_from_current_roster_remain_discoverable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);(root/'players').mkdir()
+            (root/'roster.json').write_text(json.dumps(dict(players=[])))
+            (root/'players/index.json').write_text(json.dumps(dict(player_summaries={'99':dict(name='Past Player',team_id='A',roster_membership='historical_appearance',points_average=5)})))
+            data=dashboard_data(root)
+            self.assertEqual([p['player_id'] for p in data['players']],['99'])
+            self.assertFalse(data['players'][0]['projected_starter'])
+            self.assertEqual(data['players'][0]['roster_membership'],'historical_appearance')
+
     def test_audit_and_observed_stats_preserve_provenance_and_rescheduled_audit_is_hidden(self):
         s,_,_=inputs()
         with tempfile.TemporaryDirectory() as d:

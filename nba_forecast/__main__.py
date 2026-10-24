@@ -125,7 +125,7 @@ def _parser():
     sync=sub.add_parser('sync-players')
     sync.add_argument('--directory',required=True)
     sync.add_argument('--history',nargs='*',default=[])
-    sync.add_argument('--max-shot-games',type=int,default=2)
+    sync.add_argument('--max-shot-games',type=int,default=16)
     sync.add_argument('--output')
     return parser
 

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from .injury_parser import normalized
 from .reference import BASE, code, fetch_reference
-from .validation import COUNTS, parse_time, validate_history
+from .validation import COUNTS, parse_time, shooting_percentages, validate_history
 
 class ActualsPending(ValueError):
     """The independently matched game has not published explicit final status."""
@@ -37,17 +37,28 @@ _PAIRS = {
     "freeThrowsMade-freeThrowsAttempted": ("ftm", "fta"),
 }
 _OPTIONAL = {"rebounds": "reb", "assists": "ast", "steals": "stl",
-             "blocks": "blk", "offensiveRebounds": "oreb"}
+             "blocks": "blk", "offensiveRebounds": "oreb",
+             "defensiveRebounds": "dreb", "fouls": "pf"}
+_PLAYER_OPTIONAL = {**_OPTIONAL, "plusMinus": "plus_minus"}
 _LABELS = {"MIN": "minutes", "PTS": "points", "FG": "fieldGoalsMade-fieldGoalsAttempted",
            "3PT": "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
            "FT": "freeThrowsMade-freeThrowsAttempted", "TO": "turnovers",
            "REB": "rebounds", "AST": "assists", "STL": "steals",
-           "BLK": "blocks", "OREB": "offensiveRebounds"}
+           "BLK": "blocks", "OREB": "offensiveRebounds", "DREB": "defensiveRebounds",
+           "PF": "fouls", "+/-": "plusMinus"}
 
 
 def _count(value):
     if isinstance(value, bool) or not isinstance(value, (str, int)) or not re.fullmatch(r"\d+", str(value)):
         raise ValueError("missing or invalid nonnegative count")
+    return int(value)
+
+
+def _optional_count(source, value):
+    if source != "plusMinus":
+        return _count(value)
+    if isinstance(value, bool) or not isinstance(value, (str, int)) or not re.fullmatch(r"[+-]?\d+", str(value)):
+        raise ValueError("missing or invalid signed plus-minus")
     return int(value)
 
 
@@ -321,11 +332,11 @@ def _normalize(summary, game, roster, metadata, history, name_aliases):
                     minutes, _ = _minutes(stats["minutes"])
                     if minutes or any(counts.values()):
                         raise ValueError("ESPN DNP contradicts source statistics")
-                    for source in _OPTIONAL:
-                        if source in stats and _count(stats[source]) != 0:
+                    for source in _PLAYER_OPTIONAL:
+                        if source in stats and _optional_count(source, stats[source]) != 0:
                             raise ValueError("ESPN DNP contradicts optional statistics")
                 row.update({field: 0 for field in COUNTS})
-                row.update({field: 0 for field in _OPTIONAL.values()})
+                row.update({field: 0 for field in _PLAYER_OPTIONAL.values()})
                 row.update(minutes=0, minutes_precision="not_played", minutes_source_value=None,
                            counts_origin="structural zero from explicit didNotPlay=true",
                            participation_reason=entry.get("reason"))
@@ -351,16 +362,17 @@ def _normalize(summary, game, roster, metadata, history, name_aliases):
                     minutes, precision = _minutes(stats["minutes"])
                 row.update(minutes=minutes, minutes_precision=precision,
                            minutes_source_value=stats["minutes"])
-                for source, field in _OPTIONAL.items():
+                for source, field in _PLAYER_OPTIONAL.items():
                     try:
-                        row[field] = _count(stats[source])
+                        row[field] = _optional_count(source, stats[source])
                     except (KeyError, TypeError, ValueError) as exc:
                         row[field] = None
                         row["optional_stat_errors"][field] = str(exc)
-                if resolved_dnp and any(row[field] for field in _OPTIONAL.values()):
+                if resolved_dnp and any(row[field] for field in _PLAYER_OPTIONAL.values()):
                     raise ValueError("ESPN inactive DNP resolution contradicts optional statistics")
                 if row["oreb"] is not None and row["reb"] is not None and row["oreb"] > row["reb"]:
                     raise ValueError("ESPN offensive rebounds exceed total rebounds")
+            row.update(shooting_percentages(row))
             team_rows.append(row)
         if not team_rows or not any(row["status"] == "played" for row in team_rows):
             raise ValueError("ESPN final player boxscore empty")

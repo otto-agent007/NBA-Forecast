@@ -1,5 +1,9 @@
 # Forecast model 0.5.0
 
+The separately versioned [full-box extension](full-boxscore.md) adds coherent
+shooting lines, rebound splits, fouls, plus/minus and archived shot profiles while
+preserving this point model and its calibration.
+
 The player model retains multi-season scoring priors, current-team role evidence,
 five projected starters per team, availability checks and immutable checkpoints.
 The optional hash-bound enhancement artifact adds four mechanisms:

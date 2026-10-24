@@ -15,6 +15,7 @@ import uuid
 
 from .validation import parse_time, validate_history, validate_inputs
 from .totals import game_totals
+from .boxscore_model import validate_boxscore, PERCENTAGES, VERSION as BOX_MODEL_VERSION
 
 PROJECTION_FIELDS = (
     'expected_minutes', 'expected_fga', 'expected_fta', 'expected_tov',
@@ -24,6 +25,7 @@ PROJECTION_FIELDS = (
 OPTIONAL_PROJECTION_FIELDS = ('expected_reb', 'expected_ast', 'expected_fg3m', 'expected_stl', 'expected_blk')
 STAT_PROJECTIONS = {'reb': 'expected_reb', 'ast': 'expected_ast', 'fg3m': 'expected_fg3m',
                     'stl': 'expected_stl', 'blk': 'expected_blk', 'tov': 'expected_tov'}
+STAT_PROJECTIONS.update({k:'expected_'+k for k in ('fgm','fga','fg3a','ftm','fta','oreb','dreb','pf','plus_minus',*PERCENTAGES)})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -109,6 +111,10 @@ def _validate_forecast(snapshot, forecast):
         seen = set()
         for row in rows:
             player_id = row['player_id']
+            if forecast.get('boxscore_model_version') and (forecast['boxscore_model_version']!=BOX_MODEL_VERSION or row.get('boxscore_model_version')!=forecast['boxscore_model_version']):
+                raise ValueError('Full-box model versions disagree')
+            if row.get('boxscore_model_version') and not forecast.get('boxscore_model_version'):
+                raise ValueError('Forecast lacks its full-box model version')
             if player_id not in roster or player_id in seen:
                 raise ValueError('forecast contains duplicate or unknown player')
             seen.add(player_id)
@@ -155,6 +161,7 @@ def _validate_forecast(snapshot, forecast):
                 if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
                                           or not math.isfinite(value) or value < 0):
                     raise ValueError('optional projections must be finite nonnegative numbers or null')
+            validate_boxscore(row)
             if status in ('projected', 'out'):
                 if not row['points_lower80'] <= row['points_mean'] <= row['points_upper80']:
                     raise ValueError('forecast interval must contain its mean')
@@ -296,9 +303,13 @@ def _report(run, forecast, actuals, revision, evaluated_at):
         stat_errors, stat_feedback = {}, {}
         for stat, field in STAT_PROJECTIONS.items():
             predicted, actual = prediction.get(field), observed.get(stat)
+            if stat in PERCENTAGES and actual is None:
+                made,attempted=PERCENTAGES[stat]
+                if observed.get(attempted) and observed.get(made) is not None:
+                    actual=observed[made]/observed[attempted]
             error = predicted - actual if predicted is not None and actual is not None else None
             stat_errors[stat] = error
-            rate = predicted / predicted_minutes if predicted is not None and predicted_minutes > 0 else None
+            rate = predicted / predicted_minutes if predicted is not None and predicted_minutes > 0 and stat not in PERCENTAGES else None
             stat_feedback[stat] = {
                 'predicted': predicted, 'actual': actual, 'error': error,
                 'minutes_component': (predicted_minutes - minutes) * rate if rate is not None and error is not None else None,
@@ -323,7 +334,8 @@ def _report(run, forecast, actuals, revision, evaluated_at):
     return {
         'run_id': run['run_id'], 'revision': revision, 'evaluated_at': evaluated_at,
         'created_at': run['created_at'], 'as_of': run['as_of'], 'mode': run['mode'],
-        'scope': run['scope'], 'model_version': forecast['model_version'], 'live_eligible': live,
+        'scope': run['scope'], 'model_version': forecast['model_version'],
+        'boxscore_model_version':forecast.get('boxscore_model_version'), 'live_eligible': live,
         'evaluation_label': 'LIVE — per-run prospective results' if live else 'NON-LIVE — replay/demo results',
         'signed_error_convention': 'forecast minus actual; positive means overprediction',
         'aggregation_policy': 'Per-run only. Do not select favorable reruns after outcomes are known.',

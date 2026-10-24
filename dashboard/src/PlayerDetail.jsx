@@ -5,16 +5,8 @@ import { Icon, TeamMark } from "./Icons";
 import { Status } from "./PlayerTable";
 import { dateKey, number, safeSource, stamp } from "./data";
 import ShotChart from "./ShotChart";
-const columns = [
-  ["pts", "PTS"],
-  ["reb", "REB"],
-  ["ast", "AST"],
-  ["stl", "STL"],
-  ["blk", "BLK"],
-  ["tov", "TO"],
-  ["fg3m", "3PM"],
-  ["minutes", "MIN"],
-];
+import BoxScoreTable from "./BoxScoreTable";
+import { BOX_SCORE_COLUMNS, averageBoxScore, boxScoreTitle, boxScoreValue } from "./boxscore";
 export default function PlayerDetail({ player, onClose }) {
   const ref = useRef(null),
     [profile, setProfile] = useState(null),
@@ -50,6 +42,7 @@ export default function PlayerDetail({ player, onClose }) {
   }, [player.player_id]);
   const source = safeSource(player.status_source_url),
     c = player.components || {},
+    shotProfile = player.modeled_shot_profile,
     summary = profile?.[season],
     recent = profile?.recent_games || [];
   return (
@@ -136,56 +129,33 @@ export default function PlayerDetail({ player, onClose }) {
               DNPs excluded from averages. Coverage reflects downloaded final
               boxscores.
             </p>
-            <div className="profile-stat-grid">
-              {columns.map(([field, label]) => (
-                <div key={field}>
-                  <span>{label}</span>
-                  <strong>{number(summary?.averages?.[field])}</strong>
-                  <small>
-                    {summary?.coverage?.[field]?.available_games ?? 0} games
-                  </small>
-                </div>
-              ))}
-            </div>
-            <div className="shooting-splits">
-              {[
-                ["fg_pct", "FG%"],
-                ["fg3_pct", "3P%"],
-                ["ft_pct", "FT%"],
-              ].map(([k, v]) => (
-                <span key={k}>
-                  {v} <b>{number(summary?.percentages?.[k])}</b>
-                </span>
-              ))}
-            </div>
+            <BoxScoreTable row={averageBoxScore(summary)} mode="average" label="Regular-season averages" coverage={summary?.coverage} />
+            <p className="tiny">Scroll for the full boxscore. Category sample sizes are in each value’s tooltip.</p>
             <RecentForm profile={profile} />
             <div className="profile-columns">
-              <section>
+              <section className="profile-forecast">
                 <h3>Next-game projection</h3>
                 <p className="projection-matchup">
                   {player.matchup || "No matchup selected"}
                 </p>
                 <p className="reason">{player.reason}</p>
-                <div className="detail-metrics">
-                  {[
-                    ["MIN", player.expected_minutes],
-                    ["PTS", player.points_mean],
-                    ["FGA", player.expected_fga],
-                    ["REB", player.expected_reb],
-                    ["AST", player.expected_ast],
-                    ["3PM", player.expected_fg3m],
-                  ].map(([label, value]) => (
-                    <div key={label}>
-                      <span>{label}</span>
-                      <strong>{number(value)}</strong>
-                    </div>
-                  ))}
-                </div>
+                <BoxScoreTable row={player} label="Next-game projected boxscore" />
                 <p className="tiny">
+                  MIN:SS is estimated playing time. {" "}
                   {player.status === "projected"
                     ? `${number(player.points_lower80)}–${number(player.points_upper80)} points: nominal 80% range; ${c.uncertainty?.calibration?.status === 'calibrated' ? c.uncertainty.calibration.audit.label : 'heuristic, not yet calibrated'}.`
                     : "A numeric forecast requires supported availability and role evidence."}
                 </p>
+                {player.status === "projected" && <p className="tiny" aria-label="Boxscore estimate evidence">
+                  Other boxscore estimates are uncalibrated. +/- is a noisy
+                  historical on-court point differential, shrunk toward zero;
+                  it is not a player impact rating.
+                </p>}
+                {player.status === "projected" && shotProfile && <p className="tiny" aria-label="Shot distribution evidence">
+                  Shot distribution evidence: {number(shotProfile.observed_attempts)} captured attempts
+                  {" "}in {number(shotProfile.games)} games; {number(shotProfile.located_attempts)} have verified locations.
+                  {" "}Projected attempts use the observed shot mix where available.
+                </p>}
                 {player.availability === "Not listed" && (
                   <p className="warning">
                     Conditional: omitted from a complete report. Participation
@@ -283,25 +253,25 @@ export default function PlayerDetail({ player, onClose }) {
         {tab === "Game log" && (
           <>
             <h3>Last 10 captured games</h3>
-            <div className="table-scroll">
-              <table>
+            <div className="table-scroll boxscore-scroll" role="region" aria-label="Recent game boxscores scroll area" tabIndex={0}>
+              <table className="boxscore-table game-log-table" aria-label="Recent game boxscores">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Opponent</th>
-                    <th>Role</th>
-                    {columns.map(([k, v]) => (
-                      <th className="numeric" key={k}>
-                        {v}
+                    <th scope="col" className="game-date-cell">Date</th>
+                    <th scope="col">Opponent</th>
+                    <th scope="col">Role</th>
+                    {BOX_SCORE_COLUMNS.map(column => (
+                      <th scope="col" className="numeric" key={column.id} title={column.description}>
+                        {column.label}
                       </th>
                     ))}
-                    <th>Source</th>
+                    <th scope="col">Source</th>
                   </tr>
                 </thead>
                 <tbody>
                   {recent.map((r) => (
                     <tr key={r.game_id}>
-                      <td>{dateKey(r.game_time)}</td>
+                      <td className="game-date-cell">{dateKey(r.game_time)}</td>
                       <td>
                         <TeamMark id={r.opponent_id} />
                       </td>
@@ -314,9 +284,9 @@ export default function PlayerDetail({ player, onClose }) {
                               ? "Bench"
                               : "—"}
                       </td>
-                      {columns.map(([k]) => (
-                        <td className="numeric" key={k}>
-                          {number(r[k])}
+                      {BOX_SCORE_COLUMNS.map(column => (
+                        <td className="numeric" key={column.id} data-stat={column.id} title={boxScoreTitle(r, column, "actual")}>
+                          {boxScoreValue(r, column, "actual")}
                         </td>
                       ))}
                       <td>
@@ -326,7 +296,7 @@ export default function PlayerDetail({ player, onClose }) {
                             target="_blank"
                             rel="noreferrer"
                           >
-                            NBA ↗
+                            Boxscore ↗
                           </a>
                         )}
                       </td>
@@ -340,7 +310,9 @@ export default function PlayerDetail({ player, onClose }) {
             )}
             <p className="tiny">
               Final boxscores only. DNP rows remain explicit and do not count as
-              games played.
+              games played. Times use MIN:SS only when the source records seconds;
+              whole-minute sources show min. Dashes mean missing data or a
+              percentage with no attempts.
             </p>
           </>
         )}
@@ -388,8 +360,8 @@ export default function PlayerDetail({ player, onClose }) {
           </>
         )}
         <p className="profile-source tiny">
-          Headshots: NBA.com (latest image; uniform may lag roster changes). NBA
-          final boxscores · Updated {stamp(profile?.as_of)} · Observed stats and
+          Headshots: NBA.com (latest image; uniform may lag roster changes).
+          Verified final boxscores · Updated {stamp(profile?.as_of)} · Observed stats and
           projections are separate.
         </p>
       </div>
