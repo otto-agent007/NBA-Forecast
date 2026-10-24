@@ -452,5 +452,22 @@ preserved while excess bench estimates are scaled first. If the core alone
 exceeds240 minutes, it is scaled too. A shortfall raises supported players' conditional
 minutes by a bounded share; the rest is scored only in the team total, at the
 replacement rate, never in player projections.
+
+Team possession budget (model 0.4.5). A team uses about the same number of
+possessions every night: in 2025-26, FGA + 0.44·FTA + TOV per 240 team minutes
+averaged 112.6, with a spread of 2.5 between teams and 6.1 from game to game.
+Player rates learned in other roles (last season's first option, a new
+signing's old team) do not add up to that on their own; in the first week of
+2026-27 the stacked rosters projected 10–14% above any usage they had ever
+shown, and the eight team-games projected more than 5% above their actual
+usage missed high by ten points. After the minutes budget, each team's
+expected usage (probability-weighted) is scaled to its own recency-weighted
+level (0.90 per game, shrunk to the league with ten pseudo-games), less the
+bench rate (0.38 per minute) for minutes left to replacements, within 0.85 to
+1.10; raising needs at least eight projected players, lowering applies to any
+team. Manual adjustments are locked and count as fixed usage. The enhanced
+path applies the same budget again after pace and vacancy allocation, with
+the pace factor on the target. Each projection carries the audit under
+`components.team_usage` and the flag `team_usage_scaled` or `team_usage_raised`.
 Player details disclose the historical PPG, games and source actually used.
 Regenerated preliminaries remain selectable after a final run is saved.

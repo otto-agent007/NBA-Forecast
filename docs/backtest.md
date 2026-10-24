@@ -43,6 +43,42 @@ its own for pricing, and a bias fix barely moves absolute error when game
 noise is fifteen points. The overall verdict is `worse` if any metric is
 worse, else `improved` if any is improved.
 
+## Reference: 2026-10-24 (team usage)
+
+`datasets/backtest-2026-10-24-usage/`: model `regular-season-baseline-0.4.5`
+baseline path, 868 games, 18,548 played player-games. Each team's expected
+possessions used are held to its own usage level (see season-operations.md,
+"Team possession budget").
+
+| Players by projected minutes | n | points MAE | bias | minutes MAE | 80% coverage | width |
+|---|---|---|---|---|---|---|
+| all | 18,548 | 4.58 | −0.36 | 5.10 | 76.9% | 13.1 |
+| 0–10 | 2,352 | 2.99 | −1.05 | 5.73 | 79.0% | 6.2 |
+| 10–20 | 5,218 | 4.06 | −0.88 | 6.04 | 76.6% | 10.7 |
+| 20–30 | 6,676 | 4.80 | −0.26 | 4.77 | 76.3% | 14.4 |
+| 30+ | 4,302 | 5.76 | +0.49 | 4.14 | 77.2% | 17.6 |
+
+Winner Brier 0.214, log loss 4.148. Participation: Brier 0.153. Teams: points
+MAE 9.63, bias −0.91. Games: margin MAE 12.06, home bias −0.27, winner
+accuracy 68.3%.
+
+Against the participation reference the gate said **worse**, and the change
+shipped anyway; this is the one documented exception. Every error metric
+moved the right way (points MAE −0.007 ± 0.003, team points MAE −0.10 ± 0.09,
+winner Brier −0.0037 ± 0.0036, margin MAE −0.10 within noise, winner accuracy
+66.4% → 68.3%), while two signed biases grew by about one standard error:
+points −0.32 → −0.36 and team points −0.43 → −0.91. The replay's summed
+player usage was 0.7% above the regulation usage teams actually recorded, so
+the budget removes about that much; the points bias moves because the model's
+points per possession used were already slightly low. The live evidence that
+decided it: in the first week of 2026-27 the stacked rosters projected 10–14%
+above any usage they had shown, the eight team-games projected more than 5%
+above their actual usage missed high by ten points, and on 2026-10-24 the
+model's margins ran about twice the market's on every game (mean absolute gap
+11 points, 4 after the budget). The replay cannot show this: it skips the
+first 30% of the season and its rosters change little mid-season, which is
+when rates learned in other roles stop adding up.
+
 ## Reference: 2026-10-24 (participation)
 
 `datasets/backtest-2026-10-24-participation/`: model `regular-season-baseline-0.4.4`
@@ -74,8 +110,8 @@ or more projected players, at least ten expected. Expected minutes below 240 rai
 players' conditional minutes by at most 10% (protected rotation) or 25%
 (bench); larger fills over-projected starters, no fill left team totals short.
 
-Earlier references: `datasets/backtest-2026-10-24-home-court/` (home court),
-`datasets/backtest-2026-10-24/` (model 0.4.2).
+Earlier references: `datasets/backtest-2026-10-24-participation/` (model 0.4.4),
+`datasets/backtest-2026-10-24-home-court/` (home court), `datasets/backtest-2026-10-24/` (model 0.4.2).
 
 ## Margin probabilities
 

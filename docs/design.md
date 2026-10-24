@@ -84,6 +84,8 @@ since he joined, shrunk toward a 2025-26 role prior, and scaled by a reported
 questionable-type status. Player projections stay conditional on playing;
 the 240-minute budget and team totals weight them by that probability; minutes
 the rotation leaves unallocated enter the team total at a replacement scoring rate.
+Each team's expected possessions used are held to its own usage level (league
+112.6 per 240 minutes), so rates learned in other roles cannot add up past it.
 Questionable players are projected that way; unknown players are withheld. Roster changes and major minutes/shot
 changes enter a reasoning queue. Opponent adjustment is a bounded, shrunk
 points-allowed proxy derived only from complete pre-cutoff team boxscores; it

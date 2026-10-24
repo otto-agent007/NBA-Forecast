@@ -58,7 +58,9 @@ class CandidateAttemptBudgetTests(unittest.TestCase):
         audit=result['allocation_audit']['A']
         self.assertGreater(audit['initial_allocator_result']['team_minutes_after'],audit['team_minutes_after'])
         self.assertAlmostEqual(audit['team_minutes_after'],sum(p['expected_minutes'] for p in predicted))
-        self.assertAlmostEqual(audit['adjusted_attempts']['fta'],sum(p['expected_fta'] for p in predicted))
+        # The allocation audit precedes the team usage budget, which scales every open rate once more.
+        usage=predicted[0]['components']['team_usage']['factor']
+        self.assertAlmostEqual(audit['adjusted_attempts']['fta'],sum(p['expected_fta'] for p in predicted)/usage)
         self.assertGreater(audit['unallocated_vacancy_minutes'],0)
         self.assertLessEqual(audit['team_minutes_after'],240)
         for p in predicted:

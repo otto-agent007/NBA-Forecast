@@ -1,7 +1,7 @@
 """Audited, opt-in possession/context/rotation upgrade to the player baseline."""
 from copy import deepcopy
 from math import isfinite
-from .model import _baseline_forecast, _project_numbers
+from .model import _baseline_forecast, _project_numbers, _usage_budget
 from .profiles import build_profiles, eligible_history
 from .rotation_allocation import redistribute
 from .context_effects import context_adjustment
@@ -105,6 +105,15 @@ def forecast_candidate(snapshot,history):
         audit['unallocated_attempts']={field:max(0.,remaining[field]) for field in fields}
         audit['attempt_mix_change']={field:max(0.,-remaining[field]) for field in fields}
     lookup={g['game_id']:g for g in snapshot['games']}
+    reprojection={}
+    def _reproject(p,scale):
+        minutes,rates,rows,variance,factor,side_factor=reprojection[p['player_id']]
+        _project_numbers(p,minutes,{k:v*scale for k,v in rates.items()},p['components']['shooting'],rows,variance,factor,side_factor)
+        interval=calibrated_interval(p['points_mean'],p['points_sd'],enhancement.get('calibration'),
+            model_key=enhancement['model_key'],as_of=snapshot['as_of'],interval_family=INTERVAL_FAMILY)
+        if interval['status']=='calibrated':p['points_lower80'],p['points_upper80']=interval['interval']
+        p['components']['uncertainty']['calibration']=interval
+    team_pace={}
     for p in result['predictions']:
         pid=p['player_id']
         if pid not in inputs:continue
@@ -128,11 +137,8 @@ def forecast_candidate(snapshot,history):
         rates={k:v*pace for k,v in item['rates'].items()}
         for evidence in p['components']['multistat'].values():
             if evidence['rate'] is not None:evidence['rate']*=pace
-        _project_numbers(p,minutes,rates,p['components']['shooting'],by_player[pid],variance,factor,side_factor)
-        interval=calibrated_interval(p['points_mean'],p['points_sd'],enhancement.get('calibration'),
-            model_key=enhancement['model_key'],as_of=snapshot['as_of'],interval_family=INTERVAL_FAMILY)
-        if interval['status']=='calibrated':p['points_lower80'],p['points_upper80']=interval['interval']
-        p['components']['uncertainty']['calibration']=interval
+        reprojection[pid]=(minutes,rates,by_player[pid],variance,factor,side_factor);team_pace[p['team_id']]=pace
+        _reproject(p,1.)
         p['components']['game_environment']=dict(pace_factor=pace,defense_factor=defense,context_factor=context_factor,context=context,
             expected_possessions=env.get('expected_possessions'),reference_pace=env.get('reference_pace'),audit=env.get('audit',{}))
         p['components']['injury_allocation']=dict(recipient=allocations.get(p['team_id'],{}).get('recipients',{}).get(pid),
@@ -140,6 +146,13 @@ def forecast_candidate(snapshot,history):
         p['components']['baseline_opponent']=p['components']['opponent']
         p['components']['opponent']=dict(method='possession_adjusted_defense',factor=defense,
             complete_games=env.get('audit',{}).get('opponent_games',0),opponent_id=p['components']['baseline_opponent']['opponent_id'])
+    # Pace and vacancy allocation changed the attempts; hold each team to its usage again.
+    for team in sorted({p['team_id'] for p in result['predictions'] if p['status']=='projected'}):
+        team_predictions=[p for p in result['predictions'] if p['team_id']==team and p['status']=='projected']
+        prior=next((p['components']['team_usage']['usage_prior'] for p in team_predictions if p['components'].get('team_usage')),None)
+        if prior is None:continue
+        locked={p['player_id'] for p in team_predictions if p['components'].get('manual_adjustment') or p['player_id'] not in reprojection}
+        _usage_budget(team_predictions,prior,_reproject,locked,pace=team_pace.get(team,1.),stage='enhanced')
     totals={}
     for p in result['predictions']:
         if p['status']=='projected':totals[p['team_id']]=totals.get(p['team_id'],0.)+(p.get('participation_probability') or 1.)*p['expected_minutes']

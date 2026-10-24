@@ -45,11 +45,11 @@ from math import sqrt
 from statistics import fmean, pvariance
 from .rotation import rotation_role
 from .historical import season_prior
-from .totals import game_totals
+from .totals import RESIDUAL_MIN_PROJECTED, game_totals
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
-MODEL_VERSION = "regular-season-baseline-0.4.4"
+MODEL_VERSION = "regular-season-baseline-0.4.5"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -91,6 +91,17 @@ UPLIFT_CAP = (.10, .25)
 # its out players.
 ACTIVE_LIST_MAX = 13
 ACTIVE_LIST_MIN_EXPECTED = 10
+# A team uses about the same number of possessions every night: in 2025-26
+# FGA + 0.44*FTA + TOV per 240 team minutes averaged 112.6 with a spread of
+# 2.5 between teams and 6.1 from game to game. Player rates learned in other
+# roles (last season's primary option, a new signing's old team) do not add
+# up to that on their own, so each team's expected usage is scaled to its own
+# recency-weighted level, shrunk to the league, within these bounds. Minutes
+# left to replacements are assumed to use possessions at the bench rate.
+LEAGUE_USAGE_PER_240 = 112.6
+USAGE_PRIOR_PSEUDO_GAMES = 10
+USAGE_BOUNDS = (.85, 1.10)
+REPLACEMENT_USAGE_PER_MINUTE = .38
 
 
 def _time(value):
@@ -262,6 +273,7 @@ def _complete_team_games(history):
             complete.append({"team_id": team, "game_id": game_id,
                              "game_time": _time(teams[team][0]["game_time"]),
                              "points_allowed": sum(r["pts"] for r in teams[opponent]) * 48 / duration,
+                             "usage_per_48": sum(r["fga"] + .44 * r["fta"] + r["tov"] for r in teams[team]) * 48 / duration,
                              "home": flags.pop() if len(flags) == 1 and flags != {None} else None})
     return complete
 
@@ -282,6 +294,57 @@ def _home_court(complete):
             "prior_effect": HOME_COURT_PRIOR, "pseudo_games": HOME_COURT_PSEUDO_GAMES, "effect": effect,
             "home_factor": sqrt(1 + effect), "away_factor": 1 / sqrt(1 + effect), "bounds": list(HOME_COURT_BOUNDS),
             "basis": "pre-cutoff complete box scores with a home flag; the prior is 2025-26 warm-up evidence"}
+
+
+def _team_usage_prior(team_id, complete):
+    """The team's possessions used per 240 minutes: recency-weighted, shrunk to the league."""
+    games = sorted((g for g in complete if g["team_id"] == team_id), key=lambda g: (g["game_time"], g["game_id"]))
+    # usage_per_48 is a team-game total normalized to 48 game minutes: per 240 player minutes.
+    league = fmean(g["usage_per_48"] for g in complete) if complete else LEAGUE_USAGE_PER_240
+    weights = [0.90 ** age for age in range(len(games))]
+    observed = (sum(g["usage_per_48"] * w for g, w in zip(reversed(games), weights)) / sum(weights)) if games else None
+    shrinkage = len(games) / (len(games) + USAGE_PRIOR_PSEUDO_GAMES)
+    usage = league + shrinkage * (observed - league) if games else league
+    return {"method": "shrunk_recency_weighted_team_usage_per_240", "definition": "FGA + 0.44*FTA + TOV per 240 team minutes",
+            "team_games": len(games), "observed_usage_per_240": observed, "league_usage_per_240": league,
+            "pseudo_games": USAGE_PRIOR_PSEUDO_GAMES, "recency_decay_per_game": 0.90, "usage_per_240": usage}
+
+
+def _usage_budget(projected_team, prior, reproject, locked, *, pace=1.0, stage="baseline"):
+    """Scale the open players' attempt rates so the team's expected usage meets its prior.
+
+    ``reproject(p, scale)`` must recompute player ``p`` from its unscaled rates
+    times ``scale``. Locked players keep their numbers and count as fixed usage.
+    Raising needs a plausible rotation; lowering applies to any team.
+    """
+    if not projected_team:
+        return None
+    expected_minutes = sum(p["participation_probability"] * p["expected_minutes"] for p in projected_team)
+    residual = max(0., 240. - expected_minutes)
+    target = (prior["usage_per_240"] - residual * REPLACEMENT_USAGE_PER_MINUTE) * pace
+    usage = {p["player_id"]: p["participation_probability"] * p["usage_proxy"] for p in projected_team}
+    before = sum(usage.values())
+    open_usage = sum(v for pid, v in usage.items() if pid not in locked)
+    raw = (target - (before - open_usage)) / open_usage if open_usage > 0 else 1.
+    factor = min(USAGE_BOUNDS[1], max(USAGE_BOUNDS[0], raw))
+    if len(projected_team) < RESIDUAL_MIN_PROJECTED:
+        factor = min(1., factor)
+    audit = {"method": "team_usage_budget", "stage": stage, "usage_prior": prior, "pace_factor": pace,
+             "expected_minutes": expected_minutes, "residual_minutes": residual,
+             "replacement_usage_per_minute": REPLACEMENT_USAGE_PER_MINUTE, "target": target, "before": before,
+             "raw_factor": raw, "factor": factor, "bounds": list(USAGE_BOUNDS), "locked_player_ids": sorted(locked),
+             "minimum_projected_to_raise": RESIDUAL_MIN_PROJECTED}
+    if abs(factor - 1.) > 1e-9:
+        for p in projected_team:
+            if p["player_id"] in locked:
+                continue
+            reproject(p, factor)
+            p["flags"] = [f for f in p["flags"] if f not in ("team_usage_scaled", "team_usage_raised")]
+            p["flags"].append("team_usage_scaled" if factor < 1 else "team_usage_raised")
+    audit["after"] = sum(p["participation_probability"] * p["usage_proxy"] for p in projected_team)
+    for p in projected_team:
+        p["components"]["team_usage"] = deepcopy(audit)
+    return audit
 
 
 def _opponent_proxy(team_id, complete):
@@ -448,6 +511,7 @@ def _baseline_forecast(snapshot, history):
     team_games = {team: sorted(items) for team, items in team_games.items()}
     games = {team: game for game in snapshot["games"] if game["season_type"] == "Regular Season"
              for team in (game["home_team_id"], game["away_team_id"])}
+    usage_prior = {team: _team_usage_prior(team, complete) for team in games}
     adjustments = {(a["player_id"], a["game_id"]): a
                    for a in snapshot.get("role_adjustments", [])
                    if _time(a["observed_at"]) <= as_of}
@@ -709,6 +773,13 @@ def _baseline_forecast(snapshot, history):
             allocated = max(0.0, last["expected_minutes"] - excess - 1e-9)
             effective_scale = allocated / minutes if minutes else 1.0
             _project_numbers(last, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor, side_factor)
+        # Then hold the team to the possessions it actually uses.
+        def reproject(p, scale):
+            minutes, rates, shooting, rows, variance, factor, side_factor, probability = working[p["player_id"]]
+            effective_scale = p["expected_minutes"] / minutes if minutes else 1.
+            _project_numbers(p, p["expected_minutes"], {k: v * scale for k, v in rates.items()}, shooting, rows,
+                             variance * effective_scale ** 2, factor, side_factor)
+        _usage_budget(projected_team, usage_prior[team], reproject, locked)
     for p in predictions:
         p["flags"] = sorted(set(p["flags"]))
     reasoning_flags = {"team_change", "minutes_change", "opportunity_change", "recent_dnp_role_review",

@@ -185,7 +185,10 @@ class ForecastTests(unittest.TestCase):
             self.assertAlmostEqual(p["participation_probability"] * p["expected_minutes"], 30)
             self.assertIn("team_minutes_scaled", p["flags"])
             self.assertLess(p["components"]["rotation"]["scale"], 1)
-            self.assertAlmostEqual(p["expected_fga"], p["expected_minutes"] * 12 / 45)
+            # Eight light shooters fall short of a team's usage, so the possession budget raises the rates.
+            usage = p["components"]["team_usage"]["factor"]
+            self.assertGreater(usage, 1)
+            self.assertAlmostEqual(p["expected_fga"], p["expected_minutes"] * 12 / 45 * usage)
 
     def test_missing_rotation_minutes_are_flagged_not_invented(self):
         result = forecast(snapshot([player(), player("new")]), [row()])
