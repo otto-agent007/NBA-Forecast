@@ -107,6 +107,17 @@ def _parser():
     benchmarks = sub.add_parser('benchmarks')
     benchmarks.add_argument('--db', required=True)
     benchmarks.add_argument('--output')
+    dedupe = sub.add_parser('dedupe-histories', help='Rebuild a ledger so each distinct input history is stored once')
+    dedupe.add_argument('--directory', required=True, help='Operations directory holding forecast.sqlite')
+    dedupe.add_argument('--output')
+    backtest = sub.add_parser('backtest', help='Replay a season with the current model code and score it (docs/backtest.md)')
+    backtest.add_argument('--history', required=True, help='Normalized box-score history (.json or .json.gz)')
+    backtest.add_argument('--team-games', required=True, help='Reconciled team games (datasets/model-upgrade-*/team-games.json.gz)')
+    backtest.add_argument('--output', required=True, help='New directory for scoreboard.json and rows.json.gz')
+    backtest.add_argument('--reference', help='Directory of an earlier backtest to compare against')
+    backtest.add_argument('--warmup-fraction', type=float, default=.3, help='Share of game dates used only as history')
+    backtest.add_argument('--limit', type=int, help='Only the last N evaluation games (smoke runs)')
+    backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
     dashboard.add_argument('--assets', default='dashboard/dist')
@@ -211,6 +222,23 @@ def main(argv=None):
         elif args.command == 'benchmarks':
             from .benchmarks import benchmark_report
             value=benchmark_report(args.db)
+        elif args.command == 'backtest':
+            from .backtest import run_backtest, read_json as read_source, sha256_of, format_scoreboard
+            sources = {name: dict(path=str(path), sha256=sha256_of(path))
+                       for name, path in (('history', args.history), ('team_games', args.team_games))}
+            board = run_backtest(read_source(args.history), read_source(args.team_games), args.output,
+                                 reference=args.reference, warmup_fraction=args.warmup_fraction, limit=args.limit,
+                                 sources=sources, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
+            print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
+            return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
+        elif args.command == 'dedupe-histories':
+            import fcntl
+            from .store import dedupe_histories
+            folder=Path(args.directory)
+            with (folder/'tick.lock').open('a') as lock:
+                try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError as exc:raise ValueError('a tick is running; retry when it finishes') from exc
+                value=dedupe_histories(folder/'forecast.sqlite')
         elif args.command == 'backfill':
             from .backfill import backfill_seasons
             result=backfill_seasons(args.seasons,args.directory,args.workers)

@@ -32,6 +32,9 @@ LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
              'is an outcome prior, not this model\'s prediction-error calibration. '
              'The location uses regulation player means; final-score and overtime '
              'behavior are approximated, and future probability accuracy is unverified.')
+CALIBRATED_LIMITATION = ('Location and scale were fitted on genuinely saved pregame forecasts '
+    'and passed a later-game validation gate. Future accuracy is not guaranteed; overtime '
+    'and the regulation player-sum location remain approximations.')
 
 
 def _canonical(value):
@@ -278,8 +281,23 @@ def build_margin_forecasts(snapshot, result):
             if totals['status'] != 'complete':
                 value['reason'] = 'incomplete_team_totals'; continue
             means = {t['team_id']: t['points_mean'] for t in totals['teams']}
-            location = means[game['home_team_id']] - means[game['away_team_id']]
-            sd = inputs['standard_deviation']
+            raw_location = means[game['home_team_id']] - means[game['away_team_id']]
+            raw_sd = inputs['standard_deviation']
+            if not _finite(raw_location) or abs(raw_location)+PARAMETERS['required_interior_standard_deviations']*raw_sd>=SUPPORT:
+                value['reason']='margin_location_or_scale_outside_support';continue
+            location,sd=raw_location,raw_sd
+            calibration=enhancement.get('margin_calibration')
+            if calibration is not None:
+                from .prospective_margin_calibration import validate_margin_calibration
+                if not validate_margin_calibration(calibration,model_key,snapshot['as_of']):
+                    value['reason']='invalid_margin_calibration';continue
+                raw_pmf=_pmf(raw_location,raw_sd)
+                location+=calibration['location_bias'];sd*=calibration['scale_factor']
+                value.update(calibration_status='prospective_validated',limitation=CALIBRATED_LIMITATION,
+                    calibration_audit={k:calibration[k] for k in ('method','training_cutoff','training_games',
+                        'training_days','validation_games','evidence_sha256','validation_metrics')},
+                    uncalibrated_mean_margin=raw_location,uncalibrated_standard_deviation=raw_sd,
+                    uncalibrated_pmf=raw_pmf,uncalibrated_pmf_sha256=_sha(raw_pmf))
             if not _finite(location) or abs(location) + PARAMETERS['required_interior_standard_deviations'] * sd >= SUPPORT:
                 value['reason'] = 'margin_location_or_scale_outside_support'; continue
             pmf = _pmf(location, sd)
@@ -288,8 +306,10 @@ def build_margin_forecasts(snapshot, result):
             value.update(status='estimated', reason=None, mean_margin=location, standard_deviation=sd,
                 pmf=pmf, pmf_sha256=_sha(pmf), sample_count=inputs['sample_count'],
                 distribution_mean_margin=distribution_mean, distribution_standard_deviation=distribution_sd,
-                mean_basis='Unrounded regulation player-sum difference used as the final-margin location',
-                scale_basis='sqrt(sample variance of paired final margins + squared historical mean margin); not residual calibration',
+                mean_basis=('Unrounded regulation player-sum difference plus validated prospective location correction'
+                    if calibration else 'Unrounded regulation player-sum difference used as the final-margin location'),
+                scale_basis=('Historical paired-final prior times validated prospective residual scale correction'
+                    if calibration else 'sqrt(sample variance of paired final margins + squared historical mean margin); not residual calibration'),
                 tail_policy='Outside-support mass is collected at endpoints; endpoint and farther lines are unsupported',
                 tail_floor_per_side=TAIL_FLOOR, tie_policy='Zero margin excluded and remaining mass normalized',
                 source_sha256=inputs['source_sha256'], inputs_sha256=inputs['inputs_sha256'],
@@ -322,13 +342,13 @@ def probability_above(distribution, team_id, line):
         raise ValueError('Named team must be one of this game\'s distinct teams')
     value = dict(status='unavailable', reason=distribution.get('reason'), game_id=distribution.get('game_id'),
         team_id=team_id, line=str(threshold), comparison='strictly_greater_than', equality_result='NO',
-        settlement=distribution.get('settlement'), calibration_status='uncalibrated',
+        settlement=distribution.get('settlement'), calibration_status=distribution.get('calibration_status'),
         yes_probability=None, no_probability=None, equal_probability=None,
         joint_probability=None, joint_probability_reason='joint_model_not_supported')
     if distribution.get('status') == 'unavailable':
         return value
     if (distribution.get('status') != 'estimated' or distribution.get('settlement') != SETTLEMENT
-            or distribution.get('calibration_status') != 'uncalibrated'):
+            or distribution.get('calibration_status') not in ('uncalibrated','prospective_validated')):
         raise ValueError('Unsupported margin distribution')
     try:
         bounds = distribution['supported_line_range']

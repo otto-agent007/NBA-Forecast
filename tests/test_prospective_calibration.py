@@ -56,7 +56,7 @@ class ProspectiveCalibrationTests(unittest.TestCase):
         # Exact production schema; deliberately non-JSON input histories prove
         # the reader never decodes irrelevant historical input copies.
         with sqlite3.connect(self.db) as conn:
-            conn.execute("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            conn.execute("INSERT INTO runs (run_id,created_at,as_of,mode,scope,snapshot_json,history_json,forecast_json,snapshot_sha256,history_sha256,forecast_sha256,inputs_sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                          (run_id, created, forecast["as_of"], mode, scope,
                           "not-read-snapshot", "not-read-history", encoded, "x", "x",
                           hashlib.sha256(encoded.encode()).hexdigest(), "x"))

@@ -201,6 +201,7 @@ def normalize_boxscore(payload, source_url, known_at):
                 if 'starter' in player:
                     if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
                     row['starter']=player['starter']=='1'
+                row['home']=side=='homeTeam'
                 rows.append(row)
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Incomplete or malformed NBA boxscore: {exc}") from exc

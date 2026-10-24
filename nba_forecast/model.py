@@ -23,7 +23,8 @@ with no observed FGA or FTA are withheld: absence of scoring opportunities in
 a small sample does not establish certain zero-point production.
 
 Points = 2*E[2PA]*P(2PM) + 3*E[3PA]*P(3PM) + E[FTA]*P(FTM), multiplied
-by a bounded opponent points-allowed proxy. Manual game-specific adjustments
+by a bounded opponent points-allowed proxy and a symmetric home-court factor
+(``_home_court``: flagged complete games shrunk toward a 2025-26 prior). Manual game-specific adjustments
 alter minutes and attempt/turnover rates, with full source/reviewer audit.
 Supported starters and high-minute rotation roles are preserved when excess
 bench estimates push a team above 240 minutes. The core is scaled only if it
@@ -31,8 +32,10 @@ alone exceeds the budget. Deficits stay explicit. Individual minutes
 are capped at 48: this v0.1 does not forecast overtime.
 
 Intervals are uncalibrated heuristics: binomial shot variance plus shrunk excess
-historical shot residual variance and minutes uncertainty. They are evaluated
-prospectively by the ledger, not presented as established 80% coverage.
+historical shot residual variance and minutes uncertainty, with the empirical
+half-width in ``intervals.HEURISTIC_Z80`` until a calibration artifact fitted on
+pooled prospective residuals replaces it. They are evaluated prospectively by
+the ledger, not presented as established 80% coverage.
 """
 
 from collections import Counter, defaultdict
@@ -44,8 +47,9 @@ from .rotation import rotation_role
 from .historical import season_prior
 from .totals import game_totals
 from .model_versions import uses_refinements
+from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
-MODEL_VERSION = "regular-season-baseline-0.4.2"
+MODEL_VERSION = "regular-season-baseline-0.4.3"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -56,6 +60,13 @@ EFFICIENCY_DEFAULTS = {
     "three_point": (0.35, 50.0, 200.0),
     "free_throw": (0.75, 20.0, 100.0),
 }
+# Home court: home teams outscored visitors per 48 minutes by 1.45% over the
+# first 30% of 2025-26 game dates (1.55% over the season, home win rate 55.5%).
+# The prior is shrunk toward the observed ratio of flagged complete games before
+# the cutoff. It is split symmetrically so the combined scoring level is unchanged.
+HOME_COURT_PRIOR = 0.0145
+HOME_COURT_PSEUDO_GAMES = 200
+HOME_COURT_BOUNDS = (-0.02, 0.04)
 
 
 def _time(value):
@@ -221,10 +232,30 @@ def _complete_team_games(history):
             continue
         duration = 48 + 5 * overtime[a]
         for team, opponent in ((a, b), (b, a)):
+            flags = {r.get("home") for r in teams[team]}
             complete.append({"team_id": team, "game_id": game_id,
                              "game_time": _time(teams[team][0]["game_time"]),
-                             "points_allowed": sum(r["pts"] for r in teams[opponent]) * 48 / duration})
+                             "points_allowed": sum(r["pts"] for r in teams[opponent]) * 48 / duration,
+                             "home": flags.pop() if len(flags) == 1 and flags != {None} else None})
     return complete
+
+
+def _home_court(complete):
+    """Symmetric home/away scoring factors from flagged complete games, shrunk to the prior."""
+    sides = defaultdict(dict)
+    for g in complete:
+        if g.get("home") is not None:
+            sides[g["game_id"]][g["home"]] = g
+    pairs = [(d[True], d[False]) for d in sides.values() if True in d and False in d]
+    n = len(pairs)
+    # A team's scoring is the opposing entry's points allowed.
+    observed = (fmean(a["points_allowed"] for h, a in pairs) / fmean(h["points_allowed"] for h, a in pairs) - 1) if n else None
+    effect = ((observed or 0.0) * n + HOME_COURT_PRIOR * HOME_COURT_PSEUDO_GAMES) / (n + HOME_COURT_PSEUDO_GAMES)
+    effect = min(HOME_COURT_BOUNDS[1], max(HOME_COURT_BOUNDS[0], effect))
+    return {"method": "shrunk_home_away_scoring_ratio_per_48", "flagged_games": n, "observed_effect": observed,
+            "prior_effect": HOME_COURT_PRIOR, "pseudo_games": HOME_COURT_PSEUDO_GAMES, "effect": effect,
+            "home_factor": sqrt(1 + effect), "away_factor": 1 / sqrt(1 + effect), "bounds": list(HOME_COURT_BOUNDS),
+            "basis": "pre-cutoff complete box scores with a home flag; the prior is 2025-26 warm-up evidence"}
 
 
 def _opponent_proxy(team_id, complete):
@@ -259,8 +290,10 @@ def _shot_variance(fga, fg3a, fta, shooting):
     return 4 * (fga - fg3a) * p2 * (1 - p2) + 9 * fg3a * p3 * (1 - p3) + fta * pft * (1 - pft)
 
 
-def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance, factor):
+def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance, factor, home_factor=1.0):
+    """``factor`` is the opponent adjustment; ``home_factor`` the side's home-court factor."""
     fga, fg3a, fta, tov = (minutes * rates[k] for k in ("fga", "fg3a", "fta", "tov"))
+    factor = factor * home_factor
     points = _expected_points(fga, fg3a, fta, shooting) * factor
     quality=prediction['components'].get('shot_quality')
     if quality and 'baseline_percentages' in quality:
@@ -284,8 +317,8 @@ def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance
     prediction.update(expected_minutes=minutes, expected_fga=fga, expected_fta=fta,
                       expected_tov=tov, usage_proxy=fga + .44 * fta + tov,
                       points_mean=points, points_sd=sd,
-                      points_lower80=max(0.0, points - 1.2815515655 * sd),
-                      points_upper80=points + 1.2815515655 * sd)
+                      points_lower80=max(0.0, points - HEURISTIC_Z80 * sd),
+                      points_upper80=points + HEURISTIC_Z80 * sd)
     prediction["expected_fg3m"] = fg3a * shooting["three_point"]["percentage"]
     for stat, evidence in prediction["components"]["multistat"].items():
         rate = evidence["rate"]
@@ -295,18 +328,19 @@ def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance
                                      if mean is not None and minutes > 0 else 0.0 if mean == 0 else None)
     prediction["components"]["scoring"] = {
         "expected_two_point_attempts": fga - fg3a, "expected_three_point_attempts": fg3a,
-        "expected_free_throw_attempts": fta, "opponent_multiplier": factor,
-        "points_before_opponent": points / factor,
+        "expected_free_throw_attempts": fta, "opponent_multiplier": factor / home_factor,
+        "home_court_multiplier": home_factor, "points_before_opponent": points / factor,
         "usage_proxy_definition": "FGA + 0.44*FTA + TOV; opportunity count, not USG%",
     }
     prediction["components"]["uncertainty"] = {
-        "method": "uncalibrated_heuristic_binomial_plus_excess_residual_plus_minutes",
+        "method": LEGACY_METHOD, "interval_family": INTERVAL_FAMILY,
         "shot_variance": binomial, "empirical_residual_variance": empirical,
         "historical_shot_variance": historical_shot_variance,
         "shrunk_excess_residual_variance": excess * factor ** 2,
         "minutes_variance": minute_variance, "minutes_points_variance": minutes_component,
         "residual_exposure_scale": residual_exposure_scale,
-        "residual_games": len(residuals), "normal_80pct_z": 1.2815515655,
+        "residual_games": len(residuals), "heuristic_z80": HEURISTIC_Z80,
+        "heuristic_z80_basis": HEURISTIC_Z80_BASIS,
     }
 
 
@@ -352,6 +386,7 @@ def _baseline_forecast(snapshot, history):
         accepted[row["player_id"]].append(row)
         eligible.append(row)
     complete = _complete_team_games(eligible)
+    home_court = _home_court(complete)
     games = {team: game for game in snapshot["games"] if game["season_type"] == "Regular Season"
              for team in (game["home_team_id"], game["away_team_id"])}
     adjustments = {(a["player_id"], a["game_id"]): a
@@ -414,6 +449,10 @@ def _baseline_forecast(snapshot, history):
                            "participation is not confirmed. Review listed role and rotation flags.")
             if player.get('status_basis')=='not_listed_verified_empty_report':
                 p['reason']='Conditional on participation: a verified game-specific team report lists no injuries. Participation and starting lineup are not confirmed.'
+        elif player.get("status_basis")=="espn_injury_list":
+            p["flags"].append("availability_official_report_pending")
+            p["reason"]=("Conditional on participation: the official injury report does not cover this team yet and "
+                         "ESPN's injury list does not list this player. Review listed role and rotation flags.")
         if len(played) < 5:
             p["flags"].append("short_history")
         if any(r["team_id"] != team for r in previous+current):
@@ -508,8 +547,10 @@ def _baseline_forecast(snapshot, history):
         opponent = _opponent_proxy(opponent_id, complete)
         if not opponent["complete_games"]:
             p["flags"].append("opponent_proxy_unavailable")
-        p["components"].update(opportunities=opportunities, shooting=shooting, opponent=opponent)
-        working[pid] = (minutes, rates, shooting, rows, variance, opponent["factor"])
+        side = "home" if team == game["home_team_id"] else "away"
+        p["components"].update(opportunities=opportunities, shooting=shooting, opponent=opponent,
+                               home_court=dict(home_court, side=side, factor=home_court[side + "_factor"]))
+        working[pid] = (minutes, rates, shooting, rows, variance, opponent["factor"], home_court[side + "_factor"])
     for team in sorted(games):
         team_predictions = [p for p in predictions if p["team_id"] == team]
         total = sum(working[p["player_id"]][0] for p in team_predictions if p["status"] == "projected")
@@ -533,7 +574,7 @@ def _baseline_forecast(snapshot, history):
                 p["flags"].append("team_minutes_unresolved")
             if p["status"] != "projected":
                 continue
-            minutes, rates, shooting, rows, variance, factor = working[p["player_id"]]
+            minutes, rates, shooting, rows, variance, factor, side_factor = working[p["player_id"]]
             if scale < 1:
                 p["flags"].append("team_minutes_scaled")
             # Reserving the remaining budget also prevents floating-point sums
@@ -541,17 +582,17 @@ def _baseline_forecast(snapshot, history):
             allocated = min(minutes * scale, max(0.0, 240.0 - assigned_minutes))
             assigned_minutes += allocated
             effective_scale = allocated / minutes if minutes else 1.0
-            _project_numbers(p, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor)
+            _project_numbers(p, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor, side_factor)
         projected_team = [p for p in team_predictions if p["status"] == "projected"]
         output_total = sum(p["expected_minutes"] for p in projected_team)
         if output_total > 240.0:
             # Python's compensated sum can differ from the running allocation
             # sum. Correct its residual by a negligible one-billionth-minute margin.
             last = projected_team[-1]
-            minutes, rates, shooting, rows, variance, factor = working[last["player_id"]]
+            minutes, rates, shooting, rows, variance, factor, side_factor = working[last["player_id"]]
             allocated = max(0.0, last["expected_minutes"] - (output_total - 240.0) - 1e-9)
             effective_scale = allocated / minutes if minutes else 1.0
-            _project_numbers(last, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor)
+            _project_numbers(last, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor, side_factor)
     for p in predictions:
         p["flags"] = sorted(set(p["flags"]))
     reasoning_flags = {"team_change", "minutes_change", "opportunity_change", "recent_dnp_role_review",

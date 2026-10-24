@@ -51,6 +51,35 @@ def small_distribution():
 
 
 class MarginSourceTests(unittest.TestCase):
+    def test_validated_prospective_correction_changes_only_future_saved_distribution(self):
+        from nba_forecast.prospective_margin_calibration import METHOD as CORRECTION_METHOD, _fit_window
+        snapshot,result=forecast_inputs()
+        baseline=margins.build_margin_forecasts(snapshot,result)[0]
+        rows=[]
+        for i in range(112):
+            game=datetime(2026,1,1,20,tzinfo=timezone.utc)+timedelta(days=i//8,minutes=15*(i%8))
+            rows.append(dict(game_id=f'002260{i:04d}',model_key=MODEL_KEY,home_team_id='H',away_team_id='A',
+                game_time=game.isoformat(),forecast_created_at=(game-timedelta(hours=1)).isoformat(),
+                actual_known_at=(game+timedelta(hours=3)).isoformat(),base_mean_margin=0.,
+                base_standard_deviation=16.,actual_home_margin=15 if i%2 else -7,
+                forecast_sha256='a'*64,actuals_sha256='b'*64))
+        cutoff='2026-01-25T00:00:00Z'
+        correction=dict(schema_version=1,method=CORRECTION_METHOD,model_key=MODEL_KEY,
+            window_index=0,training_cutoff=cutoff,evidence_samples=rows,**_fit_window(rows,MODEL_KEY,cutoff))
+        self.assertEqual(correction['status'],'ready')
+        snapshot['model_enhancements']['margin_calibration']=correction
+        calibrated=margins.build_margin_forecasts(snapshot,result)[0]
+        self.assertEqual(calibrated['status'],'estimated')
+        self.assertEqual(calibrated['calibration_status'],'prospective_validated')
+        self.assertAlmostEqual(calibrated['mean_margin'],baseline['mean_margin']+correction['location_bias'])
+        self.assertAlmostEqual(calibrated['standard_deviation'],baseline['standard_deviation']*correction['scale_factor'])
+        self.assertEqual(calibrated['uncalibrated_mean_margin'],baseline['mean_margin'])
+        self.assertEqual(calibrated['uncalibrated_pmf'],baseline['pmf'])
+        self.assertEqual(calibrated['uncalibrated_pmf_sha256'],baseline['pmf_sha256'])
+        self.assertEqual(margins.probability_above(calibrated,'H',2.5)['calibration_status'],'prospective_validated')
+        correction['model_key']='other-model'
+        self.assertEqual(margins.build_margin_forecasts(snapshot,result)[0]['reason'],'invalid_margin_calibration')
+
     def test_prepared_prior_is_source_bound_and_never_residual_calibration(self):
         self.assertIsNotNone(margins, 'The game-margin probability module is missing')
         source = records()

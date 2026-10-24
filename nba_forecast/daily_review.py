@@ -152,7 +152,8 @@ def _summarize(games,stage):
     return dict(forecasts=len(selected),model_versions=dict(Counter(s['model_version'] for s in selected)),
         margin_probabilities=dict(count=len(margins),home_win_brier=sum(r['home_win_brier'] for r in margins)/len(margins) if margins else None,
             ranked_probability_score=sum(r['ranked_probability_score'] for r in margins)/len(margins) if margins else None,
-            calibration_status='uncalibrated',selection='Latest pregame forecast per game and stage, selected before reading outcomes.'),
+            calibration_status=(next(iter({r['calibration_status'] for r in margins})) if len({r['calibration_status'] for r in margins})==1 else 'mixed' if margins else 'pending'),
+            selection='Latest pregame forecast per game and stage, selected before reading outcomes.'),
         projected=_metric(projected),out=_metric(outs),all_numeric=_metric(projected+outs),
         projected_count=len(projected),missing_actuals=sum(p['actual'] is None for p in players),
         missing_projected_actuals=sum(p['actual'] is None for p in projected),missing_out_actuals=sum(p['actual'] is None for p in outs),
@@ -207,8 +208,9 @@ def _questions(games,summary):
     return queue
 
 
-def review_day(directory,date,as_of):
-    Date.fromisoformat(date);folder=Path(directory);schedule=_read(folder/'schedule/latest.json',{})
+def review_day(directory,date,as_of,*,schedule=None):
+    Date.fromisoformat(date);folder=Path(directory)
+    if schedule is None:schedule=_read(folder/'schedule/latest.json',{})
     games={g['game_id']:g for g in schedule.get('games',[]) if g.get('start_time') and parse_time(g['start_time']).astimezone(PACIFIC).date().isoformat()==date and g.get('status') not in ('postponed','cancelled','tbd')}
     selected=_selected(folder,games,as_of,schedule.get('season'));reviewed=[];identities={}
     for gid,game in sorted(games.items(),key=lambda item:(parse_time(item[1]['start_time']),item[0])):
@@ -240,9 +242,9 @@ def review_day(directory,date,as_of):
     return result
 
 
-def _source_watch(folder,date,game_ids,as_of):
+def _source_watch(folder,date,game_ids,as_of,*,schedule=None):
     """Detect late supplied corrections without rebuilding every old date."""
-    schedule=_read(folder/'schedule/latest.json',{})
+    if schedule is None:schedule=_read(folder/'schedule/latest.json',{})
     games=[g for g in schedule.get('games',[]) if g.get('start_time') and parse_time(g['start_time']).astimezone(PACIFIC).date().isoformat()==date]
     sources={}
     for gid in sorted(set(game_ids)|{g['game_id'] for g in games}):
@@ -253,22 +255,22 @@ def _source_watch(folder,date,game_ids,as_of):
     return hashlib.sha256(canonical(dict(version=VERSION,games=games,sources=sources))).hexdigest()
 
 
-def build_daily_reviews(directory,as_of=None):
+def build_daily_reviews(directory,as_of=None,*,schedule=None):
     folder=Path(directory);as_of=as_of or datetime.now(timezone.utc).isoformat();today=parse_time(as_of).astimezone(PACIFIC).date()
     output=folder/'daily-reviews';reports=dict(_read(output/'index.json',{}).get('reports',{}));errors=[]
     dates={(today-timedelta(days=1)).isoformat(),today.isoformat()}
     for date,previous in reports.items():
-        if date not in dates and previous.get('source_watch')!=_source_watch(folder,date,previous.get('game_ids',[]),as_of):dates.add(date)
+        if date not in dates and previous.get('source_watch')!=_source_watch(folder,date,previous.get('game_ids',[]),as_of,schedule=schedule):dates.add(date)
     for date in sorted(dates):
         try:
-            report=review_day(folder,date,as_of)
+            report=review_day(folder,date,as_of,schedule=schedule)
             if not report['coverage']['scheduled_games'] and date not in reports:continue
             path=output/(date+'.json');old=_read(path,{})
             if old.get('input_signature')!=report['input_signature']:
                 atomic_json(output/'revisions'/date/(report['input_signature']+'.json'),report);atomic_json(path,report)
             ids=[g['game_id'] for g in report['games']]
             reports[date]=dict(status=report['status'],coverage=report['coverage'],input_signature=report['input_signature'],game_ids=ids,
-                source_watch=_source_watch(folder,date,ids,as_of))
+                source_watch=_source_watch(folder,date,ids,as_of,schedule=schedule))
         except (ValueError,KeyError,TypeError,OSError,sqlite3.Error) as exc:errors.append(dict(date=date,error=str(exc)))
     index=dict(generated_at=as_of,analysis_version=VERSION,reports=reports,errors=errors)
     atomic_json(output/'index.json',index);return index

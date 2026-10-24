@@ -10,6 +10,18 @@ from nba_forecast.daily_review import review_day,build_daily_reviews
 ASOF='2026-10-23T06:00:00Z'
 
 class DailyReviewTests(unittest.TestCase):
+    def test_verified_reschedule_is_used_for_saved_run_and_final_review(self):
+        original=json.loads((self.folder/'schedule/latest.json').read_text())
+        original['games'][0]['start_time']='2026-10-23T19:00:00Z'
+        (self.folder/'schedule/latest.json').write_text(json.dumps(original))
+        overlay=dict(original,games=[self.g])
+        report=review_day(self.folder,'2026-10-22',ASOF,schedule=overlay)
+        self.assertEqual(report['coverage']['scheduled_games'],1)
+        self.assertEqual(report['coverage']['verified_finals'],1)
+        self.assertEqual(report['games'][0]['stages']['final']['run_id'],'first')
+        rebuilt=build_daily_reviews(self.folder,ASOF,schedule=overlay)
+        self.assertIn('2026-10-22',rebuilt['reports'])
+
     def test_margin_feedback_does_not_grade_partial_player_actuals_as_a_final_score(self):
         from tests.test_margins import small_distribution
         self.f['margin_forecasts']=[dict(small_distribution(),game_id='G1',home_team_id='T1',away_team_id='T2')]

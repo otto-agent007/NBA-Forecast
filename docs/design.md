@@ -82,8 +82,11 @@ and no automatic teammate-usage redistribution. Questionable/unknown players
 are withheld pending a sourced status. Roster changes and major minutes/shot
 changes enter a reasoning queue. Opponent adjustment is a bounded, shrunk
 points-allowed proxy derived only from complete pre-cutoff team boxscores; it
-is not a measured possession-adjusted defensive rating. Intervals are initial
-heuristics until measured on a sufficient prospective sample.
+is not a measured possession-adjusted defensive rating. A symmetric home-court
+factor (home up, away down by the same ratio) comes from complete pre-cutoff
+box scores that record the side, shrunk toward a 2025-26 prior of 1.45% and
+bounded. Intervals are initial heuristics until measured on a sufficient
+prospective sample.
 
 ## Evidence and acceptance
 

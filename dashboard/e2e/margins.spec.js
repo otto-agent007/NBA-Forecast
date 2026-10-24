@@ -67,3 +67,41 @@ test("partial forecasts and legacy snapshots never invent probabilities", async 
   await page.reload();
   await expect(page.getByRole("region", { name: "Winning margin forecast" })).toContainText("not saved for this forecast");
 });
+
+test("validated correction is named with its separate training and validation samples", async ({ page }) => {
+  const calibrated={...distribution,calibration_status:"prospective_validated",
+    calibration_audit:{training_games:64,validation_games:24}};
+  const panel=await open(page,calibrated);
+  await expect(panel).toContainText("validated correction");
+  await panel.getByText("Forecast evidence",{exact:true}).click();
+  await expect(panel).toContainText("64 saved pregame games fitted the correction");
+  await expect(panel).toContainText("24 later games passed the validation gate");
+});
+
+test("schedule cross-check and active correction remain visible after a later failed attempt", async ({ page }) => {
+  const data=fixture();
+  data.schedule_observed_at="2026-10-21T12:00:00Z";
+  data.schedule_crosscheck={status:"verified",observed_at:"2026-10-24T16:00:00Z"};
+  data.runner={schedule_source:"espn_verified_cached_nba"};
+  data.model_upgrade={model_version:"regular-season-baseline-0.6.0",
+    applied_margin_calibration:{status:"ready",training_games:72,validation_games:40},
+    prospective_margin:{status:"not_ready",sample_count:112,minimum_training_games:64,minimum_validation_games:32}};
+  await page.route("**/api/dashboard", route => route.fulfill({ json: data }));
+  await page.route("https://cdn.nba.com/**", route => route.fulfill({ status: 204 }));
+  await page.goto("/");
+  await expect(page.getByText("ESPN cross-checked")).toBeVisible();
+  await expect(page.getByText("NBA calendar captured")).toBeVisible();
+  await expect(page.getByText("ESPN cross-check",{exact:true})).toBeVisible();
+  data.schedule_crosscheck.status="partial";
+  await page.reload();
+  await expect(page.getByText("Partial cross-check")).toHaveClass(/warn/);
+  delete data.schedule_crosscheck;
+  await page.reload();
+  await expect(page.getByText("Cross-check expired",{exact:true})).toHaveClass(/warn/);
+  data.runner.schedule_source="unverified_cached_nba";
+  await page.reload();
+  await expect(page.getByText("Unverified",{exact:true})).toHaveClass(/warn/);
+  await page.getByRole("button",{name:"Performance"}).click();
+  await expect(page.getByText("Active margin correction:",{exact:false})).toContainText("72 training and 40 later validation games");
+  await expect(page.getByText("Latest margin assessment:",{exact:false})).toContainText("112 complete saved games");
+});

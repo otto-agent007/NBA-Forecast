@@ -52,14 +52,22 @@ def _key(row):
     return json.dumps([row["game_id"], row.get("player_id")], separators=(",", ":"))
 
 
-def _eligible(samples, model_key, cutoff):
-    """Return validated copies and exclusion counts; never mutate source rows."""
+def _eligible(samples, model_key, cutoff, interval_family=None):
+    """Return validated copies and exclusion counts; never mutate source rows.
+
+    With ``interval_family``, rows from any model key whose sd was built the
+    same way are pooled; without it, only the exact model key is accepted.
+    """
     accepted, excluded, seen = [], Counter(), set()
     for row in samples:
         if not isinstance(row, Mapping):
             excluded["malformed"] += 1
             continue
-        if row.get("model_key") != model_key:
+        if interval_family is not None:
+            if row.get("interval_family") != interval_family:
+                excluded["interval_family_mismatch"] += 1
+                continue
+        elif row.get("model_key") != model_key:
             excluded["model_mismatch"] += 1
             continue
         if not isinstance(row.get("game_id"), str) or not row["game_id"].strip():
@@ -124,12 +132,14 @@ def _label(kind):
     return "empirical retrospective" if kind == RETROSPECTIVE else "empirical prospective residuals"
 
 
-def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100):
+def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100, interval_family=None):
     """Fit a finite-sample absolute standardized residual quantile.
 
     Mixed evidence kinds are explicitly not ready: callers fit separate
     artifacts. The conformal rank is retained as an empirical convention,
-    without assuming exchangeability for basketball time series.
+    without assuming exchangeability for basketball time series. With
+    ``interval_family`` the residuals pool across model keys that share it;
+    the artifact is still installed for, and bound to, ``model_key``.
     """
     artifact = {
         "schema_version": 1, "status": "not_ready", "model_key": model_key,
@@ -137,7 +147,10 @@ def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100)
         "sample_count": 0, "quantile": None, "quantile_rank": None,
         "evidence_kind": None, "label": "heuristic fallback required",
         "fitting_metrics": None, "exclusions": {}, "coverage_caveat": _CAVEAT,
-        "model_binding": "model_key fingerprints model configuration and its training cutoff",
+        "interval_family": interval_family,
+        "model_binding": ("model_key is the configuration this artifact is installed for; residuals pool "
+                          "across model keys sharing interval_family" if interval_family else
+                          "model_key fingerprints model configuration and its training cutoff"),
     }
     if (not isinstance(model_key, str) or not model_key.strip()
             or not _number(alpha, positive=True) or alpha >= 1
@@ -154,11 +167,13 @@ def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100)
         return artifact
     artifact["training_cutoff"] = _iso(cutoff)
     try:
-        rows, excluded = _eligible(iter(samples), model_key, cutoff)
+        rows, excluded = _eligible(iter(samples), model_key, cutoff, interval_family)
     except TypeError:
         artifact["reason"] = "malformed_samples"
         return artifact
     artifact.update(sample_count=len(rows), exclusions=excluded)
+    if interval_family is not None:
+        artifact["pooled_model_keys"] = sorted({str(row.get("model_key")) for row in rows})
     counts = Counter(row["evidence_kind"] for row in rows)
     artifact["evidence_counts"] = dict(counts)
     if len(counts) > 1:
@@ -223,9 +238,16 @@ def _artifact_error(artifact, model_key, as_of):
     return None
 
 
-def calibrated_interval(mean, sd, artifact, *, model_key, as_of):
-    """Return an empirical interval and audit, or an explicit caller fallback."""
+def calibrated_interval(mean, sd, artifact, *, model_key, as_of, interval_family=None):
+    """Return an empirical interval and audit, or an explicit caller fallback.
+
+    A pooled artifact applies only to an sd built the same way, so a caller
+    that names its interval family is refused when the artifact's differs.
+    """
     error = _artifact_error(artifact, model_key, as_of)
+    if (not error and interval_family is not None and artifact.get("interval_family") is not None
+            and artifact["interval_family"] != interval_family):
+        error = "interval_family_mismatch"
     if not (_number(mean) and _number(sd, positive=True)):
         error = "invalid_forecast_mean_or_sd"
     if error:
@@ -240,13 +262,14 @@ def calibrated_interval(mean, sd, artifact, *, model_key, as_of):
         "status": "calibrated", "interval": [lower, upper], "reason": None,
         "audit": {"method": "absolute_standardized_residual_quantile",
                   "label": artifact["label"], "evidence_kind": artifact["evidence_kind"],
-                  "model_key": model_key, "training_cutoff": artifact["training_cutoff"],
+                  "model_key": model_key, "interval_family": artifact.get("interval_family"),
+                  "training_cutoff": artifact["training_cutoff"],
                   "sample_count": artifact["sample_count"], "alpha": artifact["alpha"],
                   "quantile": artifact["quantile"], "coverage_caveat": _CAVEAT},
     }
 
 
-def score_calibration(samples, artifact, *, model_key, as_of):
+def score_calibration(samples, artifact, *, model_key, as_of, interval_family=None):
     """Assess fixed widths on strictly later, separate holdout outcomes.
 
     The score's evidence kind describes its evaluation rows, independently of
@@ -257,7 +280,7 @@ def score_calibration(samples, artifact, *, model_key, as_of):
     if error:
         return {"status": "not_ready", "reason": error, "sample_count": 0}
     try:
-        rows, excluded = _eligible(iter(samples), model_key, _time(as_of))
+        rows, excluded = _eligible(iter(samples), model_key, _time(as_of), interval_family)
     except TypeError:
         return {"status": "not_ready", "reason": "malformed_samples", "sample_count": 0}
     # Source finals can be captured today for games long past. Chronological

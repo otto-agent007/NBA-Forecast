@@ -28,7 +28,9 @@ STAT_PROJECTIONS = {'reb': 'expected_reb', 'ast': 'expected_ast', 'fg3m': 'expec
                     'stl': 'expected_stl', 'blk': 'expected_blk', 'tov': 'expected_tov'}
 STAT_PROJECTIONS.update({k:'expected_'+k for k in ('fgm','fga','fg3a','ftm','fta','oreb','dreb','pf','plus_minus',*PERCENTAGES)})
 
-_SCHEMA = """
+# Original single-table layout. Ledgers created before history deduplication
+# keep it until ``dedupe_histories`` rebuilds them; readers see the same rows.
+_LEGACY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -69,6 +71,89 @@ CREATE TRIGGER IF NOT EXISTS evaluations_no_delete
 BEFORE DELETE ON evaluations BEGIN SELECT RAISE(ABORT, 'evaluation revisions are immutable'); END;
 """
 
+# Every run used to embed its own copy of the (large, usually identical) input
+# history. Each distinct history is now stored once, keyed by its digest. The
+# ``runs`` view still presents the complete logical row, including
+# history_json and the insertion-order rowid, so readers are unchanged. Trigger
+# names match the legacy layout so older code's IF NOT EXISTS setup is a no-op.
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS histories (
+    history_sha256 TEXT PRIMARY KEY,
+    history_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_records (
+    run_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    as_of TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('live', 'replay', 'demo')),
+    scope TEXT NOT NULL CHECK (scope IN ('league', 'subset')),
+    snapshot_json TEXT NOT NULL,
+    history_sha256 TEXT NOT NULL REFERENCES histories(history_sha256),
+    forecast_json TEXT NOT NULL,
+    snapshot_sha256 TEXT NOT NULL,
+    forecast_sha256 TEXT NOT NULL,
+    inputs_sha256 TEXT NOT NULL
+);
+CREATE VIEW IF NOT EXISTS runs AS
+SELECT r.run_id AS run_id, r.created_at AS created_at, r.as_of AS as_of, r.mode AS mode,
+       r.scope AS scope, r.snapshot_json AS snapshot_json, h.history_json AS history_json,
+       r.forecast_json AS forecast_json, r.snapshot_sha256 AS snapshot_sha256,
+       r.history_sha256 AS history_sha256, r.forecast_sha256 AS forecast_sha256,
+       r.inputs_sha256 AS inputs_sha256, r.rowid AS rowid
+FROM run_records r JOIN histories h ON h.history_sha256 = r.history_sha256;
+CREATE TABLE IF NOT EXISTS evaluations (
+    run_id TEXT NOT NULL REFERENCES run_records(run_id),
+    revision INTEGER NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    actuals_json TEXT NOT NULL,
+    actuals_sha256 TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, revision)
+);
+CREATE TRIGGER IF NOT EXISTS runs_insert INSTEAD OF INSERT ON runs BEGIN
+    SELECT RAISE(ABORT, 'input history differs from the copy stored under its digest')
+    WHERE EXISTS (SELECT 1 FROM histories WHERE history_sha256 = NEW.history_sha256
+                  AND history_json IS NOT NEW.history_json);
+    INSERT INTO histories (history_sha256, history_json)
+    SELECT NEW.history_sha256, NEW.history_json
+    WHERE NOT EXISTS (SELECT 1 FROM histories WHERE history_sha256 = NEW.history_sha256);
+    INSERT INTO run_records (run_id, created_at, as_of, mode, scope, snapshot_json, history_sha256,
+                             forecast_json, snapshot_sha256, forecast_sha256, inputs_sha256)
+    VALUES (NEW.run_id, NEW.created_at, NEW.as_of, NEW.mode, NEW.scope, NEW.snapshot_json,
+            NEW.history_sha256, NEW.forecast_json, NEW.snapshot_sha256, NEW.forecast_sha256,
+            NEW.inputs_sha256);
+END;
+CREATE TRIGGER IF NOT EXISTS runs_view_no_update
+INSTEAD OF UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS runs_view_no_delete
+INSTEAD OF DELETE ON runs BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS runs_no_replace
+BEFORE INSERT ON run_records WHEN EXISTS (SELECT 1 FROM run_records WHERE run_id = NEW.run_id)
+BEGIN SELECT RAISE(ABORT, 'forecast runs cannot be replaced'); END;
+CREATE TRIGGER IF NOT EXISTS runs_no_update
+BEFORE UPDATE ON run_records BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS runs_no_delete
+BEFORE DELETE ON run_records BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS histories_no_replace
+BEFORE INSERT ON histories WHEN EXISTS (SELECT 1 FROM histories WHERE history_sha256 = NEW.history_sha256)
+BEGIN SELECT RAISE(ABORT, 'input histories cannot be replaced'); END;
+CREATE TRIGGER IF NOT EXISTS histories_no_update
+BEFORE UPDATE ON histories BEGIN SELECT RAISE(ABORT, 'input histories are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS histories_no_delete
+BEFORE DELETE ON histories BEGIN SELECT RAISE(ABORT, 'input histories are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS evaluations_no_replace
+BEFORE INSERT ON evaluations WHEN EXISTS (
+    SELECT 1 FROM evaluations WHERE run_id = NEW.run_id AND revision = NEW.revision
+) BEGIN SELECT RAISE(ABORT, 'evaluation revisions cannot be replaced'); END;
+CREATE TRIGGER IF NOT EXISTS evaluations_no_update
+BEFORE UPDATE ON evaluations BEGIN SELECT RAISE(ABORT, 'evaluation revisions are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS evaluations_no_delete
+BEFORE DELETE ON evaluations BEGIN SELECT RAISE(ABORT, 'evaluation revisions are immutable'); END;
+"""
+
+_RUN_COLUMNS = ('run_id', 'created_at', 'as_of', 'mode', 'scope', 'snapshot_json', 'history_json',
+                'forecast_json', 'snapshot_sha256', 'history_sha256', 'forecast_sha256', 'inputs_sha256')
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -85,11 +170,15 @@ def _hash(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def _is_legacy(conn):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'").fetchone() is not None
+
+
 def _connect(db_path):
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
-    conn.executescript(_SCHEMA)
+    conn.executescript(_LEGACY_SCHEMA if _is_legacy(conn) else _SCHEMA)
     return conn
 
 
@@ -219,8 +308,9 @@ def save_run(db_path, snapshot, history, forecast, mode='live', scope='league'):
                     raise ValueError('live as_of must be within 48 hours before actual save time')
                 if any(parse_time(game['start_time']) <= created for game in snapshot['games']):
                     raise ValueError('live run must be saved before every tipoff')
+            # Named columns work for both the legacy table and the deduplicated view.
             conn.execute(
-                'INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                f'INSERT INTO runs ({", ".join(_RUN_COLUMNS)}) VALUES ({", ".join(["?"] * len(_RUN_COLUMNS))})',
                 (run_id, created.isoformat(), snapshot['as_of'], mode, scope,
                  encoded['snapshot'], encoded['history'], encoded['forecast'],
                  _hash(encoded['snapshot']), _hash(encoded['history']),
@@ -374,7 +464,10 @@ def evaluate_run(db_path, run_id, actuals):
     try:
         with conn:
             conn.execute('BEGIN IMMEDIATE')
-            run = conn.execute('SELECT * FROM runs WHERE run_id = ?', (run_id,)).fetchone()
+            # Never the run's input history: scoring needs only the frozen forecast.
+            run = conn.execute(
+                'SELECT run_id, created_at, as_of, mode, scope, snapshot_json, forecast_json '
+                'FROM runs WHERE run_id = ?', (run_id,)).fetchone()
             if run is None:
                 raise ValueError(f'unknown forecast run: {run_id}')
             snapshot, forecast = json.loads(run['snapshot_json']), json.loads(run['forecast_json'])
@@ -527,3 +620,93 @@ def performance_report(db_path):
             }
     finally:
         conn.close()
+
+
+def _row_digest(conn, query):
+    """Order-sensitive digest of every value, keeping SQLite types distinct."""
+    digest, count = hashlib.sha256(), 0
+    for row in conn.execute(query):
+        for value in row:
+            data = b'' if value is None else str(value).encode('utf-8')
+            digest.update(type(value).__name__.encode() + len(data).to_bytes(8, 'big') + data)
+        count += 1
+    return count, digest.hexdigest()
+
+
+def dedupe_histories(db_path, backup_suffix='.pre-history-dedupe'):
+    """Rebuild a legacy ledger so each distinct input history is stored once.
+
+    The rebuilt file is verified before it replaces the original: every run,
+    including its insertion-order rowid, and every evaluation revision must read
+    back value-for-value through the new ``runs`` view. The original file stays
+    beside it (a hard link, so no copy) until the owner deletes it. Stop ticks
+    and other writers first; this holds the write lock while it runs.
+    """
+    import os
+    from pathlib import Path
+    db = Path(db_path)
+    backup, staging = db.with_name(db.name + backup_suffix), db.with_name(db.name + '.dedupe-tmp')
+    for suffix in ('-wal', '-journal'):
+        if db.with_name(db.name + suffix).exists():
+            raise ValueError(f'{db.name}{suffix} exists; recover the open transaction first')
+    if backup.exists():
+        raise ValueError(f'{backup} already exists')
+    source = sqlite3.connect(db, timeout=30)
+    try:
+        if not _is_legacy(source):
+            raise ValueError('ledger histories are already stored once')
+        source.execute('BEGIN IMMEDIATE')  # No other writer can commit until the swap.
+        staging.unlink(missing_ok=True)
+        target = sqlite3.connect(staging)
+        try:
+            target.execute('PRAGMA foreign_keys = ON')
+            target.executescript(_SCHEMA)
+            stored, mismatched = {}, 0
+            with target:
+                rows = source.execute(f'SELECT rowid, {", ".join(_RUN_COLUMNS)} FROM runs ORDER BY rowid')
+                for row in rows:
+                    run = dict(zip(('rowid', *_RUN_COLUMNS), row))
+                    content = _hash(run['history_json'])
+                    mismatched += content != run['history_sha256']
+                    if run['history_sha256'] not in stored:
+                        target.execute('INSERT INTO histories (history_sha256, history_json) VALUES (?, ?)',
+                                       (run['history_sha256'], run['history_json']))
+                        stored[run['history_sha256']] = content
+                    elif stored[run['history_sha256']] != content:
+                        raise ValueError(f'run {run["run_id"]} shares a history digest with different content')
+                    columns = ('rowid', *(c for c in _RUN_COLUMNS if c != 'history_json'))
+                    target.execute(f'INSERT INTO run_records ({", ".join(columns)}) '
+                                   f'VALUES ({", ".join(["?"] * len(columns))})',
+                                   tuple(run[c] for c in columns))
+                eval_columns = 'rowid, run_id, revision, evaluated_at, actuals_json, actuals_sha256, report_json'
+                for row in source.execute(f'SELECT {eval_columns} FROM evaluations ORDER BY rowid'):
+                    target.execute(f'INSERT INTO evaluations ({eval_columns}) VALUES (?, ?, ?, ?, ?, ?, ?)', row)
+            run_query = f'SELECT rowid, {", ".join(_RUN_COLUMNS)} FROM runs ORDER BY rowid'
+            eval_query = f'SELECT {eval_columns} FROM evaluations ORDER BY rowid'
+            runs, evaluations = _row_digest(source, run_query), _row_digest(source, eval_query)
+            if (runs, evaluations) != (_row_digest(target, run_query), _row_digest(target, eval_query)):
+                raise ValueError('rebuilt ledger does not read back identically; original left in place')
+            if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or \
+                    target.execute('PRAGMA foreign_key_check').fetchall():
+                raise ValueError('rebuilt ledger failed SQLite integrity checks; original left in place')
+        finally:
+            target.close()
+        with open(staging, 'rb') as stream:
+            os.fsync(stream.fileno())
+        os.chmod(staging, db.stat().st_mode & 0o777)
+        before = db.stat().st_size
+        os.link(db, backup)
+        os.replace(staging, db)
+        directory = os.open(db.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    finally:
+        source.close()
+    return dict(runs=runs[0], evaluations=evaluations[0], histories=len(stored),
+                history_digest_mismatches=mismatched, bytes_before=before,
+                bytes_after=db.stat().st_size, backup=str(backup))

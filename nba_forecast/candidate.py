@@ -6,6 +6,7 @@ from .profiles import build_profiles, eligible_history
 from .rotation_allocation import redistribute
 from .context_effects import context_adjustment
 from .calibration import calibrated_interval
+from .intervals import INTERVAL_FAMILY
 from .totals import game_totals
 from .validation import parse_time
 from .model_versions import ENHANCED_VERSIONS
@@ -110,8 +111,12 @@ def forecast_candidate(snapshot,history):
         game=lookup[p['game_id']];env=environment['teams'].get(p['team_id'],{})
         pace=env.get('pace_factor',1.)**_strength(parameters,'pace_strength')
         defense=env.get('defense_factor',1.)**_strength(parameters,'defense_strength')
+        # The baseline's explicit home-court factor carries home/away; the fitted
+        # context keeps rest and travel only, so the away feature is neutralized.
+        side_factor=p['components'].get('home_court',{}).get('factor',1.)
         context=context_adjustment(enhancement.get('context_model'),snapshot.get('schedule_context',{}).get(p['team_id'],{}),
-            home=p['team_id']==game['home_team_id'],as_of=snapshot['as_of'])
+            home=True if 'home_court' in p['components'] else p['team_id']==game['home_team_id'],as_of=snapshot['as_of'])
+        if 'home_court' in p['components']:context['away_feature']='replaced_by_home_court_term'
         context_factor=context['factor']**_strength(parameters,'context_strength')
         factor=defense*context_factor
         item=inputs[pid];old=original[pid];minutes=item['minutes']
@@ -123,9 +128,9 @@ def forecast_candidate(snapshot,history):
         rates={k:v*pace for k,v in item['rates'].items()}
         for evidence in p['components']['multistat'].values():
             if evidence['rate'] is not None:evidence['rate']*=pace
-        _project_numbers(p,minutes,rates,p['components']['shooting'],by_player[pid],variance,factor)
+        _project_numbers(p,minutes,rates,p['components']['shooting'],by_player[pid],variance,factor,side_factor)
         interval=calibrated_interval(p['points_mean'],p['points_sd'],enhancement.get('calibration'),
-            model_key=enhancement['model_key'],as_of=snapshot['as_of'])
+            model_key=enhancement['model_key'],as_of=snapshot['as_of'],interval_family=INTERVAL_FAMILY)
         if interval['status']=='calibrated':p['points_lower80'],p['points_upper80']=interval['interval']
         p['components']['uncertainty']['calibration']=interval
         p['components']['game_environment']=dict(pace_factor=pace,defense_factor=defense,context_factor=context_factor,context=context,

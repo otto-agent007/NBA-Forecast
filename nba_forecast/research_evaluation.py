@@ -100,7 +100,8 @@ def reconstruct(history,records,as_of):
             a=actual[p['player_id']]
             if p['status']!='projected' or a['status']!='played' or a['minutes']<=0:
                 exclusions['unsupported_or_nonplaying']+=1;continue
-            e=env['teams'][p['team_id']];u=p['components']['uncertainty'];factor=p['components']['scoring']['opponent_multiplier']
+            e=env['teams'][p['team_id']];u=p['components']['uncertainty']
+            factor=p['components']['scoring']['opponent_multiplier']*p['components']['scoring'].get('home_court_multiplier',1.)
             players.append(dict(game_id=g['game_id'],player_id=p['player_id'],team_id=p['team_id'],game_time=game['game_time'],
                 actual_known_at=a['known_at'],actual_points=a['pts'],baseline_points=p['points_mean'],
                 scoring_before_opponent=p['points_mean']/factor,old_factor=factor,

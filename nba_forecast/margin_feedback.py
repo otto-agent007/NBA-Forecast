@@ -28,7 +28,7 @@ def score_margin(distribution, home_score, away_score):
         home_win_probability=win['yes_probability'],home_win_brier=(win['yes_probability']-(actual>0))**2,
         ranked_probability_score=fsum(errors),ranked_probability_score_support=[low,high],
         thresholds=thresholds,threshold_policy='Fixed diagnostic lines; these are not captured market quotes or owner selections.',
-        calibration_status='uncalibrated',settlement=distribution['settlement'])
+        calibration_status=distribution.get('calibration_status','uncalibrated'),settlement=distribution['settlement'])
 
 
 def score_game_margin(distribution, game, actuals):

@@ -48,7 +48,8 @@ class EmptyReportTests(unittest.TestCase):
         from nba_forecast.preflight import check_inputs
         s,p,r,payload,meta=fixture();r['no_injuries']=summary_no_injuries(payload,s['games'][0],s['season'],meta)
         s=apply_no_injuries(s,r['no_injuries']);r['rosters']['T2'].pop()
-        self.assertTrue(any(i['code']=='roster_not_confirmed' for i in check_inputs(s,[],p,r)['issues']))
+        # The difference stays visible; it is a note, since the official roster is authoritative.
+        self.assertTrue(any(n['code']=='roster_difference' and n['team_id']=='T2' for n in check_inputs(s,[],p,r)['notes']))
     def test_explicit_empty_team_list_fills_missing_block_and_passes_preflight(self):
         from nba_forecast.availability import summary_no_injuries,apply_no_injuries
         from nba_forecast.preflight import check_inputs

@@ -1,6 +1,6 @@
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime,timedelta
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -16,6 +16,73 @@ from tests.test_model import row
 NOW='2026-10-21T16:00:00Z'
 
 class OperationsTests(unittest.TestCase):
+    def test_secondary_calendar_recovers_cdn_denial_without_attention_warning(self):
+        source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
+        source['version']='nba-source';verified=deepcopy(source)
+        verified['crosscheck']=dict(status='verified',verified_game_ids=['0022600001'],blocked_game_ids=[])
+        clock='2026-10-24T15:59:00Z'
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)/'schedule';folder.mkdir()
+            (folder/'latest.json').write_text(json.dumps(source))
+            with patch('nba_forecast.operations._now',return_value=clock),\
+                 patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
+                 patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified) as secondary:
+                result=run_tick(d,[])
+        secondary.assert_called_once()
+        self.assertEqual(result['status'],'complete')
+        self.assertEqual(result['schedule_source'],'espn_verified_cached_nba')
+        self.assertEqual(result['warnings'],[])
+        self.assertEqual(result['created_runs'],0)
+
+    def test_unverified_due_calendar_game_is_noted_not_withheld(self):
+        source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
+        source['version']='nba-source';verified=deepcopy(source)
+        verified['crosscheck']=dict(status='partial',verified_game_ids=[],blocked_game_ids=['0022600001'])
+        clock='2026-10-24T16:00:00Z'
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)/'schedule';folder.mkdir();(folder/'latest.json').write_text(json.dumps(source))
+            with patch('nba_forecast.operations._now',return_value=clock),\
+                 patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
+                 patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified),\
+                 patch('nba_forecast.operations.fetch_roster',side_effect=ValueError('roster offline')) as roster,\
+                 patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
+                result=run_tick(d,[])
+        # The forecast proceeds to its own preflight, which confirms the game against ESPN.
+        roster.assert_called_once()
+        self.assertEqual(result['schedule_unverified_games'],['0022600001'])
+        self.assertNotIn('schedule_crosscheck',[e.get('task') for e in result['errors']])
+
+    def test_both_schedule_sources_unavailable_use_the_saved_calendar(self):
+        source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
+        source['version']='nba-source'
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)/'schedule';folder.mkdir();(folder/'latest.json').write_text(json.dumps(source))
+            with patch('nba_forecast.operations._now',return_value='2026-10-24T16:00:00Z'),\
+                 patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
+                 patch('nba_forecast.operations.fetch_verified_secondary_schedule',side_effect=ValueError('ESPN unavailable')),\
+                 patch('nba_forecast.operations.fetch_roster',side_effect=ValueError('roster offline')) as roster,\
+                 patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
+                result=run_tick(d,[])
+                state=json.loads((folder/'fetch-state.json').read_text())
+        roster.assert_called_once()
+        self.assertEqual(result['schedule_source'],'unverified_cached_nba')
+        self.assertIn('Using the saved calendar',[w for w in result['warnings'] if w.get('task')=='schedule'][0]['action'])
+        self.assertEqual((state['consecutive_failures'],state['next_attempt_at']),(1,'2026-10-24T16:05:00+00:00'))
+
+    def test_unmatched_secondary_event_is_a_visible_warning(self):
+        source=normalize_season(payload([game(start='2026-10-26T22:00:00Z')]),'2026-10-22T03:00:00Z')
+        source['version']='nba-source';verified=deepcopy(source)
+        verified['crosscheck']=dict(status='partial',verified_game_ids=[],blocked_game_ids=[],
+                                   unmatched_secondary_events=[dict(espn_id='401909853')])
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)/'schedule';folder.mkdir();(folder/'latest.json').write_text(json.dumps(source))
+            with patch('nba_forecast.operations._now',return_value='2026-10-24T16:00:00Z'),\
+                 patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
+                 patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified):
+                result=run_tick(d,[])
+        self.assertEqual(result['status'],'complete')
+        self.assertEqual([w['espn_id'] for w in result['warnings'] if w.get('task')=='schedule_crosscheck'],['401909853'])
+
     def test_tomorrow_jobs_wait_without_fetching_or_raising_attention(self):
         schedule=normalize_season(payload([game(start='2026-10-22T22:00:00Z')]),NOW);schedule['version']='v1'
         clock='2026-10-21T23:00:00Z'
@@ -124,6 +191,71 @@ class OperationsTests(unittest.TestCase):
 
 
 class EvidenceTickTests(unittest.TestCase):
+    def test_unreplayed_ready_margin_never_activates(self):
+        from nba_forecast.enhancements import install_artifact
+        from nba_forecast.refinement_upgrade import build_artifact
+        base=dict(model_version='regular-season-baseline-0.5.0',model_key='base',
+            known_at='2026-10-20T00:00:00Z',parameters={},team_games=[],
+            context_model=None,calibration=None,excluded_history_game_ids=[])
+        refined=build_artifact(base,'a'*64,'2026-10-21T15:00:00Z')
+        old=install_artifact(self.folder,refined)
+        pointer=self.folder/'model-upgrade-active.json'
+        pointer.write_text(json.dumps(dict(artifact_sha256=old,activated_at=refined['known_at'])))
+        margin=dict(status='ready',evidence_sha256='b'*64,model_key=refined['model_key'],
+            collection_errors=[])
+        player=dict(status='not_ready',reason='insufficient_games',sample_count=0,
+            game_count=0,collection_errors=[])
+        with patch('nba_forecast.prospective_calibration.fit_prospective',return_value=player),\
+             patch('nba_forecast.prospective_margin_calibration.fit_prospective_margin',return_value=margin),\
+             patch('nba_forecast.prospective_margin_calibration.verify_margin_calibration_sources',return_value=False),\
+             patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}):
+            report=run_tick(self.folder,[])
+        self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],old)
+        self.assertTrue(any(e.get('task')=='prospective_margin_calibration' for e in report['errors']))
+
+    def test_ready_margin_correction_is_pinned_only_for_future_forecasts(self):
+        from nba_forecast.enhancements import install_artifact
+        from nba_forecast.refinement_upgrade import build_artifact
+        from nba_forecast.prospective_margin_calibration import METHOD as CORRECTION_METHOD,_fit_window
+        from tests.test_prospective_margin_calibration import sample as margin_sample
+        base=dict(model_version='regular-season-baseline-0.5.0',model_key='base',known_at='2026-10-20T00:00:00Z',
+            parameters={},team_games=[],context_model=None,calibration=None,excluded_history_game_ids=[])
+        refined=build_artifact(base,'a'*64,'2026-10-21T15:00:00Z')
+        old=install_artifact(self.folder,refined)
+        pointer=self.folder/'model-upgrade-active.json'
+        pointer.write_text(json.dumps(dict(artifact_sha256=old,activated_at=refined['known_at'])))
+        rows=[]
+        for i in range(112):
+            sample=margin_sample(i);sample['model_key']=refined['model_key']
+            for field in ('game_time','forecast_created_at','actual_known_at'):
+                sample[field]=(datetime.fromisoformat(sample[field])-timedelta(days=61)).isoformat()
+            rows.append(sample)
+        cutoff='2026-10-21T15:30:00Z'
+        margin=dict(schema_version=1,method=CORRECTION_METHOD,model_key=refined['model_key'],
+            window_index=0,training_cutoff=cutoff,evidence_samples=rows,
+            **_fit_window(rows,refined['model_key'],cutoff),collection_errors=[])
+        self.assertEqual(margin['status'],'ready')
+        player=dict(status='not_ready',reason='insufficient_games',sample_count=0,game_count=0,collection_errors=[])
+        with patch('nba_forecast.prospective_calibration.fit_prospective',return_value=player),\
+             patch('nba_forecast.prospective_margin_calibration.fit_prospective_margin',return_value=margin),\
+             patch('nba_forecast.prospective_margin_calibration.verify_margin_calibration_sources',return_value=True),\
+             patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}):
+            result=run_tick(self.folder,[])
+            self.assertFalse(result['errors'],result['errors'])
+            updated=json.loads(pointer.read_text())['artifact_sha256']
+            self.assertNotEqual(updated,old)
+            archive=json.loads((self.folder/'model-artifacts'/(updated+'.json')).read_text())
+            self.assertEqual(archive['margin_calibration']['evidence_sha256'],margin['evidence_sha256'])
+            status=json.loads((self.folder/'model-status.json').read_text())
+            self.assertEqual(status['applied_margin_calibration']['evidence_sha256'],margin['evidence_sha256'])
+            margin['status']='not_ready'
+            second=run_tick(self.folder,[])
+            self.assertFalse(second['errors'],second['errors'])
+            self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],updated)
+            status=json.loads((self.folder/'model-status.json').read_text())
+            self.assertEqual(status['applied_margin_calibration']['status'],'ready')
+            self.assertEqual(status['prospective_margin']['status'],'not_ready')
+
     def setUp(self):
         self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'captured'}))
         self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))

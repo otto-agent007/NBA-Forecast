@@ -45,9 +45,16 @@ class ReferenceTests(unittest.TestCase):
         s={'season':'2026-27','games':[dict(start_time='2026-10-23T20:00:00Z',home_tricode='MIL',away_tricode='CHI',home_team_id='h',away_team_id='a')]}
         board={'events':[{'date':s['games'][0]['start_time'],'competitions':[{'competitors':[
             {'homeAway':'home','team':{'id':'15','abbreviation':'MIL'}},{'homeAway':'away','team':{'id':'4','abbreviation':'CHI'}}]}]}]}
+        # A wrong ESPN roster is set aside (recorded), never used and never fatal to the game.
         for payload in ({'team':{'id':'9'}},{'team':{'id':'15'},'season':{'displayName':'2025-26'}}):
-            with self.subTest(payload=payload), patch('nba_forecast.reference.fetch_reference',side_effect=[(board,{}),(payload,{})]):
-                with self.assertRaises(ValueError):collect_references(s,'unused')
+            def fetch(url,*args,**kwargs):
+                if 'scoreboard?' in url:return board,{}
+                if '/teams/15/' in url:return payload,{}
+                return {'team':{'id':'4'},'season':{'displayName':'2026-27'},'athletes':[{'fullName':'A Player'}]},{}
+            with self.subTest(payload=payload), patch('nba_forecast.reference.fetch_reference',side_effect=fetch):
+                result=collect_references(s,'unused')
+            self.assertEqual(list(result['rosters']),['a'])
+            self.assertEqual([(f['kind'],f['team_id']) for f in result['failures'] if f['kind']=='roster'],[('roster','h')])
 
     def test_missing_official_team_loads_exact_event_summary(self):
         from tests.test_empty_injuries import fixture

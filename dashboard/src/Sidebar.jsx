@@ -10,6 +10,16 @@ export default function Sidebar({ game, data, onReview, now }) {
   const daily = data.injury_capture;
   const dailySource = safeSource(daily?.capture?.report?.source_url);
   const sourceWarnings = (data.runner?.warnings || []).filter((w) => ['schedule', 'roster'].includes(w.task));
+  const crosscheck=data.schedule_crosscheck;
+  const scheduleSource=data.runner?.schedule_source;
+  const verifiedSecondary=crosscheck?.status === 'verified' && scheduleSource !== 'unverified_cached_nba';
+  const staleSecondary=scheduleSource === 'espn_verified_cached_nba' && !crosscheck;
+  const unverifiedSchedule=scheduleSource === 'unverified_cached_nba';
+  const scheduleLabel=unverifiedSchedule ? 'Unverified'
+    : verifiedSecondary ? 'ESPN cross-checked'
+    : crosscheck ? 'Partial cross-check'
+    : staleSecondary ? 'Cross-check unavailable'
+      : data.schedule_observed_at ? 'NBA captured' : 'Missing';
   const h = health(data.runner, now);
   const waiting = data.runner?.waiting_jobs || [];
   const runnerIssues = data.runner?.errors || [];
@@ -39,8 +49,8 @@ export default function Sidebar({ game, data, onReview, now }) {
         <Check
           icon="check"
           label="Schedule"
-          value={data.schedule_observed_at ? "Captured" : "Missing"}
-          kind={data.schedule_observed_at ? "good" : "warn"}
+          value={scheduleLabel}
+          kind={!unverifiedSchedule && (verifiedSecondary || (data.schedule_observed_at && !crosscheck && !staleSecondary)) ? "good" : "warn"}
         />
         <Check
           icon="info"
@@ -95,9 +105,12 @@ export default function Sidebar({ game, data, onReview, now }) {
           {w.task === 'schedule' ? 'Calendar refresh unavailable. Using the saved schedule with its original capture time.'
             : 'Roster refresh unavailable. Only saved roster evidence within 48 hours can support a forecast.'}
         </p>)}
+        {staleSecondary && <p className="warning">Today's ESPN calendar check is unavailable. Each forecast still confirms its own matchup and tipoff.</p>}
+        {verifiedSecondary && <p>Tipoff and status checked against ESPN; NBA game IDs come from the saved NBA calendar.</p>}
         <dl>
-          <dt>Schedule</dt>
+          <dt>NBA calendar captured</dt>
           <dd>{stamp(data.schedule_observed_at)}</dd>
+          {crosscheck && <><dt>ESPN cross-check</dt><dd>{stamp(crosscheck.observed_at)}</dd></>}
           <dt>Forecast saved</dt>
           <dd>{stamp(forecast?.created_at)}</dd>
           <dt>Report published</dt>

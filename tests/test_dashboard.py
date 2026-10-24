@@ -1,13 +1,36 @@
 import json
+from datetime import datetime,timezone
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from nba_forecast.dashboard import dashboard_data
+from nba_forecast.dashboard import dashboard_data, _current_schedule
 from nba_forecast.store import save_run
 from tests.test_store import inputs,NOW
 
 class DashboardTests(unittest.TestCase):
+    def test_current_secondary_schedule_is_displayed_only_for_its_nba_base(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)/'schedule';(folder/'secondary').mkdir(parents=True)
+            official=dict(version='nba-a',season='2026-27',games=[dict(game_id='0022600104',start_time='old')])
+            secondary=dict(version='espn-a',season='2026-27',games=[dict(game_id='0022600104',start_time='new')],
+                crosscheck=dict(nba_base_version='nba-a',observed_at=datetime.now(timezone.utc).isoformat()))
+            (folder/'latest.json').write_text(json.dumps(official))
+            path=folder/'secondary/verified-latest.json';path.write_text(json.dumps(secondary))
+            self.assertEqual(_current_schedule(Path(d))['games'][0]['start_time'],'new')
+            (Path(d)/'last-tick.json').write_text(json.dumps(dict(
+                schedule_source='unverified_cached_nba',schedule_version='nba-a')))
+            self.assertEqual(_current_schedule(Path(d))['games'][0]['start_time'],'old')
+            (Path(d)/'last-tick.json').write_text(json.dumps(dict(
+                schedule_source='espn_verified_cached_nba',schedule_version='espn-a')))
+            self.assertEqual(_current_schedule(Path(d))['games'][0]['start_time'],'new')
+            # Checked once a day: an older check stays in use while the runner uses it.
+            secondary['crosscheck']['observed_at']='2026-01-01T00:00:00Z';path.write_text(json.dumps(secondary))
+            self.assertEqual(_current_schedule(Path(d))['games'][0]['start_time'],'new')
+            secondary['crosscheck']['observed_at']=datetime.now(timezone.utc).isoformat()
+            secondary['crosscheck']['nba_base_version']='nba-older';path.write_text(json.dumps(secondary))
+            self.assertEqual(_current_schedule(Path(d))['games'][0]['start_time'],'old')
+
     def test_played_players_absent_from_current_roster_remain_discoverable(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'players').mkdir()

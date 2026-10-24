@@ -53,8 +53,8 @@ def fetch_reference(url,directory,max_age=300):
 
 
 def collect_references(snapshot,directory,roster_reviews=()):
-    from .availability import needs_empty_report,summary_no_injuries
-    games=[];rosters={};sources=[];boards={};empty=[];official={}
+    from .availability import official_coverage,summary_injuries,summary_no_injuries
+    games=[];rosters={};sources=[];boards={};empty=[];espn=[];official={};failures=[]
     for game in snapshot['games']:
         date=parse_time(game['start_time']).astimezone(ZoneInfo('America/New_York')).strftime('%Y%m%d')
         new_date=date not in boards
@@ -78,20 +78,30 @@ def collect_references(snapshot,directory,roster_reviews=()):
         for side,team in sides.items():
             tid=game[side+'_team_id']
             if tid in rosters:continue
-            payload,meta=fetch_reference(BASE+'teams/'+str(team['id'])+'/roster',directory,max_age=900)
-            if str(payload.get('team',{}).get('id'))!=str(team['id']):raise ValueError('reference roster team identity mismatch')
-            if payload.get('season',{}).get('displayName')!=snapshot['season']:raise ValueError('reference roster season mismatch')
-            names=[p.get('fullName') or p['displayName'] for p in payload.get('athletes',[])]
-            if not names:raise ValueError('reference roster is empty')
-            rosters[tid]=names;sources.append(meta)
-            if any(r.get('team_id')==tid and r.get('game_id')==game['game_id'] for r in roster_reviews):
-                team_payload,team_meta=fetch_reference(f'https://www.nba.com/team/{tid}/roster',directory,max_age=900)
-                info=team_payload['info'];members=team_payload['roster']
-                if str(info['TEAM_ID'])!=tid or info['SEASON_YEAR']!=snapshot['season']:raise ValueError('Official team roster identity mismatch')
-                if any(str(p['TeamID'])!=tid or str(p['SEASON'])!=snapshot['season'][:4] for p in members):raise ValueError('Official team roster season or membership mismatch')
-                official[tid]=dict(team_id=tid,season=snapshot['season'],players=[dict(player_id=str(p['PLAYER_ID']),name=p['PLAYER']) for p in members],evidence=team_meta)
-                sources.append(team_meta)
-        if any(needs_empty_report(snapshot,game,game[s+'_team_id']) for s in ('home','away')):
-            payload,meta=fetch_reference(BASE+'summary?event='+str(matched['provider_event_id']),directory)
-            empty.extend(summary_no_injuries(payload,game,snapshot['season'],meta));sources.append(meta)
-    return dict(games=games,rosters=rosters,sources=sources,no_injuries=empty,official_rosters=official)
+            # One provider's roster problem loses only that comparison, never the game.
+            try:
+                payload,meta=fetch_reference(BASE+'teams/'+str(team['id'])+'/roster',directory,max_age=900)
+                if str(payload.get('team',{}).get('id'))!=str(team['id']):raise ValueError('reference roster team identity mismatch')
+                if payload.get('season',{}).get('displayName')!=snapshot['season']:raise ValueError('reference roster season mismatch')
+                names=[p.get('fullName') or p['displayName'] for p in payload.get('athletes',[])]
+                if not names:raise ValueError('reference roster is empty')
+                rosters[tid]=names;sources.append(meta)
+                if any(r.get('team_id')==tid and r.get('game_id')==game['game_id'] for r in roster_reviews):
+                    team_payload,team_meta=fetch_reference(f'https://www.nba.com/team/{tid}/roster',directory,max_age=900)
+                    info=team_payload['info'];members=team_payload['roster']
+                    if str(info['TEAM_ID'])!=tid or info['SEASON_YEAR']!=snapshot['season']:raise ValueError('Official team roster identity mismatch')
+                    if any(str(p['TeamID'])!=tid or str(p['SEASON'])!=snapshot['season'][:4] for p in members):raise ValueError('Official team roster season or membership mismatch')
+                    official[tid]=dict(team_id=tid,season=snapshot['season'],players=[dict(player_id=str(p['PLAYER_ID']),name=p['PLAYER']) for p in members],evidence=team_meta)
+                    sources.append(team_meta)
+            except (ValueError,OSError,KeyError,TypeError) as exc:
+                failures.append(dict(kind='roster',team_id=tid,error=str(exc)))
+        # Any team the official report does not yet cover gets ESPN's game injury list.
+        if any(not official_coverage(snapshot,game,game[s+'_team_id']) for s in ('home','away')):
+            try:
+                payload,meta=fetch_reference(BASE+'summary?event='+str(matched['provider_event_id']),directory)
+                empty.extend(summary_no_injuries(payload,game,snapshot['season'],meta))
+                espn.extend(summary_injuries(payload,game,snapshot['season'],meta));sources.append(meta)
+            except (ValueError,OSError,KeyError,TypeError) as exc:
+                failures.append(dict(kind='injury_summary',game_id=game.get('game_id'),error=str(exc)))
+    return dict(games=games,rosters=rosters,sources=sources,no_injuries=empty,espn_injuries=espn,
+                official_rosters=official,failures=failures)

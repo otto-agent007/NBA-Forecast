@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 
 from .calibration import PROSPECTIVE, fit_calibration
+from .intervals import interval_family_of
 from .validation import parse_time, validate_history
 
 
@@ -47,7 +48,13 @@ def _source_kind(prediction):
     return "unknown"
 
 
-def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors):
+def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family=None):
+    """Latest pregame prediction per game/player.
+
+    With ``interval_family`` every live run whose predictions built their sd
+    that way is eligible, whatever its model key; otherwise only runs of the
+    exact ``model_key`` are.
+    """
     selected = {}
     # A URI in read-only mode cannot create a missing DB, migrate a schema, or
     # execute the store's normal schema/trigger setup on the active ledger.
@@ -70,10 +77,11 @@ def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors):
                 if hashlib.sha256(encoded.encode()).hexdigest() != run["forecast_sha256"]:
                     raise ValueError("immutable forecast hash mismatch")
                 forecast = json.loads(encoded)
-                if forecast.get("model_key") != model_key:
+                if interval_family is None and forecast.get("model_key") != model_key:
                     excluded["model_mismatch_run"] += 1
                     continue
                 counts["model_runs"] += 1
+                run_key = forecast.get("model_key") or forecast.get("model_version")
                 if parse_time(forecast["as_of"]) != run_cutoff:
                     raise ValueError("forecast and ledger cutoffs disagree")
                 season = forecast["season"]
@@ -107,7 +115,7 @@ def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors):
                     if key not in selected or rank > selected[key][0]:
                         # Do not filter status or numeric support until latest
                         # identity is chosen, independently of every outcome.
-                        selected[key] = (rank, dict(run_id=run["run_id"],
+                        selected[key] = (rank, dict(run_id=run["run_id"], model_key=run_key,
                             forecast_created_at=run["created_at"], season=season,
                             forecast_sha256=run["forecast_sha256"], prediction=prediction))
             except (ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -116,8 +124,11 @@ def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors):
     return {key: entry[1] for key, entry in selected.items()}
 
 
-def collect_samples(directory, model_key, as_of):
+def collect_samples(directory, model_key, as_of, interval_family=None):
     """Return prospective samples, exclusion audit and saved-interval scores.
+
+    With ``interval_family`` the samples pool across model keys sharing that
+    family; each sample records the model key of the run it came from.
 
     The archive layout is ``forecast.sqlite`` and ``finals/<game_id>.json``.
     Duplicate or malformed final identities reject that entire game; an outcome
@@ -144,7 +155,7 @@ def collect_samples(directory, model_key, as_of):
         result.update(counts=dict(counts), exclusions=dict(excluded))
         return result
     try:
-        selected = _selected_forecasts(db, model_key, cutoff, counts, excluded, errors)
+        selected = _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family)
     except sqlite3.Error as exc:
         errors.append(dict(path=str(db), reason=str(exc)))
         result.update(counts=dict(counts), exclusions=dict(excluded))
@@ -159,6 +170,11 @@ def collect_samples(directory, model_key, as_of):
             excluded["status_" + str(status)] += 1
             continue
         counts["projected_predictions"] += 1
+        # Selection above is by recency alone; a latest prediction whose sd was
+        # built another way is excluded here, never replaced by an older run.
+        if interval_family is not None and interval_family_of(prediction) != interval_family:
+            excluded["interval_family_mismatch"] += 1
+            continue
         if not (_number(prediction.get("points_mean")) and _number(prediction.get("points_sd"), positive=True)):
             excluded["invalid_mean_or_sd"] += 1
             continue
@@ -207,7 +223,8 @@ def collect_samples(directory, model_key, as_of):
             if not math.isfinite(residual):
                 excluded["nonfinite_standardized_residual"] += 1
                 continue
-            sample = dict(model_key=model_key, game_id=gid, player_id=pid,
+            sample = dict(model_key=saved["model_key"] if interval_family else model_key,
+                          interval_family=interval_family, game_id=gid, player_id=pid,
                           team_id=prediction["team_id"], points_mean=prediction["points_mean"],
                           points_sd=prediction["points_sd"], actual_points=actual["pts"],
                           game_time=prediction["start_time"], actual_known_at=actual["known_at"],
@@ -236,7 +253,7 @@ def collect_samples(directory, model_key, as_of):
     return result
 
 
-def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_games=20):
+def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_games=20, interval_family=None):
     """Fit a candidate artifact; frozen saved-interval assessment stays separate.
 
     Player observations within a game are dependent. The minimum game count is
@@ -245,9 +262,9 @@ def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_ga
     """
     if isinstance(minimum_games, bool) or not isinstance(minimum_games, int) or minimum_games < 1:
         raise ValueError("minimum_games must be a positive integer")
-    collection = collect_samples(directory, model_key, as_of)
+    collection = collect_samples(directory, model_key, as_of, interval_family)
     artifact = fit_calibration(collection["samples"], model_key=model_key, as_of=as_of,
-                               minimum_samples=minimum_samples)
+                               minimum_samples=minimum_samples, interval_family=interval_family)
     artifact.update(game_count=collection["counts"]["games"], minimum_games=minimum_games,
                     evidence_kind=PROSPECTIVE, population=_POPULATION,
                     collection_counts=collection["counts"], collection_exclusions=collection["exclusions"],

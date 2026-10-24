@@ -9,7 +9,7 @@ def evidence():
     for team,index in [('T1',1),('T2',2)]:
         base=next(p for p in snapshot['roster']['players'] if p['team_id']==team)
         for i in range(4):snapshot['roster']['players'].append({**base,'player_id':f'{team}-{i}','name':f'{team} Person {i}'})
-    snapshot['injury_extractions']=[dict(parser_version='layout-exact-3',pages_complete=True,complete_teams=[
+    snapshot['injury_extractions']=[dict(parser_version='layout-exact-4',pages_complete=True,complete_teams=[
         dict(date='2026-10-22',matchup='AWY@HOM',team_id=t) for t in ('T1','T2')],rows=[],evidence=dict(
             source_url='https://ak-static.cms.nba.com/referee/injury/Injury-Report_2026-10-22_06_00AM.pdf',
             published_at='2026-10-22T10:00:00Z',retrieved_at='2026-10-22T10:30:00Z',sha256='a'*64))]
@@ -62,42 +62,54 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(result['status'],'passed',result)
         self.assertEqual(len(result['lineups']['T1']['player_ids']),5)
 
-    def test_missing_team_coverage_blocks_even_when_other_team_is_complete(self):
+    def test_missing_team_coverage_is_a_note_not_a_block(self):
         from nba_forecast.preflight import check_inputs
         s,p,r=evidence();s['injury_extractions'][0]['complete_teams'].pop()
         result=check_inputs(s,[],p,r)
-        self.assertEqual(result['status'],'blocked')
-        self.assertTrue(any(i['code']=='injury_coverage_missing' and i['team_id']=='T2' for i in result['issues']))
+        self.assertEqual(result['status'],'passed',result['issues'])
+        self.assertTrue(any(n['code']=='injury_status_unavailable' and n['team_id']=='T2' for n in result['notes']))
 
-    def test_time_roster_and_future_reference_conflicts_block(self):
+    def test_changed_tipoff_blocks_while_provider_differences_are_notes(self):
         from nba_forecast.preflight import check_inputs
         original=evidence()
-        for kind in ('time','roster','future'):
+        for kind,status,code in (('time','blocked','tipoff_changed'),('roster','passed','roster_difference'),('future','passed','reference_stale')):
             s,p,r=deepcopy(original)
             if kind=='time':r['games'][0]['start_time']='2026-10-22T19:00:00Z'
             if kind=='roster':r['rosters']['T1'].pop()
             if kind=='future':r['sources'][0]['retrieved_at']='2026-10-22T12:00:00Z'
-            with self.subTest(kind=kind):self.assertEqual(check_inputs(s,[],p,r)['status'],'blocked')
+            with self.subTest(kind=kind):
+                result=check_inputs(s,[],p,r)
+                self.assertEqual(result['status'],status)
+                self.assertIn(code,[i['code'] for i in result['issues']+result['notes']])
 
-    def test_postponed_duplicate_or_sparse_starters_block(self):
+    def test_postponed_blocks_while_ambiguous_board_or_sparse_starters_are_notes(self):
         from nba_forecast.preflight import check_inputs
-        for kind in ('postponed','duplicate','sparse'):
+        for kind,status,code in (('postponed','blocked','matchup_not_scheduled'),('duplicate','passed','matchup_unconfirmed'),
+                                 ('sparse','passed','starting_five_unresolved')):
             s,p,r=evidence()
             if kind=='postponed':r['games'][0]['status_name']='STATUS_POSTPONED'
             if kind=='duplicate':r['games'].append(deepcopy(r['games'][0]))
             if kind=='sparse':p['players']=[]
-            with self.subTest(kind=kind):self.assertEqual(check_inputs(s,[],p,r)['status'],'blocked')
+            with self.subTest(kind=kind):
+                result=check_inputs(s,[],p,r)
+                self.assertEqual(result['status'],status)
+                self.assertIn(code,[i['code'] for i in result['issues']+result['notes']])
 
-    def test_reference_outage_archives_blocked_result(self):
+    def test_reference_outage_is_noted_and_archived(self):
         import json
         from pathlib import Path
         import tempfile
         from unittest.mock import patch
         from nba_forecast.preflight import run_preflight
         s,p,_=evidence()
-        with tempfile.TemporaryDirectory() as folder,patch('nba_forecast.preflight.verify_extractions',return_value=s['injury_extractions']),patch('nba_forecast.preflight.collect_references',side_effect=OSError('offline')):
+        from nba_forecast.validation import parse_time
+        with tempfile.TemporaryDirectory() as folder,patch('nba_forecast.preflight.verify_extractions',return_value=s['injury_extractions']),\
+             patch('nba_forecast.preflight.collect_references',side_effect=OSError('offline')),patch('nba_forecast.preflight.datetime') as clock:
+            clock.now.return_value=parse_time(s['as_of'])
             result=run_preflight(s,[],p,folder)
-            self.assertEqual(result['status'],'blocked')
+            self.assertEqual(result['status'],'passed',result['issues'])
             root=Path(folder)/'preflight'/s['games'][0]['game_id']
-            self.assertEqual(json.loads((root/'latest.json').read_text())['issues'][0]['code'],'reference_unavailable')
+            saved=json.loads((root/'latest.json').read_text())
+            self.assertIn('reference_missing',[n['code'] for n in saved['notes']])
+            self.assertIn('offline',' '.join(n['detail'] for n in saved['notes']))
             self.assertEqual(len(list((root/'records').glob('*.json'))),1)

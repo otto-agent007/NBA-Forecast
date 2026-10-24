@@ -19,12 +19,17 @@ The optional hash-bound enhancement artifact adds four mechanisms:
 - Apply bounded numerical rest, congestion, home/away and venue-timezone effects
   from an observational ridge fit. Unknown venues stay unknown; venue changes
   approximate travel and do not establish actual flight schedules.
-- Replace the default normal interval width with a model-specific empirical
-  residual quantile when enough matching evidence exists. The initial artifact
-  uses retrospective reconstruction. Future original saved intervals are scored
-  separately. New prospective calibration requires at least 20 games and 200
-  played, positive-minute player outcomes. This conditional population excludes
-  DNPs from interval fitting; ordinary ledger performance still includes DNPs.
+- Replace the heuristic interval width with an empirical residual quantile when
+  enough matching evidence exists. Until then the heuristic half-width is
+  `intervals.HEURISTIC_Z80` = 1.70 sd: the normal 1.28 covered only 63% of the
+  first prospective played outcomes, whose pooled 80% quantile was 1.70 (the
+  retrospective reconstruction gave 1.88). Prospective calibration pools
+  standardized residuals across every model version whose `points_sd` is built
+  the same way (the interval family), so a new model key refines the sample
+  instead of restarting it; the fitted artifact is still installed for, and
+  bound to, one model key. It requires at least 20 games and 200 played,
+  positive-minute player outcomes. This conditional population excludes DNPs
+  from interval fitting; ordinary ledger performance still includes DNPs.
 
 ## Evidence and limits
 

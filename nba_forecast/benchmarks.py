@@ -31,11 +31,19 @@ def paired_metrics(rows):
     return out
 
 
-def _run_pairs(conn,run_id,matched):
-    """Release one run's full inputs before processing the next selected run."""
-    run=conn.execute('SELECT snapshot_json,history_json,forecast_json FROM runs WHERE run_id=?',
+def _run_pairs(conn,run_id,matched,parsed=None):
+    """Release one run's full inputs before processing the next selected run.
+
+    ``parsed`` holds at most one decoded history; runs sharing its digest reuse it.
+    """
+    run=conn.execute('SELECT snapshot_json,history_sha256,forecast_json FROM runs WHERE run_id=?',
                      (run_id,)).fetchone()
-    snapshot=json.loads(run['snapshot_json']);history=json.loads(run['history_json'])
+    parsed=parsed if parsed is not None else {}
+    if run['history_sha256'] not in parsed:
+        parsed.clear()
+        encoded=conn.execute('SELECT history_json FROM runs WHERE run_id=?',(run_id,)).fetchone()[0]
+        parsed[run['history_sha256']]=json.loads(encoded)
+    snapshot=json.loads(run['snapshot_json']);history=parsed[run['history_sha256']]
     predictions={(p['game_id'],p['player_id']):p for p in json.loads(run['forecast_json'])['predictions']}
     recent=defaultdict(lambda:deque(maxlen=10))
     for row in eligible_history(snapshot,history):recent[row['player_id']].append(row)
@@ -48,10 +56,13 @@ def _run_pairs(conn,run_id,matched):
     return paired,excluded
 
 
-def benchmark_report(db):
-    aggregate=performance_report(db);groups=[]
+def benchmark_report(db,aggregate=None):
+    """``aggregate`` may be this ledger's current performance_report, already computed."""
+    aggregate=aggregate if aggregate is not None else performance_report(db);groups=[]
     with closing(sqlite3.connect(db)) as conn:
         conn.row_factory=sqlite3.Row
+        # Visit runs grouped by input history so each distinct history is decoded once.
+        digests=dict(conn.execute('SELECT run_id,history_sha256 FROM runs').fetchall());parsed={}
         for group in aggregate['groups']:
             paired=[];excluded=0;by_run=defaultdict(list)
             for matched in group['matched']:
@@ -59,8 +70,9 @@ def benchmark_report(db):
                 # easy zeros against baselines that assume a role on the court.
                 if matched['forecast_status']!='projected':continue
                 by_run[matched['run_id']].append(matched)
-            for run_id,matched in by_run.items():
-                values,unsupported=_run_pairs(conn,run_id,matched)
+            # Metrics use exactly rounded means, so visiting order cannot change them.
+            for run_id,matched in sorted(by_run.items(),key=lambda item:digests.get(item[0],'')):
+                values,unsupported=_run_pairs(conn,run_id,matched,parsed)
                 paired.extend(values);excluded+=unsupported
             groups.append(dict(season=group['season'],model_version=group['model_version'],
                                metrics=paired_metrics(paired),unsupported_baselines=excluded))

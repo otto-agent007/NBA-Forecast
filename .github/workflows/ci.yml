@@ -20,6 +20,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q nba_forecast
+      # The model-change rule (AGENTS.md): a forecast change must not score worse
+      # than the committed reference beyond noise. Exit code 3 means worse.
+      - run: >
+          python -m nba_forecast backtest
+          --history datasets/regular-season-expanded-2026-10-22/history.json.gz
+          --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz
+          --output /tmp/backtest --reference datasets/backtest-2026-10-24-home-court --limit 400
   dashboard:
     runs-on: ubuntu-latest
     steps:

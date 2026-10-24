@@ -113,9 +113,10 @@ def _pending_shots(gid,rows,now,reason):
                       played_players=sum(r['status']=='played' for r in rows),covered_players=0,players=[]))
 
 
-def sync_player_data(directory,history,*,roster=None,max_shot_games=16):
+def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=None):
     if not 0<=max_shot_games<=50:raise ValueError('max_shot_games must be 0..50')
-    folder=Path(directory);schedule=json.loads((folder/'schedule/latest.json').read_text())
+    folder=Path(directory)
+    if schedule is None:schedule=json.loads((folder/'schedule/latest.json').read_text())
     season=schedule['season'];now=datetime.now(timezone.utc).isoformat()
     if roster is None:
         saved=folder/'roster.json'

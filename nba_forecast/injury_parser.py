@@ -10,13 +10,33 @@ import unicodedata
 from .validation import parse_time
 from .schedule import EASTERN
 
-PARSER_VERSION='layout-exact-3'
+PARSER_VERSION='layout-exact-4'
 
 STATUS = re.compile(r'\b(Available|Out|Questionable|Doubtful|Probable)\b')
+SUFFIXES = {'jr','sr','ii','iii','iv','v'}
 
 
 def normalized(text):
     return ''.join(c for c in unicodedata.normalize('NFKD',text).casefold() if c.isalnum())
+
+
+def person_key(name):
+    """A name without a trailing generational suffix: "Bobby Portis Jr." ~ "Bobby Portis".
+
+    Providers disagree on suffixes. Callers accept this looser key only when it
+    still identifies exactly one person.
+    """
+    words=[w for w in re.split(r'[\s,.]+',name) if w]
+    while len(words)>2 and normalized(words[-1]) in SUFFIXES:words.pop()
+    return normalized(' '.join(words))
+
+
+def report_name(name):
+    """Report "Last, First" order as "First Last", keeping "Last, Jr., First" suffixes with the surname."""
+    parts=[part.strip() for part in name.split(',')]
+    if len(parts)==3 and normalized(parts[1]) in SUFFIXES:return parts[2]+' '+parts[0]+' '+parts[1]
+    last,first=name.split(',',1)
+    return first+' '+last
 
 
 def pdf_text(path,expected_hash):
@@ -32,8 +52,10 @@ def pdf_text(path,expected_hash):
 
 
 def parse_report(text,schedule,roster,evidence):
-    names=defaultdict(list);teams={};games=defaultdict(list)
-    for p in roster['players']:names[(p['team_id'],normalized(p['name']))].append(p['player_id'])
+    names=defaultdict(list);loose=defaultdict(list);teams={};games=defaultdict(list)
+    for p in roster['players']:
+        names[(p['team_id'],normalized(p['name']))].append(p['player_id'])
+        loose[(p['team_id'],person_key(p['name']))].append(p['player_id'])
     for g in schedule['games']:
         for side in ('home','away'):
             name=g[side+'_name'];tid=g[side+'_team_id']
@@ -71,8 +93,10 @@ def parse_report(text,schedule,roster,evidence):
         name=parts[-1] if parts else ''
         if ',' not in name:
             issues.append(dict(kind='unparsed_status_row',text=line.strip(),team_id=team,date=day,matchup=matchup));continue
-        last,first=name.split(',',1);key=normalized(first+' '+last)
-        ids=names.get((team,key),[]);candidates=games.get((day,matchup),[])
+        full=report_name(name)
+        # An exact spelling first; otherwise a suffix-free match naming one teammate only.
+        ids=names.get((team,normalized(full)),[]) or loose.get((team,person_key(full)),[])
+        candidates=games.get((day,matchup),[])
         candidates=[g for g in candidates if team in (g['home_team_id'],g['away_team_id'])]
         if len(ids)!=1 or len(candidates)!=1:
             issues.append(dict(kind='unmatched_identity_or_game',name=name,date=day,matchup=matchup,team_id=team));continue

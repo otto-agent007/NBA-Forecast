@@ -5,6 +5,28 @@ from nba_forecast.player_sync import sync_player_data
 from nba_forecast.dashboard import player_payload
 
 class PlayerSyncTests(unittest.TestCase):
+ def test_selected_schedule_is_passed_to_official_page_collection(self):
+  from datetime import datetime,timezone
+  from tests.test_store import inputs
+  from tests.test_model import row
+  s,_,_=inputs();r=row(season='2026-27',game_id='0022600001',player_id='1')
+  game=dict(s['games'][0],game_id='0022600001',start_time=r['game_time'])
+  roster=dict(s['roster'],observed_at='2026-10-22T00:00:00Z',players=[
+   dict(player_id='1',name='A',team_id=r['team_id'],status='unknown')])
+  captured=[]
+  def unavailable(selected,**kwargs):
+   captured.append(selected['start_time']);raise ValueError('offline fixture')
+  with tempfile.TemporaryDirectory() as d:
+   folder=Path(d);(folder/'schedule').mkdir()
+   (folder/'schedule/latest.json').write_text(json.dumps(dict(season='2026-27',
+    games=[dict(game,start_time='2026-10-23T20:00:00Z')])))
+   with patch('nba_forecast.player_sync.datetime') as clock,\
+        patch('nba_forecast.player_sync.fetch_official_game_page',side_effect=unavailable),\
+        patch('nba_forecast.player_sync.fetch_game_shots',side_effect=ValueError('offline fixture')):
+    clock.now.return_value=datetime(2026,10,23,tzinfo=timezone.utc)
+    sync_player_data(d,[r],roster=roster,schedule=dict(season='2026-27',games=[game]),max_shot_games=1)
+  self.assertEqual(captured,[r['game_time']])
+
  @patch("nba_forecast.player_sync.datetime")
  def test_roster_observed_during_fetch_is_not_future_and_shot_failure_cached(self,clock):
   from datetime import datetime,timezone

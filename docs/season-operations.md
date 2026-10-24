@@ -65,6 +65,18 @@ withholds forecasts. Daily injury capture is independent of calendar access.
 Source failures and retry status remain visible; enabling a timer alone does
 not establish that every scheduled capture succeeded.
 
+The season calendar is downloaded once and checked once a day, on the first
+tick after 8 AM Pacific (before the 9 AM forecasts), or on the next tick after a
+forecast finds a moved tipoff (`schedule/fetch-state.json`). If NBA's download
+fails, ESPN's slate for today and tomorrow verifies near-term games against the
+saved calendar, and that checked copy is used for the rest of the day
+(`schedule_source: espn_verified_cached_nba`). If both fail, the saved calendar
+stays in use (`unverified_cached_nba`, with a warning) and the check retries
+after five minutes, doubling up to three hours. A calendar check never withholds
+forecasts: each forecast's preflight confirms its own matchup and tipoff against
+ESPN's scoreboard. The dashboard marks a game final once its final box score is
+captured.
+
 When NBA's main player directory is inaccessible, roster refresh uses all 30
 official team roster pages. Each page must match the requested team and season;
 player identities must be unique across the complete collection. Raw responses,
@@ -95,8 +107,9 @@ Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extractio
 extraction failures block new forecasts and are retried. Injury captures remain
 available even when a forecast is blocked. No paid model/API dependency is installed.
 
-The tick refreshes the NBA season schedule, finds per-game jobs in the next
-24 hours, and saves one preliminary or final run for each due game. The final
+The tick reads the saved NBA season calendar (checked once a day, above),
+finds per-game jobs in the next 24 hours, and saves one preliminary or final
+run for each due game. The final
 window opens at T−30; the report published at or immediately before that anchor
 is preserved. The timer polls each minute; network/publication delays mean this
 is not a guarantee of execution at exactly T−30:00. Missing final checkpoints
@@ -122,37 +135,79 @@ wins, with cache precedence on equal instants. This preserves explicit imported
 corrections even when the local final cache contains an older download.
 Routine ledger readers stream run metadata; saved history is loaded only when
 rebuilding a missing profile or computing a selected run's benchmark. Existing
-immutable inputs and hashes retain their original format. The ledger still
-stores full inputs for every run, so storage and backup capacity must account
-for repeated history snapshots.
+immutable inputs and hashes retain their original format. New ledgers store
+each distinct input history once (`histories`, keyed by `history_sha256`);
+the `runs` view still returns every run's complete row, including
+`history_json` and its insertion-order `rowid`. A ledger created before this
+change keeps working unchanged until it is rebuilt with the ticks stopped:
+
+```bash
+python -m nba_forecast dedupe-histories --directory data/operations/production
+```
+
+The rebuild holds the tick lock and the ledger write lock, compares every run
+and evaluation revision value-for-value before replacing the file, and leaves
+the original beside it as `forecast.sqlite.pre-history-dedupe` (a hard link)
+for the owner to delete. A conflicting history under one digest aborts it.
+
+An idle tick does little work. Live runs are rescored only when one of their
+`finals/` files or their latest evaluation revision changes
+(`evaluation-state.json`). Performance, benchmarks, calibration, postgame and
+daily reviews are rebuilt only when the ledger, finals contents, archived box
+scores or play-by-play, calendar games, active model, roster presence, Pacific
+date or code changes, and at least every six hours; otherwise the tick report carries the previous summary,
+errors and warnings (`derived_reports.status: unchanged`, see
+`derived-reports.json`). Outcome discovery still runs every tick and keeps the
+model status's outcome summary current.
 
 ## Preforecast cross-check
 
 Before the automated tick or a `forecast --mode live` call executes the model,
 a separate deterministic preflight gate validates the existing input contracts
-and compares NBA evidence with ESPN's public scoreboard and team roster feeds:
+and compares NBA evidence with ESPN's public scoreboard, team roster and game
+injury feeds. It blocks a forecast only when the forecast would be wrong:
 
-- Matchup, home/away teams, exact tipoff and an unstarted scheduled status must agree.
-- Every roster name on each playing team must match the independent team/season
-  roster after exact normalization. Differences are reported for review; one
-  provider never silently overwrites the other.
-- The verified official injury extraction must completely cover both teams for
-  this exact matchup and Eastern basketball date. A next-day report for the same
-  team cannot satisfy today's game. The gate re-extracts coverage and statuses
-  from the archived PDF after verifying its hash, official URL and publication
-  chronology. Supplied coverage labels alone cannot pass. Applied availability
-  must agree with the report or carry a matching newer sourced review.
-  A clean missing team block can instead use the explicit zero-injury fallback
-  described below; this does not override official submitted statuses or errors.
-- Each team must have five unique eligible projected starter IDs supported by
-  captured role/minutes evidence. Out players cannot occupy a starting slot.
+- invalid inputs (`input_contract`) or corrupt injury report evidence
+  (`injury_provenance_invalid`);
+- applied availability contradicting its source (`availability_conflict`);
+- ESPN showing the game started, finished or postponed (`matchup_not_scheduled`);
+- ESPN listing the matchup at a different tipoff (`tipoff_changed`), which also
+  triggers a calendar check so the next slot uses the new time.
 
-Failures block model execution and ledger insertion, retaining the injury
-checkpoint and an archived audit under `preflight/GAME_ID/records/`. Blocked jobs
-retry on later ticks. New validator versions invalidate completed job keys.
+Everything else is a visible note (`notes`) on a forecast that still runs:
+
+- The official NBA roster is authoritative. ESPN roster differences are noted
+  (`roster_difference`); ESPN often omits two-way players, whom the official
+  injury report covers. Players ESPN lists but NBA does not have no forecast.
+  Spellings that differ only by a generational suffix ("Bobby Portis Jr." /
+  "Bobby Portis") are matches when, without suffixes, both rosters still name
+  each player exactly once (`name_suffix_matches`).
+- The verified official injury extraction is the availability source for a team
+  it completely covers for this matchup and Eastern date. The gate re-extracts
+  coverage and statuses from the archived PDF after verifying its hash, official
+  URL and publication chronology. Report names written "Udeh, Jr., Ernest" keep
+  the suffix with the surname; a spelling that differs only by suffix joins a
+  player only when it names exactly one teammate.
+- Until the official report covers a team (for example "NOT YET SUBMITTED"),
+  ESPN's injury list for that game supplies availability
+  (`status_basis: espn_injury_list`, note `official_report_pending`): Out and
+  suspended players are out, Day-To-Day and unrecognized statuses are
+  questionable (no numeric forecast), and unlisted players are available,
+  conditional on participation (flag `availability_official_report_pending`).
+  The official report replaces it as soon as it covers the team. A clean missing
+  team block can still use the explicit zero-injury fallback described below.
+  With neither source, players without a status get no numeric forecast
+  (`injury_status_unavailable`).
+- An unconfirmed matchup, unavailable or stale ESPN evidence and an unresolved
+  starting five (starters only label team totals) are notes.
+
+A blocked job keeps its injury checkpoint and an archived audit under
+`preflight/GAME_ID/records/`. A failed job waits for its next 15- or 5-minute
+slot (`state.json` `failed_jobs`, tick `deferred_jobs`) instead of being rebuilt
+every minute. New validator versions invalidate completed job keys.
 Independent response bytes, retrieval times and SHA256 hashes are preserved
 under `references/`; schedule responses are reused for at most five minutes and
-rosters for fifteen. An unavailable reference blocks the forecast. Demo and
+rosters for fifteen. Demo and
 replay modes remain offline and do not assert this live cross-check passed.
 Live CLI forecasts use `--cache-dir` (default `data/raw`) to locate those
 hash-named injury PDFs; use the same directory used for `injury-check` and
@@ -325,11 +380,16 @@ Only saved pregame history is used; explicit DNPs remain observations. Out-only
 zeros are not used to make these paired comparisons look artificially good.
 Missing or unresolved projections remain visible in the overall ledger coverage.
 
-Current intervals remain heuristic. There is no claimed improvement until enough
-prospective outcomes exist, no fabricated historical injury backtest, and no
-automatic parameter promotion. Review errors by minutes, rates, roles and
-availability, change one explicit hypothesis, version the model, and compare
-subsequent results on the same population.
+Intervals use the measured heuristic half-width (1.70 sd; see
+`docs/model-upgrade.md`) until the prospective calibration is ready. That
+calibration pools residuals across model versions sharing the interval family,
+so it keeps accumulating through code changes. There is no automatic parameter
+promotion. Every change to how a forecast is computed is judged on the fixed
+season replay first (`python -m nba_forecast backtest`, `docs/backtest.md`,
+rule in `AGENTS.md`): paired against the committed reference, a change must not
+score worse beyond noise, and a new model feature must score better. Review
+errors by minutes, rates, roles and availability, change one explicit
+hypothesis, run the backtest, then compare live results on the same population.
 
 ## Multi-season scoring priors (model 0.4)
 

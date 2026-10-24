@@ -9,10 +9,11 @@ export default function MarginForecast({ game }) {
   const matches = distribution?.game_id === game.game_id
     && distribution.home_team_id === game.home_team_id && distribution.away_team_id === game.away_team_id;
   const ready = matches && distribution.status === "estimated";
+  const calibrated = ready && distribution.calibration_status === "prospective_validated";
   const probability = ready ? marginProbability(distribution, team, line) : null;
   const teamName = team === game.home_team_id ? game.home_name : game.away_name;
   return <section className="margin-forecast" aria-label="Winning margin forecast">
-    <div className="margin-heading"><h2>Winning margin</h2><span className="total-state">{ready ? "Estimate · calibration pending" : "Unavailable"}</span></div>
+    <div className="margin-heading"><h2>Winning margin</h2><span className="total-state">{ready ? calibrated ? "Estimate · validated correction" : "Estimate · calibration pending" : "Unavailable"}</span></div>
     {!ready ? <p>{matches ? marginUnavailableReason(distribution.reason)
       : "Margin probabilities were not saved for this forecast."}</p> : <>
       <p>Enter the offered line to explore the selected forecast. Final score includes overtime.</p>
@@ -31,7 +32,9 @@ export default function MarginForecast({ game }) {
         <p className="tiny">NO includes a margin equal to the line. A negative margin means the selected team loses.</p>
       </div> : <p role="status">Enter a number from −50 to 50. A valid saved distribution is required.</p>}
       <details><summary>Forecast evidence</summary>
-        <p>{distribution.sample_count ?? 0} historical games inform the uncertainty estimate. These probabilities have not yet been calibrated against this model’s future results.</p>
+        <p>{distribution.sample_count ?? 0} historical games inform the initial uncertainty estimate. {calibrated
+          ? `${distribution.calibration_audit?.training_games ?? 0} saved pregame games fitted the correction; ${distribution.calibration_audit?.validation_games ?? 0} later games passed the validation gate. Future accuracy is still uncertain.`
+          : "These probabilities have not yet been calibrated against this model’s future results."}</p>
         <p className="tiny">{game.forecast.stage === "final" ? "Final" : "Preliminary"} forecast · The entered line is a comparison, not a captured market quote.</p>
       </details>
     </>}

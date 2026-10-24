@@ -41,17 +41,24 @@ minutes and opportunities adapt faster.
 - [Backfill and T−30 report workflow](docs/backfill-and-injuries.md)
 - [Daily research and review loop](docs/operations.md)
 - [Model design](docs/design.md) · [Verification](docs/validation-results.md)
+- [Backtest scoreboard and the model-change rule](docs/backtest.md) · [Rules for agents](AGENTS.md)
 
-This is an initial scoring baseline: uncertainty intervals are not yet calibrated.
+This is an initial scoring baseline. Interval widths use a measured heuristic
+default until the pooled prospective calibration is ready. Any change to the
+model is judged on the season replay before it is merged (`backtest`, see
+`AGENTS.md`).
 Injury extraction is conservative: omission never means available.
 `tick` runs the loop once; persistent Linux timer templates are in `deploy/systemd/`.
 The automatic loop captures a daily injury report at 9 AM Pacific and each
 game's final checkpoint at T−30. Preliminary forecasts remain inspectable
 alongside finals, with player outlooks grouped by team and five projected starters.
-Automated and live CLI runs cross-check schedule and roster membership against
-ESPN, verify injury information for both teams, and validate the
-projected fives before running the model. Missing or conflicting evidence blocks
-the run and appears in the dashboard. Projected starters remain unconfirmed.
+Automated and live CLI runs cross-check the matchup, tipoff and rosters against
+ESPN and apply official injury information for both teams before running the
+model. Only evidence that would make the forecast wrong blocks it (a started,
+postponed or moved game, invalid inputs, or contradicted availability); provider
+differences and pending reports are notes on the dashboard. Until a team's
+official injury report is published, ESPN's game injury list supplies its
+availability. Projected starters remain unconfirmed.
 When the official PDF omits a healthy team's block, an explicit empty injury list
 in the verified game-specific ESPN report can support conditional projections.
 Missing fields, unsubmitted reports and roster Active labels cannot do this.
