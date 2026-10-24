@@ -121,6 +121,9 @@ export default function PlayerTable({
                         {p.history_games != null
                           ? ` · ${p.history_games} games of evidence`
                           : ""}
+                        {p.status === "projected" && typeof p.participation_probability === "number" && p.participation_probability < 0.95
+                          ? ` · ${Math.round(p.participation_probability * 100)}% to play`
+                          : ""}
                       </small>
                     </span>
                   </button>

@@ -222,8 +222,21 @@ def _validate_forecast(snapshot, forecast):
                 raise ValueError('off-slate players must be labeled no_game')
             if game and player['status'] == 'out' and status != 'out':
                 raise ValueError('out roster player must have out forecast')
-            if game and player['status'] in ('unknown', 'questionable') and status != 'needs_review':
-                raise ValueError('uncertain availability cannot have a numeric forecast')
+            if game and player['status'] == 'unknown' and status != 'needs_review':
+                raise ValueError('unknown availability cannot have a numeric forecast')
+            probability = row.get('participation_probability')
+            if probability is not None and (isinstance(probability, bool) or not isinstance(probability, (int, float))
+                                            or not math.isfinite(probability) or not 0 <= probability <= 1):
+                raise ValueError('participation probability must be in [0, 1]')
+            if game and player['status'] == 'questionable':
+                if status == 'projected' and not (probability is not None and probability < 1):
+                    raise ValueError('a questionable player needs a participation probability below one')
+                if status not in ('projected', 'needs_review'):
+                    raise ValueError('questionable availability must be projected conditionally or withheld')
+            if status in ('no_game', 'needs_review') and probability is not None:
+                raise ValueError('unsupported forecasts have no participation probability')
+            if status == 'out' and probability not in (None, 0, 0.0):
+                raise ValueError('out forecasts have zero participation probability')
             if status == 'out' and player['status'] != 'out':
                 raise ValueError('out forecast requires sourced out roster status')
             if (not isinstance(row['reason'], str) or not isinstance(row['flags'], list) or
@@ -329,12 +342,17 @@ def _metrics(rows):
         per_stat[stat] = {'count': len(errors),
                           'mae': sum(abs(e) for e in errors) / len(errors) if errors else None,
                           'mean_signed_error': sum(errors) / len(errors) if errors else None}
+    scored = [r for r in rows if r.get('participation_probability') is not None and r.get('played') is not None]
+    participation = dict(count=len(scored),
+                         brier=sum((r['participation_probability'] - r['played']) ** 2 for r in scored) / len(scored) if scored else None,
+                         mean_probability=sum(r['participation_probability'] for r in scored) / len(scored) if scored else None,
+                         played_share=sum(r['played'] for r in scored) / len(scored) if scored else None)
     if not count:
         return dict(count=0, points_mae=None, points_rmse=None, mean_signed_error=None,
                     minutes_mae=None, interval80_coverage=None, interval80_mean_width=None,
-                    interval_count=0, per_stat=per_stat)
+                    interval_count=0, per_stat=per_stat, participation=participation)
     return dict(
-        count=count, per_stat=per_stat,
+        count=count, per_stat=per_stat, participation=participation,
         points_mae=sum(abs(r['points_error']) for r in rows) / count,
         points_rmse=math.sqrt(sum(r['points_error'] ** 2 for r in rows) / count),
         mean_signed_error=sum(r['points_error'] for r in rows) / count,
@@ -417,6 +435,8 @@ def _report(run, forecast, actuals, revision, evaluated_at):
         matched.append({
             'stat_errors': stat_errors, 'stat_feedback': stat_feedback,
             **identity, 'forecast_status': status, 'actual_status': observed['status'],
+            'participation_probability': prediction.get('participation_probability'),
+            'played': observed['status'] == 'played' and minutes > 0,
             'predicted_points': predicted_points, 'actual_points': points,
             'predicted_minutes': predicted_minutes, 'actual_minutes': minutes,
             'points_error': predicted_points - points, 'minutes_error': predicted_minutes - minutes,

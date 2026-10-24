@@ -28,10 +28,14 @@ class CandidateModelTests(unittest.TestCase):
         s=self.enhanced(snapshot());s['model_enhancements']['environment']['audit']['evidence_kind']='historical_reconstruction'
         with self.assertRaises(ValueError):forecast(s,[row()])
 
-    def test_uncertain_player_stays_unprojected(self):
+    def test_questionable_player_is_projected_with_a_reduced_participation_probability(self):
         s=self.enhanced(snapshot());s['roster']['players'][0]['status']='questionable'
         p=forecast(s,[row()])['predictions'][0]
-        self.assertIsNone(p['points_mean'])
+        self.assertEqual(p['status'],'projected')
+        self.assertLess(p['participation_probability'],.6)
+        self.assertIsNotNone(p['points_mean'])
+        s['roster']['players'][0]['status']='unknown';s['roster']['players'][0].pop('status_source_url',None)
+        self.assertIsNone(forecast(s,[row()])['predictions'][0]['points_mean'])
 
 class CandidateAttemptBudgetTests(unittest.TestCase):
     def test_automatic_extra_minutes_obey_team_attempt_budget_and_audit(self):

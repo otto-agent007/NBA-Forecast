@@ -26,7 +26,7 @@ def decode_reference(raw,url):
 
 
 def fetch_reference(url,directory,max_age=300):
-    if not (re.fullmatch(re.escape(BASE)+r'(scoreboard\?dates=\d{8}|teams/\d{1,3}/roster|summary\?event=\d{6,12})',url) or
+    if not (re.fullmatch(re.escape(BASE)+r'(scoreboard\?dates=\d{8}|teams/\d{1,3}/roster|summary\?event=\d{6,12}|injuries|teams/\d{1,3}/depthcharts)',url) or
             re.fullmatch(r'https://www\.nba\.com/team/16106127(?:3[7-9]|[45]\d|6[0-6])/roster',url)):
         raise ValueError('reference URL is not an allowlisted public ESPN endpoint')
     folder=Path(directory);key=hashlib.sha256(url.encode()).hexdigest();pointer=folder/(key+'.json')
@@ -73,6 +73,31 @@ def scoreboard_event(game,directory):
     matches=[(sides,normalized) for sides,normalized in board_events(board)
              if (normalized['home'],normalized['away'])==(game.get('home_tricode'),game.get('away_tricode'))]
     return (matches[0][1],meta) if len(matches)==1 else (None,meta)
+
+
+ESPN_TEAM_IDS=tuple(range(1,31))
+
+
+def archive_daily_references(directory,day):
+    """Archive ESPN's league injury list and every team's depth chart once a day.
+
+    This is evidence for a future participation backtest, not an input to any
+    forecast. Each response keeps its URL, hash and retrieval time; identical
+    bytes are stored once. Failures are recorded, never raised.
+    """
+    folder=Path(directory)/'daily';folder.mkdir(parents=True,exist_ok=True)
+    record=folder/(day+'.json')
+    if record.exists():return json.loads(record.read_text())
+    captured=[];failures=[]
+    for url in [BASE+'injuries']+[f'{BASE}teams/{tid}/depthcharts' for tid in ESPN_TEAM_IDS]:
+        try:
+            _,meta=fetch_reference(url,directory,max_age=6*3600);captured.append(meta)
+        except (ValueError,OSError,KeyError,TypeError) as exc:
+            failures.append(dict(source_url=url,error=str(exc)))
+    result=dict(day=day,captured_at=datetime.now(timezone.utc).isoformat(),sources=captured,failures=failures,
+                policy='Daily ESPN injury list and depth charts, archived for participation research; not forecast inputs.')
+    atomic_json(record,result)
+    return result
 
 
 def collect_references(snapshot,directory,roster_reviews=()):

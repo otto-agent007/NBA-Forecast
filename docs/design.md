@@ -77,9 +77,13 @@ versions/seasons separate; exclude demo/replay/subset and off-slate rows.
 Use previous-season regular-season baselines plus current regular-season data.
 Minutes and attempt rates adapt faster than shooting efficiency. Shrink shooting
 percentages to established attempts so a bad shooting night alone cannot erase
-the baseline. No unobserved rookie production, no assumed return-to-play odds,
-and no automatic teammate-usage redistribution. Questionable/unknown players
-are withheld pending a sourced status. Roster changes and major minutes/shot
+the baseline. No unobserved rookie production and no automatic teammate-usage
+redistribution. Each projected player carries a participation probability:
+his rate of appearing with positive minutes over the team's last ten games
+since he joined, shrunk toward a 2025-26 role prior, and scaled by a reported
+questionable-type status. Player projections stay conditional on playing;
+the 240-minute budget and team totals weight them by that probability.
+Questionable players are projected that way; unknown players are withheld. Roster changes and major minutes/shot
 changes enter a reasoning queue. Opponent adjustment is a bounded, shrunk
 points-allowed proxy derived only from complete pre-cutoff team boxscores; it
 is not a measured possession-adjusted defensive rating. A symmetric home-court

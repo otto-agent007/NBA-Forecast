@@ -30,9 +30,10 @@ A [validated historical snapshot](datasets/regular-season-2026-10-21/README.md) 
 5. `evaluate` final boxscores, then `report` season/model performance.
 
 Use `--history data/history/history.json.gz` for the backfill. Every roster player
-gets a projected, out, needs-review, or no-game row. Unknown availability and
-unsupported production are withheld. Prior shooting evidence is preserved;
-minutes and opportunities adapt faster.
+gets a projected, out, needs-review, or no-game row, and every projection a
+probability of playing (questionable players are projected conditionally on
+playing). Unknown availability and unsupported production are withheld. Prior
+shooting evidence is preserved; minutes and opportunities adapt faster.
 
 ## Guides
 

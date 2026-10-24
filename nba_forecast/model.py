@@ -49,7 +49,7 @@ from .totals import game_totals
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
-MODEL_VERSION = "regular-season-baseline-0.4.3"
+MODEL_VERSION = "regular-season-baseline-0.4.4"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -67,6 +67,21 @@ EFFICIENCY_DEFAULTS = {
 HOME_COURT_PRIOR = 0.0145
 HOME_COURT_PSEUDO_GAMES = 200
 HOME_COURT_BOUNDS = (-0.02, 0.04)
+# Participation: 2025-26 next-game play rates by role (average minutes when
+# playing), toward which a player's own rate over the team's last ten games is
+# shrunk by three pseudo-games. A reported status scales the role rate.
+PARTICIPATION_PRIORS = ((10., .18), (20., .70), (28., .79), (float("inf"), .82))
+PARTICIPATION_PSEUDO_GAMES = 3
+PARTICIPATION_WINDOW = 10
+STATUS_PARTICIPATION = {"probable": .9, "questionable": .55, "doubtful": .15, "day-to-day": .5, "game time decision": .5}
+# When expected minutes fall short of 240, conditional minutes rise by at most
+# these fractions (protected rotation, bench) and never past 48. Chosen on the
+# last 250 games of 2025-26: larger caps over-projected starters' minutes, no
+# fill left team totals short.
+UPLIFT_CAP = (.10, .25)
+# NBA rule: at most 13 players are active for a game, so a team's participation
+# probabilities cannot sum past 13.
+ACTIVE_LIST_MAX = 13
 
 
 def _time(value):
@@ -139,8 +154,10 @@ def _opportunities(previous, current, team_id=None, historical=None, *, excluded
     # Participation is assessed separately. Prior-year absences do not describe
     # a healthy player's rotation minutes. A new team supplies its own role;
     # older teams still inform per-minute production and shooting efficiency.
-    role_previous=previous;role_current=current
-    current_team=[r for r in current if r['team_id']==team_id] if team_id else []
+    # Role minutes are minutes when playing: participation is modeled separately,
+    # so current-season DNPs no longer dilute them.
+    role_previous=previous;role_current=[r for r in current if r['status']=='played' and r['minutes']>0]
+    current_team=[r for r in role_current if r['team_id']==team_id] if team_id else []
     if current_team:
         role_previous=[r for r in previous if r['team_id']==team_id]
         role_current=current_team
@@ -168,7 +185,7 @@ def _opportunities(previous, current, team_id=None, historical=None, *, excluded
         "prior_dnp_excluded":prior_dnp,"role_prior_effective_games":role_prior_weight,
         "role_current_team_game_ids":[r['game_id'] for r in current_team],
         "role_prior_team_ids":sorted({r['team_id'] for r in role_previous}),
-        "role_team_id":team_id,"role_minutes_policy":"Prior appearances and current-team role; current-season DNPs remain role evidence.",
+        "role_team_id":team_id,"role_minutes_policy":"Prior appearances and current-team role, minutes when playing; participation is modeled separately.",
     }
     if excluded_role_game_ids is not None:
         audit.update(injury_shortened_role_game_ids=sorted(excluded),
@@ -274,6 +291,32 @@ def _opponent_proxy(team_id, complete):
             "shrinkage": shrinkage, "unbounded_factor": raw,
             "factor": min(1.05, max(0.95, raw)), "bounds": [0.95, 1.05],
             "caution": "Not possession-adjusted defense; sensitive to schedule and pace."}
+
+
+def _participation(player, rows, team_games, role_minutes):
+    """Probability the player appears with positive minutes, from the team's last ten games.
+
+    Team games before the player's first appearance with the team do not count
+    against him; absence from a box score does. A reported questionable-type
+    status scales the role rate. The result weights team totals and the
+    240-minute budget; player projections stay conditional on playing.
+    """
+    team = player["team_id"]
+    appearances = {r["game_id"]: r for r in rows if r["team_id"] == team}
+    first = next((i for i, (_, gid) in enumerate(team_games) if gid in appearances), None)
+    start = max(len(team_games) - PARTICIPATION_WINDOW, first) if first is not None else len(team_games)
+    window = [gid for _, gid in team_games[start:]]
+    played = sum(1 for gid in window if gid in appearances and appearances[gid]["status"] == "played" and appearances[gid]["minutes"] > 0)
+    prior = next(rate for limit, rate in PARTICIPATION_PRIORS if role_minutes < limit)
+    role_rate = (played + PARTICIPATION_PSEUDO_GAMES * prior) / (len(window) + PARTICIPATION_PSEUDO_GAMES)
+    label = str(player.get("reported_status") or "").strip().lower()
+    factor = STATUS_PARTICIPATION.get(label, .5) if player["status"] == "questionable" else 1.0
+    return {"probability": min(1.0, max(0.0, role_rate * factor)), "role_rate": role_rate, "status_factor": factor,
+            "reported_status": player.get("reported_status"), "played": played, "games": len(window),
+            "window_game_ids": window, "prior": prior, "pseudo_games": PARTICIPATION_PSEUDO_GAMES,
+            "role_minutes": role_minutes, "method": "shrunk_recent_participation_rate",
+            "basis": "played with positive minutes in the team's last ten games since joining; 2025-26 role priors; "
+                     "reported status scales the rate"}
 
 
 def _expected_points(fga, fg3a, fta, shooting):
@@ -387,6 +430,10 @@ def _baseline_forecast(snapshot, history):
         eligible.append(row)
     complete = _complete_team_games(eligible)
     home_court = _home_court(complete)
+    team_games = defaultdict(set)
+    for row in eligible:
+        team_games[row["team_id"]].add((_time(row["game_time"]), row["game_id"]))
+    team_games = {team: sorted(items) for team, items in team_games.items()}
     games = {team: game for game in snapshot["games"] if game["season_type"] == "Regular Season"
              for team in (game["home_team_id"], game["away_team_id"])}
     adjustments = {(a["player_id"], a["game_id"]): a
@@ -404,6 +451,7 @@ def _baseline_forecast(snapshot, history):
              "game_id": game["game_id"] if game else None,
              "start_time": game["start_time"] if game else None,
              "status": "needs_review", "reason": "", "history_games": len(rows),
+             "participation_probability": None,
              "flags": [], "components": {"availability": {
                  k: deepcopy(v) for k, v in player.items() if k.startswith("status")},
                  "history": {"previous_season_games": len(previous),
@@ -424,16 +472,19 @@ def _baseline_forecast(snapshot, history):
             p["flags"].append("late_known_roster_or_status")
             continue
         if player["status"] == "out":
-            p.update(status="out", reason="Sourced roster status is out.")
+            p.update(status="out", reason="Sourced roster status is out.", participation_probability=0.0)
             p.update({field: 0.0 for field in NUMERIC_FIELDS})
             continue
-        if player["status"] in ("questionable", "unknown"):
+        if player["status"] == "unknown" or player.get("status_basis") == "roster_membership_review":
             p["reason"] = "Availability must be resolved before assigning minutes."
             p["flags"].append("availability_" + player["status"])
             if player.get('status_basis')=='roster_membership_review':
                 p['reason']='Roster membership discrepancy is quarantined for source review; no numeric forecast.'
                 p['flags'].append('roster_membership_review')
             continue
+        if player["status"] == "questionable":
+            # Projected conditional on playing, with a reduced participation probability.
+            p["flags"].append("availability_questionable")
         if not played:
             p["reason"] = "No positive-minute current/previous regular-season evidence."
             p["flags"].append("cold_start")
@@ -443,7 +494,10 @@ def _baseline_forecast(snapshot, history):
             p["flags"].append("no_scoring_opportunity_evidence")
             continue
         p.update(status="projected", reason="Evidence-based baseline; review listed role and rotation flags.")
-        if player.get("status_basis") in ("not_listed_complete_report","not_listed_verified_empty_report"):
+        if player["status"] == "questionable":
+            p["reason"] = ("Conditional on playing: the official status is questionable, so the participation "
+                           "probability is reduced. Review listed role and rotation flags.")
+        elif player.get("status_basis") in ("not_listed_complete_report","not_listed_verified_empty_report"):
             p["flags"].append("availability_not_listed")
             p["reason"] = ("Conditional on participation: player was not listed in the complete injury report; "
                            "participation is not confirmed. Review listed role and rotation flags.")
@@ -510,6 +564,11 @@ def _baseline_forecast(snapshot, history):
             p['flags'].append('new_team_role_unobserved')
             p['components']['opportunities']=opportunities
             continue
+        participation = _participation(player, rows, team_games.get(team, []), minutes)
+        p["participation_probability"] = participation["probability"]
+        p["components"]["participation"] = participation
+        if participation["probability"] < .5:
+            p["flags"].append("participation_uncertain")
         shooting = _shooting(previous, current,historical)
         if uses_refinements(snapshot):
             from .shot_quality import adjust_shooting
@@ -550,47 +609,79 @@ def _baseline_forecast(snapshot, history):
         side = "home" if team == game["home_team_id"] else "away"
         p["components"].update(opportunities=opportunities, shooting=shooting, opponent=opponent,
                                home_court=dict(home_court, side=side, factor=home_court[side + "_factor"]))
-        working[pid] = (minutes, rates, shooting, rows, variance, opponent["factor"], home_court[side + "_factor"])
+        working[pid] = (minutes, rates, shooting, rows, variance, opponent["factor"], home_court[side + "_factor"], participation["probability"])
     for team in sorted(games):
         team_predictions = [p for p in predictions if p["team_id"] == team]
-        total = sum(working[p["player_id"]][0] for p in team_predictions if p["status"] == "projected")
-        core={p['player_id'] for p in team_predictions if p['status']=='projected' and
+        projected_team = [p for p in team_predictions if p["status"] == "projected"]
+        # At most 13 players dress: scale the team's probabilities down if they sum past that.
+        active_sum = sum(working[p["player_id"]][7] for p in projected_team)
+        if active_sum > ACTIVE_LIST_MAX:
+            for p in projected_team:
+                items = list(working[p["player_id"]]); items[7] *= ACTIVE_LIST_MAX / active_sum
+                working[p["player_id"]] = tuple(items)
+                p["participation_probability"] = items[7]
+                p["components"]["participation"].update(probability=items[7], active_list_cap=ACTIVE_LIST_MAX / active_sum,
+                                                          team_probability_sum_before_cap=active_sum)
+        # The 240-minute budget constrains expected minutes: participation
+        # probability times the minutes a player gets when he plays.
+        expected = {p["player_id"]: working[p["player_id"]][7] * working[p["player_id"]][0] for p in projected_team}
+        total = sum(expected.values())
+        core={p['player_id'] for p in projected_team if
               p['components'].get('current_team_rotation',{}).get('observations',0)>0 and
               (p['components']['current_team_rotation'].get('last_game_started') is True or
                (working[p['player_id']][0]>=28 and (p['components']['current_team_rotation'].get('recent_minutes') or 0)>=24))}
-        core_total=sum(working[pid][0] for pid in core)
+        core_total=sum(expected[pid] for pid in core)
         core_scale=min(1.,240./core_total) if core_total else 1.
         bench_total=total-core_total
         bench_scale=min(1.,max(0.,240.-core_total*core_scale)/bench_total) if bench_total else 1.
-        deficit=max(0.,240.-core_total*core_scale-bench_total*bench_scale)
+        target={pid:working[pid][0]*(core_scale if pid in core else bench_scale) for pid in expected}
+        # Expected minutes below 240 are still played by someone. Supported
+        # players' conditional minutes rise proportionally to fill the budget,
+        # by at most a quarter and never past 48; any rest stays an explicit deficit.
+        locked={p['player_id'] for p in projected_team if p['components'].get('manual_adjustment')}
+        # Filling needs a plausible rotation; a handful of supported players is left as a deficit.
+        for _ in range(4 if len(projected_team) >= 8 else 0):
+            shortfall=240.-sum(working[pid][7]*target[pid] for pid in target)
+            ceiling={pid:min(48.,(1.+UPLIFT_CAP[0 if pid in core else 1])*working[pid][0]) for pid in target}
+            open_ids=[pid for pid in target if pid not in locked and target[pid]>0 and working[pid][7]>0 and target[pid]<ceiling[pid]-1e-9]
+            if shortfall<=1e-9 or not open_ids:break
+            factor=1.+shortfall/sum(working[pid][7]*target[pid] for pid in open_ids)
+            for pid in open_ids:target[pid]=min(ceiling[pid],target[pid]*factor)
+        deficit=max(0.,240.-sum(working[pid][7]*target[pid] for pid in target))
         assigned_minutes = 0.0
         for p in team_predictions:
-            scale=core_scale if p['player_id'] in core else bench_scale
+            pid=p['player_id']
+            scale=(target[pid]/working[pid][0] if working[pid][0] else 1.) if pid in target else 1.
             p["components"]["rotation"] = {"team_minutes_before_scaling": total,
                 "regulation_budget": 240.0, "scale": scale, "unallocated_minutes": deficit,
                 "protected_rotation_player_ids":sorted(core),"protected_rotation_minutes":core_total,
-                "method": "Preserve supported starters and high-minute rotation roles; scale excess bench estimates first. Missing minutes are not invented."}
+                "budget_basis": "expected minutes: participation probability times minutes when playing",
+                "method": "Preserve supported starters and high-minute rotation roles; scale excess bench estimates first. "
+                          "A shortfall raises supported players' conditional minutes by at most a quarter; the rest is an explicit deficit."}
             if deficit > 1e-8:
                 p["flags"].append("team_minutes_unresolved")
             if p["status"] != "projected":
                 continue
-            minutes, rates, shooting, rows, variance, factor, side_factor = working[p["player_id"]]
+            minutes, rates, shooting, rows, variance, factor, side_factor, probability = working[pid]
             if scale < 1:
                 p["flags"].append("team_minutes_scaled")
+            elif scale > 1 + 1e-9:
+                p["flags"].append("team_minutes_raised")
             # Reserving the remaining budget also prevents floating-point sums
             # such as 240.00000000000003 from exceeding the exact output cap.
-            allocated = min(minutes * scale, max(0.0, 240.0 - assigned_minutes))
-            assigned_minutes += allocated
+            room = max(0.0, 240.0 - assigned_minutes)
+            allocated = min(target[pid], room / probability if probability else target[pid])
+            assigned_minutes += probability * allocated
             effective_scale = allocated / minutes if minutes else 1.0
             _project_numbers(p, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor, side_factor)
-        projected_team = [p for p in team_predictions if p["status"] == "projected"]
-        output_total = sum(p["expected_minutes"] for p in projected_team)
+        output_total = sum(working[p["player_id"]][7] * p["expected_minutes"] for p in projected_team)
         if output_total > 240.0:
             # Python's compensated sum can differ from the running allocation
             # sum. Correct its residual by a negligible one-billionth-minute margin.
             last = projected_team[-1]
-            minutes, rates, shooting, rows, variance, factor, side_factor = working[last["player_id"]]
-            allocated = max(0.0, last["expected_minutes"] - (output_total - 240.0) - 1e-9)
+            minutes, rates, shooting, rows, variance, factor, side_factor, probability = working[last["player_id"]]
+            excess = (output_total - 240.0) / probability if probability else output_total - 240.0
+            allocated = max(0.0, last["expected_minutes"] - excess - 1e-9)
             effective_scale = allocated / minutes if minutes else 1.0
             _project_numbers(last, allocated, rates, shooting, rows, variance * effective_scale ** 2, factor, side_factor)
     for p in predictions:

@@ -34,7 +34,8 @@ VERSION = 'backtest-1'
 EASTERN = ZoneInfo('America/New_York')
 BUCKETS = (('0-10', 0., 10.), ('10-20', 10., 20.), ('20-30', 20., 30.), ('30+', 30., math.inf))
 PLAYER_FIELDS = ('game_id', 'player_id', 'team_id', 'expected_minutes', 'actual_minutes', 'points_mean',
-                 'points_sd', 'points_lower80', 'points_upper80', 'actual_points', 'actual_status')
+                 'points_sd', 'points_lower80', 'points_upper80', 'actual_points', 'actual_status',
+                 'participation_probability')
 TEAM_FIELDS = ('game_id', 'team_id', 'home', 'projected_points', 'actual_points_regulation', 'actual_points',
                'projected_players', 'covered_actual_points')
 LIMITATIONS = ('Rosters are the box score itself, all players available: no injury reports, so participation '
@@ -98,14 +99,16 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 for p in result['predictions']:
                     a = actual[p['player_id']]
                     projected = p['status'] == 'projected'
+                    probability = p.get('participation_probability') if projected else None
                     players.append([game['game_id'], p['player_id'], p['team_id'],
                                     p['expected_minutes'] if projected else None, a['minutes'],
                                     p['points_mean'] if projected else None, p['points_sd'] if projected else None,
                                     p['points_lower80'] if projected else None, p['points_upper80'] if projected else None,
-                                    a['pts'], a['status']])
+                                    a['pts'], a['status'], probability])
                     if projected:
                         t = totals[p['team_id']]
-                        t['projected'] += p['points_mean']; t['count'] += 1; t['covered'] += a['pts']
+                        weight = 1.0 if probability is None else probability
+                        t['projected'] += weight * p['points_mean']; t['count'] += 1; t['covered'] += a['pts']
                 for tid in (g['home_team_id'], g['away_team_id']):
                     stats, minutes = game['team_stats'][tid], game['team_minutes'][tid]
                     teams.append([game['game_id'], tid, tid == g['home_team_id'], totals[tid]['projected'],
@@ -123,7 +126,9 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
 
 
 def _records(rows, fields):
-    return [dict(zip(fields, r)) for r in rows]
+    """Rows saved without a newer field read back with it as None."""
+    return [dict(zip(PLAYER_FIELDS if fields is PLAYER_FIELDS else fields, r)) if len(r) == len(fields)
+            else {**dict.fromkeys(fields), **dict(zip(fields[:len(r)], r))} for r in rows]
 
 
 def _metrics(rows):
@@ -137,6 +142,18 @@ def _metrics(rows):
                 points_rmse=math.sqrt(fmean(e * e for e in errors)), points_bias=fmean(errors),
                 minutes_mae=fmean(abs(m) for m in minutes), minutes_bias=fmean(minutes),
                 coverage80=fmean(covered), mean_width80=fmean(r['points_upper80'] - r['points_lower80'] for r in rows))
+
+
+def _participation_metrics(projected):
+    """Brier score of the participation probability against actually playing, with the constant-rate baseline."""
+    outcomes = [(r['participation_probability'], r['actual_status'] == 'played' and r['actual_minutes'] > 0)
+                for r in projected if r['participation_probability'] is not None]
+    if not outcomes:
+        return dict(n=0)
+    share = fmean(y for _, y in outcomes)
+    return dict(n=len(outcomes), brier=fmean((p - y) ** 2 for p, y in outcomes), played_share=share,
+                mean_probability=fmean(p for p, _ in outcomes), constant_rate_brier=share * (1 - share),
+                assume_all_play_brier=fmean((1 - y) ** 2 for _, y in outcomes))
 
 
 def summarize(players, teams):
@@ -156,7 +173,7 @@ def summarize(players, teams):
                 g['home']['actual_points'] - g['away']['actual_points']) for g in games]
     return dict(
         players=dict(all=_metrics(played), by_expected_minutes=buckets,
-                     projected_players=len(projected), played=len(played),
+                     projected_players=len(projected), played=len(played), participation=_participation_metrics(projected),
                      projected_dnp=dict(count=len(dnp), share=len(dnp) / len(projected) if projected else None,
                                         mean_expected_minutes=fmean(r['expected_minutes'] for r in dnp) if dnp else None,
                                         mean_points_mean=fmean(r['points_mean'] for r in dnp) if dnp else None),
@@ -204,11 +221,17 @@ def _bias(current, reference):
 def compare(current, reference):
     """Pair the same player-games, teams and games: absolute errors (lower is better) and signed biases."""
     def errors(rows):
-        points, minutes, point_bias = {}, {}, {}
-        for r in _records(rows['players'], PLAYER_FIELDS):
-            if r['points_mean'] is None or r['actual_status'] != 'played' or r['actual_minutes'] <= 0:
+        points, minutes, point_bias, participation = {}, {}, {}, {}
+        for r in _records(rows['players'], rows.get('player_fields', PLAYER_FIELDS)):
+            if r['points_mean'] is None:
                 continue
             key = r['game_id'] + ':' + r['player_id']
+            played = r['actual_status'] == 'played' and r['actual_minutes'] > 0
+            # A reference without probabilities assumed everyone plays.
+            probability = 1.0 if r.get('participation_probability') is None else r['participation_probability']
+            participation[key] = (probability - played) ** 2
+            if not played:
+                continue
             points[key] = abs(r['points_mean'] - r['actual_points'])
             point_bias[key] = r['points_mean'] - r['actual_points']
             minutes[key] = abs(r['expected_minutes'] - r['actual_minutes'])
@@ -221,10 +244,10 @@ def compare(current, reference):
         margin_bias = {gid: (home[gid]['projected_points'] - away[gid]['projected_points'])
                        - (home[gid]['actual_points'] - away[gid]['actual_points']) for gid in home if gid in away}
         margins = {gid: abs(v) for gid, v in margin_bias.items()}
-        return dict(points=points, minutes=minutes, team_points=teams, margin=margins,
+        return dict(points=points, minutes=minutes, team_points=teams, margin=margins, participation=participation,
                     points_bias=point_bias, team_points_bias=team_bias, margin_bias=margin_bias)
     cur, ref = errors(current), errors(reference)
-    result = {name: _paired(cur[name], ref[name]) for name in ('points', 'minutes', 'team_points', 'margin')}
+    result = {name: _paired(cur[name], ref[name]) for name in ('points', 'minutes', 'team_points', 'margin', 'participation')}
     result.update({name: _bias(cur[name], ref[name]) for name in ('points_bias', 'team_points_bias', 'margin_bias')})
     verdicts = {v['verdict'] for v in result.values()}
     result['verdict'] = 'worse' if 'worse' in verdicts else 'improved' if 'improved' in verdicts else 'within_noise'
@@ -278,6 +301,9 @@ def format_scoreboard(board):
             lines.append(f"{name:18s} {item['n']:6d} {item['points_mae']:8.2f} {item['points_bias']:+6.2f} {item['minutes_mae']:8.2f} {item['coverage80']:6.1%} {item['mean_width80']:6.1f}")
     d = m['players']['projected_dnp']
     lines.append(f"projected but did not play: {d['count']} ({d['share']:.1%} of projected), averaging {d['mean_expected_minutes']:.1f} min / {d['mean_points_mean']:.1f} pts" if d['count'] else 'projected but did not play: 0')
+    pm = m['players'].get('participation') or {}
+    if pm.get('n'):
+        lines.append(f"participation: Brier {pm['brier']:.3f} (constant rate {pm['constant_rate_brier']:.3f}, assume all play {pm['assume_all_play_brier']:.3f}); mean P(plays) {pm['mean_probability']:.2f}, played {pm['played_share']:.2f}")
     t, g = m['teams'], m['games']
     if t['n']:
         lines.append(f"teams n={t['n']} points MAE {t['points_mae']:.2f} bias {t['points_bias']:+.2f} (projected players cover {t['covered_share']:.0%} of team points)")
@@ -286,10 +312,11 @@ def format_scoreboard(board):
     c = board.get('comparison')
     if c:
         lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}")
-        for name in ('points', 'minutes', 'team_points', 'margin'):
-            item = c[name]
+        for name in ('points', 'minutes', 'team_points', 'margin', 'participation'):
+            item = c.get(name, {})
             if item.get('mean') is not None:
-                lines.append(f"  {name:18s} n={item['n']:6d} mean abs-error change {item['mean']:+.3f} ± {2 * item['se']:.3f}  {item['verdict']}")
+                what = 'Brier change' if name == 'participation' else 'mean abs-error change'
+                lines.append(f"  {name:18s} n={item['n']:6d} {what} {item['mean']:+.4f} ± {2 * item['se']:.4f}  {item['verdict']}")
         for name in ('points_bias', 'team_points_bias', 'margin_bias'):
             item = c.get(name, {})
             if item.get('current') is not None:

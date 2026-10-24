@@ -43,33 +43,36 @@ its own for pricing, and a bias fix barely moves absolute error when game
 noise is fifteen points. The overall verdict is `worse` if any metric is
 worse, else `improved` if any is improved.
 
-## Reference: 2026-10-24 (home court)
+## Reference: 2026-10-24 (participation)
 
-`datasets/backtest-2026-10-24-home-court/`: model `regular-season-baseline-0.4.3`
+`datasets/backtest-2026-10-24-participation/`: model `regular-season-baseline-0.4.4`
 baseline path, 868 games, 18,548 played player-games.
 
 | Players by projected minutes | n | points MAE | bias | minutes MAE | 80% coverage | width |
 |---|---|---|---|---|---|---|
-| all | 18,548 | 4.87 | −1.73 | 6.32 | 75.9% | 13.3 |
-| 0–10 | 3,906 | 4.16 | −3.21 | 8.36 | 65.6% | 5.9 |
-| 10–20 | 5,510 | 4.65 | −2.15 | 7.05 | 78.2% | 12.5 |
-| 20–30 | 6,337 | 5.08 | −1.21 | 5.39 | 79.3% | 16.3 |
-| 30+ | 2,795 | 5.86 | +0.01 | 4.12 | 77.9% | 18.5 |
+| all | 18,548 | 4.60 | −0.27 | 5.12 | 77.0% | 13.1 |
+| 0–10 | 2,310 | 2.99 | −1.02 | 5.73 | 79.1% | 6.2 |
+| 10–20 | 5,176 | 4.05 | −0.83 | 6.01 | 76.7% | 10.8 |
+| 20–30 | 6,686 | 4.81 | −0.20 | 4.80 | 76.2% | 14.4 |
+| 30+ | 4,376 | 5.78 | +0.67 | 4.22 | 77.5% | 17.7 |
 
-Teams: points MAE 10.08, bias −1.72. Games: margin MAE 12.17, home bias −0.14,
-winner accuracy 64.3% (the model picked the home team 58% of the time; home
-teams won 55%).
+Participation: Brier 0.154 (constant rate 0.228; assume everyone plays 0.352);
+mean probability 0.65, played share 0.65. Teams: points MAE 9.85, bias −0.71.
+Games: margin MAE 12.16, home bias −0.02, winner accuracy 66.4%.
 
-Against the previous reference (`datasets/backtest-2026-10-24/`, model 0.4.2
-without a home-court term: margin MAE 12.25, home bias −1.66, team points MAE
-10.11, winner accuracy 63.9%), the home-court term left player points
-unchanged, moved margin and team-point absolute error by −0.08 and −0.03
-(within noise), and removed the margin home bias (−1.66 → −0.14, about three
-standard errors). It was accepted on the bias criterion.
+Against the previous reference (`datasets/backtest-2026-10-24-home-court/`,
+model 0.4.3: points MAE 4.87, minutes MAE 6.32, team points MAE 10.08 with
+bias −1.72, margin MAE 12.17, winner accuracy 64.3%), the participation model
+improved points error by 0.27, minutes error by 1.20, team points error by
+0.23 and both biases, with margin error within noise. Two things did it:
+participation probabilities weight the 240-minute budget, and current-season
+DNPs no longer dilute a player's minutes when he plays (they lower his
+probability of playing instead). Expected minutes below 240 raise supported
+players' conditional minutes by at most 10% (protected rotation) or 25%
+(bench); larger fills over-projected starters, no fill left team totals short.
 
-For scale: predicting a player from the mean of his own last 15 played games
-gives MAE 4.68 on this data, and knowing his actual minutes with his recent
-scoring rate gives 3.82. The remaining lever in points is minutes.
+Earlier references: `datasets/backtest-2026-10-24-home-court/` (home court),
+`datasets/backtest-2026-10-24/` (model 0.4.2).
 
 ## Reading the numbers
 
@@ -78,6 +81,10 @@ scoring rate gives 3.82. The remaining lever in points is minutes.
   minutes from the ones who play. That is why bias is negative for low-minute
   players and the live model, which has injury reports, shows bias near zero.
   A participation model would move this number and is the next model item.
+- **Participation** is scored on every projected row, played or not: the Brier
+  score of the participation probability against actually playing, beside two
+  references, a constant rate and "assume everyone plays". The replay has no
+  injury reports, so this measures the recent-participation model alone.
 - **Coverage** is measured at the heuristic half-width (1.70 sd). The nominal
   80% interval covers 76% here and 78–79% for players projected at 10+ minutes.
 - **Home court** is a symmetric factor (home up, away down by the same

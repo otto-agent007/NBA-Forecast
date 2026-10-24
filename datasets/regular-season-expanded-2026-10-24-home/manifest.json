@@ -1,0 +1,28 @@
+{
+  "normalizer": "expanded-boxscore-v1+home-side",
+  "rows": 43650,
+  "games": 1244,
+  "players": 645,
+  "seasons": [
+    "2025-26",
+    "2026-27"
+  ],
+  "sha256": "60f7226ac4375cf70eb9fd734ee4157316e9c25da389dad11773d96f5101596a",
+  "known_through": "2026-10-22T05:28:12.423546+00:00",
+  "optional_stat_coverage": {
+    "reb": 43650,
+    "ast": 43650,
+    "stl": 43650,
+    "blk": 43650
+  },
+  "derived_from": {
+    "dataset": "datasets/regular-season-expanded-2026-10-22",
+    "sha256": "c3f499e4e4d250d7451b9f804c1a206f00cc6f6f8d769fb8bb6c7eeb76b03f99"
+  },
+  "home_flag": {
+    "rows_flagged": 42710,
+    "rows_total": 43650,
+    "games_flagged": 1217,
+    "source": "datasets/model-upgrade-2026-10-23/team-games.json.gz (ESPN scoreboard home/away, reconciled to NBA game IDs)"
+  }
+}

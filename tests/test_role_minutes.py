@@ -52,7 +52,10 @@ class RoleMinutesTests(unittest.TestCase):
         previous=[row(i,minutes=30) for i in range(12)]
         inactive=current(minutes=0,fgm=0,fga=0,fg3m=0,fg3a=0,ftm=0,fta=0,tov=0,status='dnp')
         p=forecast(snapshot(),previous+[inactive])['predictions'][0]
-        self.assertLess(p['expected_minutes'],30)
+        # A DNP lowers the participation probability, not the minutes when playing.
+        self.assertAlmostEqual(p['expected_minutes'],30)
+        self.assertLess(p['participation_probability']*p['expected_minutes'],30)
+        self.assertLess(p['participation_probability'],.9)
         self.assertIn('recent_dnp_role_review',p['flags'])
 
     def test_supported_starter_minutes_are_not_diluted_by_speculative_bench_priors(self):
@@ -61,4 +64,4 @@ class RoleMinutesTests(unittest.TestCase):
         data += [current(pid=str(i),minutes=35 if i<5 else 20,starter=i<5) for i in range(8)]
         result=forecast(snapshot(people),data)['predictions']
         self.assertTrue(all(p['expected_minutes']>=34 for p in result if int(p['player_id'])<5))
-        self.assertLessEqual(sum(p['expected_minutes'] for p in result),240.)
+        self.assertLessEqual(sum(p['participation_probability']*p['expected_minutes'] for p in result),240.+1e-9)

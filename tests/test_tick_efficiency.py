@@ -129,7 +129,7 @@ class DailyCalendarTests(unittest.TestCase):
             if isinstance(espn,Exception):raise espn
             (self.folder/'schedule/secondary/verified-latest.json').write_text(json.dumps(self.verified))
             return self.verified
-        with patch('nba_forecast.operations._now',return_value=when),\
+        with patch('nba_forecast.operations._now',return_value=when),patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])),\
              patch('nba_forecast.operations.fetch_schedule',side_effect=[nba or dict(version='fresh',season='2026-27',games=[])]) as fetch,\
              patch('nba_forecast.operations.fetch_verified_secondary_schedule',side_effect=secondary) as check:
             value=operations._calendar(self.folder,'2026-27',report)
@@ -181,7 +181,7 @@ class FailedJobTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations.fetch_schedule',return_value=schedule),\
              patch('nba_forecast.operations.fetch_roster',return_value=roster),\
              patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),\
-             patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}),\
+             patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}),patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])),\
              patch('nba_forecast.operations.run_preflight',return_value=blocked) as preflight:
             def tick(seconds):
                 with patch('nba_forecast.operations._now',return_value=at(NOW,seconds)):return operations.run_tick(d,[])

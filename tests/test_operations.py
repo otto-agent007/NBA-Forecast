@@ -94,6 +94,7 @@ class OperationsTests(unittest.TestCase):
         self.assertFalse(result['errors'])
     def setUp(self):
         self.daily=self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}))
+        self.enterContext(patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])))
         self.preflight=self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
     def test_duplicate_tick_and_crash_recovery_do_not_duplicate_run(self):
         schedule=normalize_season(payload([game()]),NOW);schedule['version']='v1'
@@ -257,6 +258,7 @@ class EvidenceTickTests(unittest.TestCase):
             self.assertEqual(status['prospective_margin']['status'],'not_ready')
 
     def setUp(self):
+        self.enterContext(patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])))
         self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'captured'}))
         self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))

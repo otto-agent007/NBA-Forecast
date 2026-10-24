@@ -79,3 +79,23 @@ class ReferenceTests(unittest.TestCase):
         decoded=decode_reference(raw,'https://www.nba.com/team/1610612752/roster')
         self.assertEqual(decoded,team)
         self.assertNotIn('status',decoded['roster'][0])
+
+
+class DailyArchiveTests(unittest.TestCase):
+    def test_daily_archive_captures_injuries_and_depth_charts_once(self):
+        import tempfile
+        from pathlib import Path
+        from nba_forecast.reference import archive_daily_references
+        calls=[]
+        def fetch(url,directory,max_age=300):
+            calls.append(url)
+            if url.endswith('/teams/7/depthcharts'):raise OSError('offline')
+            return {},dict(source_url=url,retrieved_at='2026-10-25T15:00:00Z',sha256='a'*64)
+        with tempfile.TemporaryDirectory() as d,patch('nba_forecast.reference.fetch_reference',side_effect=fetch):
+            first=archive_daily_references(d,'2026-10-25');again=archive_daily_references(d,'2026-10-25')
+            self.assertTrue((Path(d)/'daily/2026-10-25.json').exists())
+        self.assertEqual(len(calls),31)
+        self.assertEqual((len(first['sources']),len(first['failures'])),(30,1))
+        self.assertTrue(calls[0].endswith('/injuries'))
+        self.assertEqual(again,first)
+

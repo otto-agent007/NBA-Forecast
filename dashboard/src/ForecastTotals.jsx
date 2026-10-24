@@ -66,7 +66,7 @@ export default function ForecastTotals({ game }) {
           <p>{game.forecast.stage === "final" ? "Final" : "Preliminary"} forecast · Regulation only</p>
         </article>
       </div>
-      <p className="point-total-note">Sum of the selected forecast’s player projections, conditional on participation and the projected rotation. Players without playing history stay unprojected. Missing minutes or unresolved availability and roles are marked Partial.</p>
+      <p className="point-total-note">Sum of the selected forecast’s player projections weighted by each player’s probability of playing; individual projections are conditional on playing. Players without playing history stay unprojected. Missing minutes or unresolved availability and roles are marked Partial.</p>
     </section>
   );
 }

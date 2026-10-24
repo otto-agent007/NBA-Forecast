@@ -162,6 +162,21 @@ errors and warnings (`derived_reports.status: unchanged`, see
 `derived-reports.json`). Outcome discovery still runs every tick and keeps the
 model status's outcome summary current.
 
+## Participation
+
+Every projected player has a `participation_probability`: the share of the
+team's last ten games (since he joined it) in which he appeared with positive
+minutes, shrunk by three pseudo-games toward the 2025-26 rate for his role
+(18% under 10 minutes a game, 70% for 10–20, 79% for 20–28, 82% above), then
+scaled by a reported status (probable 0.9, questionable 0.55, doubtful 0.15,
+day-to-day 0.5). A team's probabilities are scaled down if they sum past the
+13-player active list. Questionable players are projected conditionally on
+playing instead of withheld; unknown players remain withheld. Minutes and points for a
+player are what he gets when he plays; the 240-minute budget, team totals,
+game totals and margins weight them by the probability (totals schema 3). The
+ledger scores the probability against actual participation (Brier, in
+`metrics.participation`), and the dashboard shows "N% to play" under 95%.
+
 ## Market lines
 
 Each tick archives the sportsbook lines ESPN's game summary carries (spread,

@@ -142,7 +142,7 @@ def forecast_candidate(snapshot,history):
             complete_games=env.get('audit',{}).get('opponent_games',0),opponent_id=p['components']['baseline_opponent']['opponent_id'])
     totals={}
     for p in result['predictions']:
-        if p['status']=='projected':totals[p['team_id']]=totals.get(p['team_id'],0.)+p['expected_minutes']
+        if p['status']=='projected':totals[p['team_id']]=totals.get(p['team_id'],0.)+(p.get('participation_probability') or 1.)*p['expected_minutes']
     queue={q['player_id']:q for q in result['review_queue']}
     for p in result['predictions']:
         if p['status']=='projected':

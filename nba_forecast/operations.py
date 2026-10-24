@@ -26,6 +26,7 @@ from .shot_profiles import prepare_shot_profiles
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY
 from .market_lines import capture_game_lines,market_report
+from .reference import archive_daily_references
 
 
 def _now():return datetime.now(timezone.utc).isoformat()
@@ -159,6 +160,12 @@ def _calendar(folder,season,report):
             report['schedule_source']='espn_verified_cached_nba';return verified
         report['schedule_source']='unverified_cached_nba' if state.get('consecutive_failures') else 'saved_nba'
         return saved
+    # The daily check is also when the day's ESPN injury list and depth charts are archived.
+    try:
+        daily=archive_daily_references(folder/'references',now.astimezone(PACIFIC).date().isoformat())
+        report['daily_references']=dict(sources=len(daily['sources']),failures=len(daily['failures']))
+    except Exception as exc:
+        report['warnings'].append(dict(task='daily_references',error=f'{type(exc).__name__}: {exc}'))
     try:
         schedule=fetch_schedule(folder/'schedule');source='nba';report['schedule_source']='fresh_nba'
     except (ValueError,OSError) as exc:
