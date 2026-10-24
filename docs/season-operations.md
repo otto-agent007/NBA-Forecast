@@ -11,7 +11,10 @@ backdates a missed capture. `injuries/status.json` exposes waiting, captured
 or retrying state to the dashboard.
 
 Each scheduled game gets preliminary forecasts before its final window,
-refreshed in 15-minute slots. At tipoff minus 30 minutes, the next automatic
+starting at 9 AM Pacific on its game date and refreshed in 15-minute slots.
+Earlier upcoming jobs are recorded as waiting, without treating unpublished
+next-day reports as forecast failures. An early-morning game's final window
+still opens at T−30, even before 9 AM. At tipoff minus 30 minutes, the next automatic
 tick captures that game's official checkpoint and saves a final-stage run;
 five-minute refreshes can retain subsequent late updates as independent runs.
 The dashboard lets you inspect the latest preliminary and final forecasts
@@ -61,6 +64,22 @@ times are preserved. Without a usable roster, it retains injury evidence and
 withholds forecasts. Daily injury capture is independent of calendar access.
 Source failures and retry status remain visible; enabling a timer alone does
 not establish that every scheduled capture succeeded.
+
+When NBA's main player directory is inaccessible, roster refresh uses all 30
+official team roster pages. Each page must match the requested team and season;
+player identities must be unique across the complete collection. Raw responses,
+hashes and original retrieval times are retained, and the oldest team capture
+bounds the assembled roster's observation time. Partial collections fail closed.
+Sources are cached for at most 15 minutes. This does not bypass independent ESPN
+membership checks or infer player availability.
+
+The persistent runner uses a pinned, content-addressed copy of the Python
+package. After a verified code change, create a new release with
+`python3 -m nba_forecast.runner_release --directory data/operations/production/runner-releases`,
+set the service's `WorkingDirectory` to the printed path, retain absolute data
+and history arguments, then reload/restart the user service. Active ticks keep
+one package version even while the worktree changes. The dashboard service
+continues to use the worktree and requires its usual restart for Python changes.
 
 ## Commands
 

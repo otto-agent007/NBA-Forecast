@@ -93,7 +93,7 @@ def run_tick(directory,history):
     try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError as exc:
         handle.close();raise ValueError('tick already running') from exc
-    report=dict(started_at=_now(),status='running',created_runs=0,recovered_runs=0,evaluated_runs=0,errors=[],warnings=[],missed_final_games=[])
+    report=dict(started_at=_now(),status='running',created_runs=0,recovered_runs=0,evaluated_runs=0,errors=[],warnings=[],missed_final_games=[],waiting_jobs=[])
     try:
         _tick(folder,history,report)
         report['status']='partial' if report['errors'] or report['missed_final_games'] else 'complete'
@@ -147,7 +147,9 @@ def _tick(folder,history,report):
             key=(row['game_id'],row['player_id']);old=combined.get(key)
             if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):combined[key]=row
     history=list(combined.values());validate_history(history)
-    jobs=due_jobs(schedule,_now());by_id={g['game_id']:g for g in schedule['games']}
+    jobs=due_jobs(schedule,_now(),include_waiting=True);by_id={g['game_id']:g for g in schedule['games']}
+    report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
+    jobs=[j for j in jobs if not j.get('waiting')]
     reviews={}
     for job in jobs:
         # Refresh evidence throughout the day, then every five minutes near tipoff.

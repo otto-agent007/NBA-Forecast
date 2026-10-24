@@ -8,11 +8,23 @@ import unittest
 from unittest.mock import patch
 from nba_forecast.operations import run_tick
 from nba_forecast.schedule import normalize_season
-from tests.test_schedule import payload,game,NOW
+from tests.test_schedule import payload,game
 from tests.test_store import inputs
 from tests.test_model import row
 
+# Orchestration fixtures run after the owner's 9 AM Pacific initial checkpoint.
+NOW='2026-10-21T16:00:00Z'
+
 class OperationsTests(unittest.TestCase):
+    def test_tomorrow_jobs_wait_without_fetching_or_raising_attention(self):
+        schedule=normalize_season(payload([game(start='2026-10-22T22:00:00Z')]),NOW);schedule['version']='v1'
+        clock='2026-10-21T23:00:00Z'
+        with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations._now',return_value=clock),patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster') as roster:
+            result=run_tick(d,[])
+        roster.assert_not_called()
+        self.assertEqual(result['status'],'complete')
+        self.assertEqual(result['waiting_jobs'][0]['game_id'],'0022600001')
+        self.assertFalse(result['errors'])
     def setUp(self):
         self.daily=self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}))
         self.preflight=self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
@@ -113,6 +125,7 @@ class OperationsTests(unittest.TestCase):
 
 class EvidenceTickTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'captured'}))
         self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.schedule=normalize_season(payload([game()]),NOW)

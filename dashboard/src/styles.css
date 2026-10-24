@@ -15,6 +15,7 @@
 .forecast-stage-buttons button[aria-pressed="true"] { background: #edf5ff; border-color: #2472d5; color: #1261cb; }
 .forecast-stage-buttons small { display: block; font-size: 10px; font-weight: 400; margin-top: 7px; }
 .forecast-stage-summary { margin: 12px 0 0; font-size: 11px; color: #64748b; line-height: 1.6; }
+.runner-issues { font-size: 11px; color: #9a382a; line-height: 1.6; padding-left: 16px; overflow-wrap: anywhere; }
 .forecast-totals { margin: 20px 0; }
 .forecast-totals h2 { font-size: 18px; margin-bottom: 12px; }
 .point-total-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

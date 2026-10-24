@@ -255,7 +255,10 @@ def normalize_roster(players, observed_at, season):
 
 
 def fetch_roster(season, *, cache_dir=DEFAULT_CACHE):
-    raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
+    try:raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
+    except (ValueError,OSError):
+        from .roster_refresh import fetch_team_rosters
+        return fetch_team_rosters(season,cache_dir)
     parser = _NextDataParser()
     try:
         parser.feed(raw.decode("utf-8"))

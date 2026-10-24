@@ -89,16 +89,21 @@ def fetch_schedule(directory):
     return save_schedule(json.loads(raw),observed,directory)
 
 
-def due_jobs(schedule,now):
+def due_jobs(schedule,now,*,include_waiting=False):
     now=parse_time(now);jobs=[]
     for g in schedule['games']:
         if g['status']!='scheduled' or not g['start_time']:continue
         start=parse_time(g['start_time']);remaining=start-now
         if timedelta(0)<remaining<=timedelta(hours=24):
             stage='final' if remaining<=timedelta(minutes=30) else 'preliminary'
+            morning=start.astimezone(ZoneInfo('America/Los_Angeles')).replace(hour=9,minute=0,second=0,microsecond=0)
+            ready=min(morning,start-timedelta(minutes=30))
+            waiting=now<ready
+            if waiting and not include_waiting:continue
             # Stable through unrelated schedule changes; a changed tipoff gets a new key.
             key=f"{g['game_id']}:{g['start_time']}:{stage}"
             jobs.append(dict(game_id=g['game_id'],stage=stage,key=key,checkpoint_at=(start-timedelta(minutes=30)).isoformat()))
+            if waiting:jobs[-1].update(waiting=True,ready_at=ready.isoformat())
     return jobs
 
 

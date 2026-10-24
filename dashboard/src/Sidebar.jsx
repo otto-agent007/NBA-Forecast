@@ -11,6 +11,12 @@ export default function Sidebar({ game, data, onReview, now }) {
   const dailySource = safeSource(daily?.capture?.report?.source_url);
   const sourceWarnings = (data.runner?.warnings || []).filter((w) => ['schedule', 'roster'].includes(w.task));
   const h = health(data.runner, now);
+  const waiting = data.runner?.waiting_jobs || [];
+  const runnerIssues = data.runner?.errors || [];
+  const runnerGame = (id) => {
+    const match = data.games.find((g) => g.game_id === id);
+    return match ? `${match.away_tricode}@${match.home_tricode}` : id;
+  };
   const start = game?.start_time ? Date.parse(game.start_time) : null;
   const before = start && now < start;
   const final =
@@ -113,6 +119,17 @@ export default function Sidebar({ game, data, onReview, now }) {
           <span className="status-dot" />
           {h.label}
         </div>
+        {!!waiting.length && <p className="tiny" aria-label="Upcoming forecast checkpoints">
+          {waiting.length} upcoming {waiting.length === 1 ? "game" : "games"} waiting for the initial forecast checkpoint. Next: {stamp(waiting.map((j) => j.ready_at).sort()[0])}.
+        </p>}
+        {!!runnerIssues.length && <ul className="runner-issues" aria-label="Runner issues">
+          {runnerIssues.slice(0, 3).map((issue, index) => <li key={index}>
+            {issue.game_id ? runnerGame(issue.game_id) : issue.task}: {issue.error || issue.issues?.map((i) => i.detail).join(" ") || "Task failed; retry pending."}
+          </li>)}
+        </ul>}
+        {!!data.runner?.missed_final_games?.length && <p className="warning">
+          Missing final forecasts: {data.runner.missed_final_games.map(runnerGame).join(", ")}.
+        </p>}
         <p className="tiny">
           {stamp(data.runner?.finished_at)}. Refresh reloads saved evidence; it
           does not start the runner.

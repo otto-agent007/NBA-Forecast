@@ -55,6 +55,21 @@ test("View review queue includes projected role reviews and excludes routine pla
   expect(errors).toEqual([]);
 });
 
+test("runner separates waiting checkpoints from actionable errors", async ({ page }) => {
+  const response=structuredClone(dashboard);
+  response.runner={status:'complete',finished_at:new Date().toISOString(),errors:[],missed_final_games:[],
+    waiting_jobs:[{game_id:'later',ready_at:'2026-10-24T09:00:00-07:00'}]};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.goto('/');
+  await expect(page.getByText('Runner recently completed',{exact:true})).toBeVisible();
+  await expect(page.getByLabel('Upcoming forecast checkpoints')).toContainText('1 upcoming game');
+  response.runner.status='partial';
+  response.runner.errors=[{task:'preflight',game_id:gameId,issues:[{detail:'Roster membership disagrees.'}]}];
+  await page.getByRole('button',{name:'Refresh data',exact:true}).click();
+  await expect(page.getByText('Runner needs attention',{exact:true})).toBeVisible();
+  await expect(page.getByLabel('Runner issues')).toContainText('GSW@LAL: Roster membership disagrees.');
+});
+
 test("Refresh reloads newly available and corrected postgame evidence for the same game", async ({ page }) => {
   let response = { missing_reason: "Postgame capture is pending." };
   let requests = 0;
