@@ -185,7 +185,7 @@ test("team and game point totals follow the forecast stage and ignore player fil
   const response=structuredClone(dashboard);
   const preliminary=response.games[0].forecast;
   const teams=[
-    {team_id:'1610612744',side:'away',points_mean:100.05,status:'complete',projected_minutes:240,projected_players:8,withheld_player_ids:[],unallocated_minutes:0},
+    {team_id:'1610612744',side:'away',points_mean:100.05,status:'complete',projected_minutes:240,projected_players:8,withheld_player_ids:['new'],cold_start_player_ids:['new'],unresolved_player_ids:[],unallocated_minutes:0},
     {team_id:'1610612747',side:'home',points_mean:90.1,status:'complete',projected_minutes:240,projected_players:8,withheld_player_ids:[],unallocated_minutes:0},
   ];
   preliminary.totals={status:'complete',points_mean:190.15,teams};
@@ -196,6 +196,9 @@ test("team and game point totals follow the forecast stage and ignore player fil
   await page.goto('/');
   const totals=page.getByLabel('Forecast point totals');
   await expect(totals.getByLabel('Golden State Warriors point total').getByTestId('point-total')).toHaveText('110.1');
+  await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('1 roster player without playing history');
+  await expect(totals.getByLabel('Golden State Warriors point total')).not.toContainText('Partial');
+  await expect(totals.getByLabel('Golden State Warriors point total')).not.toContainText('1 withheld');
   await expect(totals.getByLabel('Los Angeles Lakers point total').getByTestId('point-total')).toHaveText('95.1');
   await expect(totals.getByLabel('Game point total').getByTestId('point-total')).toHaveText('205.2');
   await page.getByRole('textbox',{name:'Search players'}).fill('Nobody matches');

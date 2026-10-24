@@ -4,6 +4,7 @@ const points = (value) => typeof value === "number" && Number.isFinite(value)
   ? new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)
   : "—";
 const minutes = (value) => typeof value === "number" ? Number(value.toFixed(1)) : "—";
+const unresolved = (team) => team.unresolved_player_ids?.length ?? team.withheld_player_ids.length;
 
 export default function ForecastTotals({ game }) {
   const totals = game.forecast?.totals;
@@ -21,7 +22,8 @@ export default function ForecastTotals({ game }) {
             <strong className="point-total-value" data-testid="point-total">{points(team.points_mean)}</strong>
             <span className={`total-state ${team.status}`}>{label(team.status)}</span>
             <p>{minutes(team.projected_minutes)} / 240 minutes · {team.projected_players} projected</p>
-            {!!team.withheld_player_ids.length && <p>{team.withheld_player_ids.length} withheld</p>}
+            {!!team.cold_start_player_ids?.length && <p>{team.cold_start_player_ids.length} roster {team.cold_start_player_ids.length === 1 ? "player" : "players"} without playing history</p>}
+            {!!unresolved(team) && <p>{unresolved(team)} withheld · Availability or role review</p>}
           </article>
         ))}
         <article className="combined-point-total" aria-label="Game point total">
@@ -32,7 +34,7 @@ export default function ForecastTotals({ game }) {
           <p>{game.forecast.stage === "final" ? "Final" : "Preliminary"} forecast · Regulation only</p>
         </article>
       </div>
-      <p className="point-total-note">Sum of the selected forecast’s player projections, conditional on participation and the projected rotation. Partial totals exclude withheld players and unallocated minutes.</p>
+      <p className="point-total-note">Sum of the selected forecast’s player projections, conditional on participation and the projected rotation. Players without playing history stay unprojected. Missing minutes or unresolved availability and roles are marked Partial.</p>
     </section>
   );
 }

@@ -35,6 +35,36 @@ class TotalsTests(unittest.TestCase):
         self.assertEqual(total['teams'][0]['withheld_player_ids'],['unknown'])
         self.assertAlmostEqual(total['teams'][0]['points_mean'],100.05)
 
+    def test_no_playing_history_does_not_make_a_full_rotation_partial(self):
+        cold=dict(player_id='new',name='New',game_id='g',team_id='A',status='needs_review',
+            points_mean=None,expected_minutes=None,flags=['cold_start'],
+            components={'history':{'played_games':0},'availability':{'status':'available'}})
+        rows=predictions()+[cold]
+        total=game_totals(GAME,rows)
+        self.assertEqual(total['status'],'complete')
+        self.assertEqual(total['teams'][0]['cold_start_player_ids'],['new'])
+        self.assertEqual(total['teams'][0]['withheld_player_ids'],['new'])
+        self.assertAlmostEqual(total['points_mean'],190.15)
+        self.assertIsNone(cold['points_mean'])
+        self.assertEqual(game_totals(GAME,rows,schema_version=1)['status'],'partial')
+        self.assertEqual(game_totals(GAME,rows,lineups={'A':{'player_ids':['new']}})['status'],'partial')
+        cold['projected_starter']=True
+        self.assertEqual(game_totals(GAME,rows)['status'],'partial')
+        cold.pop('projected_starter')
+        rows[0]['expected_minutes']=30
+        self.assertEqual(game_totals(GAME,rows)['status'],'partial')
+
+    def test_unresolved_availability_or_prior_playing_evidence_stays_partial(self):
+        cold=dict(player_id='new',name='New',game_id='g',team_id='A',status='needs_review',
+            points_mean=None,expected_minutes=None,flags=['cold_start'],
+            components={'history':{'played_games':0},'availability':{'status':'available'}})
+        for edit in ('questionable','unknown','played','extra_flag'):
+            candidate=deepcopy(cold)
+            if edit in ('questionable','unknown'):candidate['components']['availability']['status']=edit
+            elif edit=='played':candidate['components']['history']['played_games']=1
+            else:candidate['flags'].append('new_team_role_unobserved')
+            self.assertEqual(game_totals(GAME,predictions()+[candidate])['status'],'partial')
+
     def test_out_player_is_known_zero_and_missing_minutes_are_disclosed(self):
         rows=predictions()+[dict(player_id='out',name='Out',game_id='g',team_id='A',
              status='out',points_mean=0,expected_minutes=0)]
@@ -68,5 +98,10 @@ class TotalsTests(unittest.TestCase):
         _validate_forecast(s,f)
         forged=deepcopy(f);forged['game_totals'][0]['points_mean']=999
         with self.assertRaisesRegex(ValueError,'totals'):_validate_forecast(s,forged)
+
+    def test_original_saved_totals_schema_remains_valid(self):
+        s,_,f=inputs()
+        f['game_totals']=[game_totals(s['games'][0],f['predictions'],schema_version=1)]
+        _validate_forecast(s,f)
         forged=deepcopy(f);forged['game_totals'][0]['teams'][0]['projected_players']=True
         with self.assertRaisesRegex(ValueError,'totals'):_validate_forecast(s,forged)

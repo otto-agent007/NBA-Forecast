@@ -23,19 +23,29 @@ forecast stage. Its default view switches to the final when that run arrives.
 Static snapshot previews remain fixed until manually refreshed.
 
 Each selected forecast shows away and home team point totals and their combined
-game total. Model `regular-season-baseline-0.4.1` saves these aggregates with the
+game total. Model `regular-season-baseline-0.4.2` saves these aggregates with the
 forecast; older dashboard runs derive them from their original saved player
 predictions without changing ledger rows. Totals sum unrounded supported means,
 then round for display. They cover regulation and remain conditional on player
 participation and the projected rotation. They do not include overtime.
 
-Any withheld player, fewer than five projected players or unallocated team
-minutes marks the team's total partial; the game total inherits partial status.
-Projected minutes and withheld counts accompany each team. A team with no
+Unresolved availability/roles, fewer than five projected players or unallocated
+team minutes marks the team's total partial; the game total inherits that status.
+A fully allocated rotation remains complete when another roster player, outside
+the projected starting five, has only
+the `cold_start` flag, zero captured positive-minute appearances and sourced
+available status. These unprojected players are disclosed separately. This does
+not assert they will be inactive or invent zero scoring/minutes for them.
+Projected minutes and review counts accompany each team. A team with no
 supported projections and a game missing either team estimate stay blank.
 Player searches, filters and sorting never change totals. No missing scoring
 or minutes are extrapolated, and individual uncertainty bounds are not summed
 into an unsupported game interval.
+
+Coverage schema 2 separates these roster observations from rotation completeness.
+The dashboard derives current coverage annotations from each run's original
+player rows and exposes `saved_totals` separately. Original schema 1 aggregates
+and ledger hashes remain unchanged and still validate under their original rules.
 
 Every captured check is retained under `injuries/games/GAME_ID/records/`,
 including checks for which roster or parsing failures prevent forecasting.

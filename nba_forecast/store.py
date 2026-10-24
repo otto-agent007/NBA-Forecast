@@ -161,7 +161,10 @@ def _validate_forecast(snapshot, forecast):
                 if row['expected_minutes'] > 60:
                     raise ValueError('expected minutes exceed supported forecast bound')
         if 'game_totals' in forecast:
-            expected=[game_totals(g,rows) for g in snapshot['games'] if g['season_type']=='Regular Season']
+            versions={t.get('schema_version',1) for t in forecast['game_totals']}
+            if len(versions)>1:raise ValueError('forecast totals mix schema versions')
+            version=next(iter(versions),2)
+            expected=[game_totals(g,rows,schema_version=version,lineups=snapshot.get('preflight',{}).get('lineups')) for g in snapshot['games'] if g['season_type']=='Regular Season']
             if _canonical(forecast['game_totals'])!=_canonical(expected):
                 raise ValueError('forecast totals disagree with player projections')
     except (KeyError, TypeError) as exc:

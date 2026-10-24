@@ -64,7 +64,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(value['games'],[]);self.assertEqual(value['players'],[])
             self.assertFalse((Path(d)/'forecast.sqlite').exists())
     def test_real_ledger_matches_schedule_and_withholds_changed_tipoff(self):
+        from nba_forecast.totals import game_totals
         s,h,f=inputs()
+        f['game_totals']=[game_totals(s['games'][0],f['predictions'],schema_version=1)]
         with tempfile.TemporaryDirectory() as d:
             folder=Path(d);(folder/'schedule').mkdir()
             schedule={'season':'2026-27','observed_at':s['as_of'],'coverage':{},'games':[dict(s['games'][0],status='scheduled',home_name='Home',away_name='Away')]}
@@ -76,6 +78,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(len(result['players']),30)
             self.assertEqual(len(result['games'][0]['forecast']['predictions']),2)
             total=result['games'][0]['forecast']['totals']
+            self.assertEqual(total['schema_version'],2)
+            self.assertEqual(result['games'][0]['forecast']['saved_totals'],f['game_totals'][0])
             self.assertEqual(len(total['teams']),2)
             self.assertAlmostEqual(total['points_mean'],30)
             self.assertEqual(total['status'],'partial')
