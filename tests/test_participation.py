@@ -47,7 +47,8 @@ class ParticipationEstimateTests(unittest.TestCase):
         nobody = _participation(player(), [], games, 30)
         self.assertEqual((nobody['games'], nobody['probability']), (0, .82))
         early = _participation(player(), rows([0]), team_games(2), 30)
-        self.assertEqual((early['games'], early['probability']), (0, .82), 'fewer than three team games: prior alone')
+        self.assertEqual((early['games'], early['played']), (2, 1), 'early listings count from the first one')
+        self.assertAlmostEqual(early['probability'], (1 + PARTICIPATION_PSEUDO_GAMES * .82) / (2 + PARTICIPATION_PSEUDO_GAMES))
 
     def test_last_season_does_not_count_against_a_player(self):
         snap = snapshot([player(), player('q')])
@@ -122,7 +123,7 @@ class ActiveListTests(unittest.TestCase):
         snap = snapshot([player(f'p{i}') for i in range(12)])
         data = []
         for i in range(12):
-            data += rows(range(2), pid=f'p{i}', minutes=20)  # two team games: priors alone (0.70 each)
+            data += rows([0], [1], pid=f'p{i}', minutes=20)  # one appearance in two listings: well under ten expected
         projected = [p for p in forecast(snap, data)['predictions'] if p['status'] == 'projected']
         self.assertAlmostEqual(sum(p['participation_probability'] for p in projected), ACTIVE_LIST_MIN_EXPECTED)
         self.assertTrue(all(p['participation_probability'] <= 1 for p in projected))
@@ -133,10 +134,10 @@ class ActiveListTests(unittest.TestCase):
         players = [player(f'p{i}') for i in range(11)] + [dict(player('q', status='questionable'), reported_status='Questionable')]
         data = []
         for pid in [p['player_id'] for p in players]:
-            data += rows(range(2), pid=pid, minutes=20)
+            data += rows([0], [1], pid=pid, minutes=20)
         by_id = {p['player_id']: p for p in forecast(snapshot(players), data)['predictions'] if p['status'] == 'projected'}
-        self.assertAlmostEqual(by_id['q']['participation_probability'], .55 * by_id['q']['components']['participation']['prior'],
-                               msg='questionable: status times prior, not raised')
+        self.assertAlmostEqual(by_id['q']['participation_probability'], .55 * by_id['q']['components']['participation']['role_rate'],
+                               msg='questionable: status times the role rate, not raised')
         self.assertAlmostEqual(sum(p['participation_probability'] for p in by_id.values()), ACTIVE_LIST_MIN_EXPECTED)
         self.assertTrue(all(p['participation_probability'] < 1 for p in by_id.values()))
 

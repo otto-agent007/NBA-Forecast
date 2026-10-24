@@ -49,7 +49,7 @@ from .totals import RESIDUAL_MIN_PROJECTED, game_totals
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
-MODEL_VERSION = "regular-season-baseline-0.4.5"
+MODEL_VERSION = "regular-season-baseline-0.4.6"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -74,9 +74,9 @@ PARTICIPATION_PRIORS = ((10., .18), (20., .70), (28., .79), (float("inf"), .82))
 PARTICIPATION_PSEUDO_GAMES = 3
 PARTICIPATION_WINDOW = 10
 # The window stays inside the current season: last season's final games say
-# little about who dresses now. Before a team has played this many games, the
-# role prior (scaled by any reported status) stands alone.
-PARTICIPATION_MIN_TEAM_GAMES = 3
+# little about who dresses now. Even one listing counts: with three pseudo-games
+# of prior, two DNPs take a newcomer from .79 to .47, which is what they mean.
+PARTICIPATION_MIN_TEAM_GAMES = 1
 STATUS_PARTICIPATION = {"probable": .9, "questionable": .55, "doubtful": .15, "day-to-day": .5, "game time decision": .5}
 # When expected minutes fall short of 240, conditional minutes rise by at most
 # these fractions (protected rotation, bench) and never past 48. Chosen on the
@@ -636,10 +636,11 @@ def _baseline_forecast(snapshot, history):
         if (any(r['team_id']==team for r in current) and
             not any(r['team_id']==team and r['minutes']>0 for r in previous+current) and
             not adjustments.get((pid,game['game_id']))):
-            p.update(status='needs_review',reason='No positive-minute appearance in the new team role; reviewed rotation evidence is required.')
+            # Listed by the new team but yet to play for it: projected conditionally on
+            # playing, from the earlier role, with those listings lowering the probability.
+            p['reason']=('Conditional on playing: listed by the new team without a positive-minute appearance yet, '
+                         'so the role comes from earlier evidence and the participation probability from the listings.')
             p['flags'].append('new_team_role_unobserved')
-            p['components']['opportunities']=opportunities
-            continue
         participation = _participation(player, rows, team_games.get(team, []), minutes)
         p["participation_probability"] = participation["probability"]
         p["components"]["participation"] = participation

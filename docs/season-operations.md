@@ -180,7 +180,10 @@ least ten when ten or more players are projected (teams used at least ten
 players in three quarters of 2025-26 games; the priors were measured on
 everyone a box score lists, and the live roster has already lost its out
 players). The window stays inside the current season; before a team's third
-game the role prior stands alone. Questionable players are projected conditionally on
+game the role prior stands alone. A player listed by a new team without a
+positive-minute appearance for it yet (flag `new_team_role_unobserved`) is
+projected conditionally on playing from his earlier role, with those listings
+lowering his probability, instead of withheld. Questionable players are projected conditionally on
 playing instead of withheld; unknown players remain withheld. Minutes and points for a
 player are what he gets when he plays; the 240-minute budget, team totals,
 game totals and margins weight them by the probability (totals schema 3). The

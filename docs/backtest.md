@@ -43,6 +43,29 @@ its own for pricing, and a bias fix barely moves absolute error when game
 noise is fifteen points. The overall verdict is `worse` if any metric is
 worse, else `improved` if any is improved.
 
+## Reference: 2026-10-24 (newcomers)
+
+`datasets/backtest-2026-10-24-newcomers/`: model `regular-season-baseline-0.4.6`
+baseline path, 868 games, 18,598 played player-games. A player listed by a new
+team without a positive-minute appearance for it yet is projected
+conditionally on playing from his earlier role instead of withheld (flag
+`new_team_role_unobserved`); early-season listings count toward the
+participation rate from the first one.
+
+Points MAE 4.58 (bias −0.39), minutes MAE 5.11, coverage 76.8%, winner Brier
+0.214, participation Brier 0.153, team points MAE 9.63 (bias −0.92), margin
+MAE 12.07, winner accuracy 68.3%.
+
+Against the team-usage reference the gate said **worse** on one metric,
+minutes MAE +0.009 ± 0.004 (0.2% of 5.10), with every other metric within
+noise; the second documented exception. The 187 such newcomer rows in the
+replay played 7% of the time (mean probability 0.15) and, when they played,
+their conditional minutes were right (13.1 projected, 13.6 actual); the
+minutes change is the small share of the 240-minute budget their expected
+minutes now take from teammates. The policy shipped because withholding them
+blocked whole team totals and margins (Philadelphia on 2026-10-24: three such
+players, no margin forecast) for a reason the data does not support.
+
 ## Reference: 2026-10-24 (team usage)
 
 `datasets/backtest-2026-10-24-usage/`: model `regular-season-baseline-0.4.5`
@@ -110,7 +133,8 @@ or more projected players, at least ten expected. Expected minutes below 240 rai
 players' conditional minutes by at most 10% (protected rotation) or 25%
 (bench); larger fills over-projected starters, no fill left team totals short.
 
-Earlier references: `datasets/backtest-2026-10-24-participation/` (model 0.4.4),
+Earlier references: `datasets/backtest-2026-10-24-usage/` (model 0.4.5),
+`datasets/backtest-2026-10-24-participation/` (model 0.4.4),
 `datasets/backtest-2026-10-24-home-court/` (home court), `datasets/backtest-2026-10-24/` (model 0.4.2).
 
 ## Margin probabilities

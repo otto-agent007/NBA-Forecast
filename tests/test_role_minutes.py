@@ -31,13 +31,17 @@ class RoleMinutesTests(unittest.TestCase):
         self.assertGreater(result['components']['shooting']['two_point']['prior_attempts'],0)
         self.assertIn('team_change',result['flags'])
 
-    def test_new_team_dnp_without_observed_role_is_withheld_and_not_old_team_minutes(self):
+    def test_new_team_dnp_without_observed_role_is_projected_conditionally_from_the_old_role(self):
         old=[row(i,team='OLD',minutes=25) for i in range(10)]
         not_played=current(minutes=0,fgm=0,fga=0,fg3m=0,fg3a=0,ftm=0,fta=0,tov=0,status='dnp')
         p=forecast(snapshot(),old+[not_played])['predictions'][0]
-        self.assertEqual(p['status'],'needs_review')
-        self.assertIsNone(p['expected_minutes'])
+        self.assertEqual(p['status'],'projected')
+        self.assertGreater(p['expected_minutes'],0)
         self.assertIn('new_team_role_unobserved',p['flags'])
+        self.assertIn('Conditional on playing',p['reason'])
+        self.assertTrue(0<p['participation_probability']<1)
+        # The listing without minutes does not become old-team minutes when he plays; the role prior does.
+        self.assertEqual(p['components']['opportunities']['role_current_team_game_ids'],[])
 
     def test_current_team_role_profile_matches_forecast_and_future_games_are_excluded(self):
         s=snapshot();data=[row(i,team='OLD',minutes=12) for i in range(8)]+[current(minutes=33)]
