@@ -128,6 +128,18 @@ class ActiveListTests(unittest.TestCase):
         self.assertTrue(all(p['participation_probability'] <= 1 for p in projected))
         self.assertEqual(projected[0]['components']['participation']['team_probability_goal'], ACTIVE_LIST_MIN_EXPECTED)
 
+    def test_the_floor_leaves_reported_statuses_alone(self):
+        from nba_forecast.model import ACTIVE_LIST_MIN_EXPECTED
+        players = [player(f'p{i}') for i in range(11)] + [dict(player('q', status='questionable'), reported_status='Questionable')]
+        data = []
+        for pid in [p['player_id'] for p in players]:
+            data += rows(range(2), pid=pid, minutes=20)
+        by_id = {p['player_id']: p for p in forecast(snapshot(players), data)['predictions'] if p['status'] == 'projected'}
+        self.assertAlmostEqual(by_id['q']['participation_probability'], .55 * by_id['q']['components']['participation']['prior'],
+                               msg='questionable: status times prior, not raised')
+        self.assertAlmostEqual(sum(p['participation_probability'] for p in by_id.values()), ACTIVE_LIST_MIN_EXPECTED)
+        self.assertTrue(all(p['participation_probability'] < 1 for p in by_id.values()))
+
 
 class LedgerParticipationTests(unittest.TestCase):
     def setUp(self):

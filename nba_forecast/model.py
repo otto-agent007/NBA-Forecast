@@ -626,14 +626,16 @@ def _baseline_forecast(snapshot, history):
         team_predictions = [p for p in predictions if p["team_id"] == team]
         projected_team = [p for p in team_predictions if p["status"] == "projected"]
         # At most 13 players dress, and a full team uses at least ten: scale the
-        # team's probabilities into that range (never past 1 for a player).
+        # team's probabilities into that range. Raising never passes 1 and never
+        # touches a player whose reported status already lowered his probability.
         active_sum = sum(working[p["player_id"]][7] for p in projected_team)
         goal = (ACTIVE_LIST_MAX if active_sum > ACTIVE_LIST_MAX else
                 ACTIVE_LIST_MIN_EXPECTED if active_sum < ACTIVE_LIST_MIN_EXPECTED and len(projected_team) >= ACTIVE_LIST_MIN_EXPECTED else None)
         if goal is not None and active_sum:
             for _ in range(3):
                 current_sum = sum(working[p["player_id"]][7] for p in projected_team)
-                movable = [p for p in projected_team if (goal < current_sum) or working[p["player_id"]][7] < 1 - 1e-9]
+                movable = [p for p in projected_team if (goal < current_sum) or
+                           (working[p["player_id"]][7] < 1 - 1e-9 and p["components"]["participation"]["status_factor"] >= 1)]
                 movable_sum = sum(working[p["player_id"]][7] for p in movable)
                 if abs(current_sum - goal) < 1e-9 or not movable_sum:
                     break
