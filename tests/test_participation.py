@@ -14,10 +14,16 @@ def team_games(count, team='A'):
     return [(datetime(2025, 3, i + 1, 20, tzinfo=timezone.utc), f'g{i}') for i in range(count)]
 
 
-def rows(played_games, dnp_games=(), pid='p', team='A', minutes=30):
-    out = [row(i=i, pid=pid, team=team, minutes=minutes) for i in played_games]
+def rows(played_games, dnp_games=(), pid='p', team='A', minutes=30, season='2025-26'):
+    """Current-season rows by default (the test snapshot season), dated before its cutoff."""
+    def one(i, **kw):
+        r = row(i=i, pid=pid, team=team, season=season, minutes=minutes, **kw)
+        if season == '2025-26':
+            r.update(game_time=f'2025-12-{i % 28 + 1:02d}T20:00:00+00:00', known_at=f'2025-12-{i % 28 + 1:02d}T23:00:00+00:00')
+        return r
+    out = [one(i) for i in played_games]
     for i in dnp_games:
-        out.append(dict(row(i=i, pid=pid, team=team, minutes=0, fgm=0, fga=0, fg3m=0, fg3a=0, ftm=0, fta=0), status='dnp'))
+        out.append(dict(one(i, fgm=0, fga=0, fg3m=0, fg3a=0, ftm=0, fta=0), minutes=0, status='dnp'))
     return out
 
 
@@ -40,6 +46,16 @@ class ParticipationEstimateTests(unittest.TestCase):
         self.assertAlmostEqual(absent['probability'], (2 + PARTICIPATION_PSEUDO_GAMES * .18) / 13)
         nobody = _participation(player(), [], games, 30)
         self.assertEqual((nobody['games'], nobody['probability']), (0, .82))
+        early = _participation(player(), rows([0]), team_games(2), 30)
+        self.assertEqual((early['games'], early['probability']), (0, .82), 'fewer than three team games: prior alone')
+
+    def test_last_season_does_not_count_against_a_player(self):
+        snap = snapshot([player(), player('q')])
+        data = rows(range(10), pid='p', season='2024-25') + rows([0, 1, 2], pid='p') + rows(range(10), pid='q', season='2024-25') + rows([0, 1, 2], pid='q')
+        data = [r for r in data if not (r['player_id'] == 'p' and r['season'] == '2024-25' and r['game_id'] in ('g5', 'g6', 'g7', 'g8', 'g9'))]
+        by_id = {x['player_id']: x for x in forecast(snap, data)['predictions']}
+        self.assertEqual(by_id['p']['components']['participation']['games'], 3)
+        self.assertAlmostEqual(by_id['p']['participation_probability'], by_id['q']['participation_probability'])
 
     def test_reported_status_scales_the_role_rate(self):
         games = team_games(10)
@@ -96,8 +112,21 @@ class ActiveListTests(unittest.TestCase):
         projected = [p for p in forecast(snap, data)['predictions'] if p['status'] == 'projected']
         total = sum(p['participation_probability'] for p in projected)
         self.assertAlmostEqual(total, ACTIVE_LIST_MAX)
-        self.assertTrue(all(p['components']['participation']['active_list_cap'] < 1 for p in projected))
+        self.assertEqual(projected[0]['components']['participation']['team_probability_goal'], ACTIVE_LIST_MAX)
+        self.assertGreater(projected[0]['components']['participation']['team_probability_sum_before'], ACTIVE_LIST_MAX)
         self.assertLessEqual(sum(p['participation_probability'] * p['expected_minutes'] for p in projected), 240 + 1e-6)
+
+
+    def test_a_full_team_uses_at_least_ten_players(self):
+        from nba_forecast.model import ACTIVE_LIST_MIN_EXPECTED
+        snap = snapshot([player(f'p{i}') for i in range(12)])
+        data = []
+        for i in range(12):
+            data += rows(range(2), pid=f'p{i}', minutes=20)  # two team games: priors alone (0.70 each)
+        projected = [p for p in forecast(snap, data)['predictions'] if p['status'] == 'projected']
+        self.assertAlmostEqual(sum(p['participation_probability'] for p in projected), ACTIVE_LIST_MIN_EXPECTED)
+        self.assertTrue(all(p['participation_probability'] <= 1 for p in projected))
+        self.assertEqual(projected[0]['components']['participation']['team_probability_goal'], ACTIVE_LIST_MIN_EXPECTED)
 
 
 class LedgerParticipationTests(unittest.TestCase):

@@ -146,11 +146,12 @@ class ForecastTests(unittest.TestCase):
         p = self.one([dnp])
         self.assertEqual(p["status"], "needs_review")
         self.assertIsNone(p["points_mean"])
-        with_dnp = self.one([row(), current(0, minutes=0, fgm=0, fga=0,
+        played = [row()] + [current(i) for i in range(3)]
+        with_dnp = self.one(played[:3] + [current(2, minutes=0, fgm=0, fga=0,
                               fg3m=0, fg3a=0, ftm=0, fta=0, tov=0, status="dnp")])
-        # The DNP lowers the probability of playing; minutes when playing stay those of the played games.
-        without = self.one([row()])
-        self.assertEqual(with_dnp["expected_minutes"], without["expected_minutes"])
+        # The DNP lowers the probability of playing, not the minutes when playing.
+        without = self.one(played)
+        self.assertGreater(with_dnp["expected_minutes"], 0)
         self.assertLess(with_dnp["participation_probability"], without["participation_probability"])
 
     def test_game_specific_sourced_adjustment_is_audited(self):

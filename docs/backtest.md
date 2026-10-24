@@ -50,24 +50,26 @@ baseline path, 868 games, 18,548 played player-games.
 
 | Players by projected minutes | n | points MAE | bias | minutes MAE | 80% coverage | width |
 |---|---|---|---|---|---|---|
-| all | 18,548 | 4.60 | −0.27 | 5.12 | 77.0% | 13.1 |
-| 0–10 | 2,310 | 2.99 | −1.02 | 5.73 | 79.1% | 6.2 |
-| 10–20 | 5,176 | 4.05 | −0.83 | 6.01 | 76.7% | 10.8 |
-| 20–30 | 6,686 | 4.81 | −0.20 | 4.80 | 76.2% | 14.4 |
-| 30+ | 4,376 | 5.78 | +0.67 | 4.22 | 77.5% | 17.7 |
+| all | 18,548 | 4.59 | −0.32 | 5.10 | 77.0% | 13.1 |
+| 0–10 | 2,352 | 2.99 | −1.04 | 5.73 | 79.0% | 6.2 |
+| 10–20 | 5,218 | 4.06 | −0.86 | 6.04 | 76.6% | 10.8 |
+| 20–30 | 6,676 | 4.81 | −0.23 | 4.77 | 76.3% | 14.4 |
+| 30+ | 4,302 | 5.77 | +0.59 | 4.14 | 77.3% | 17.7 |
 
-Participation: Brier 0.154 (constant rate 0.228; assume everyone plays 0.352);
-mean probability 0.65, played share 0.65. Teams: points MAE 9.85, bias −0.71.
-Games: margin MAE 12.16, home bias −0.02, winner accuracy 66.4%.
+Participation: Brier 0.153 (constant rate 0.228; assume everyone plays 0.352);
+mean probability 0.65, played share 0.65. Teams: points MAE 9.73, bias −0.43.
+Games: margin MAE 12.16, home bias −0.19, winner accuracy 66.4%.
 
 Against the previous reference (`datasets/backtest-2026-10-24-home-court/`,
 model 0.4.3: points MAE 4.87, minutes MAE 6.32, team points MAE 10.08 with
 bias −1.72, margin MAE 12.17, winner accuracy 64.3%), the participation model
-improved points error by 0.27, minutes error by 1.20, team points error by
-0.23 and both biases, with margin error within noise. Two things did it:
+improved points error by 0.28, minutes error by 1.22, team points error by
+0.35 and both biases, with margin error within noise. Two things did it:
 participation probabilities weight the 240-minute budget, and current-season
 DNPs no longer dilute a player's minutes when he plays (they lower his
-probability of playing instead). Expected minutes below 240 raise supported
+probability of playing instead). A team's probabilities are scaled into the
+range the rules and the data allow: at most 13 (the active list) and, with ten
+or more projected players, at least ten expected. Expected minutes below 240 raise supported
 players' conditional minutes by at most 10% (protected rotation) or 25%
 (bench); larger fills over-projected starters, no fill left team totals short.
 

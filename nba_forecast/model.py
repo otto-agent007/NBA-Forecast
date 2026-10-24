@@ -73,6 +73,10 @@ HOME_COURT_BOUNDS = (-0.02, 0.04)
 PARTICIPATION_PRIORS = ((10., .18), (20., .70), (28., .79), (float("inf"), .82))
 PARTICIPATION_PSEUDO_GAMES = 3
 PARTICIPATION_WINDOW = 10
+# The window stays inside the current season: last season's final games say
+# little about who dresses now. Before a team has played this many games, the
+# role prior (scaled by any reported status) stands alone.
+PARTICIPATION_MIN_TEAM_GAMES = 3
 STATUS_PARTICIPATION = {"probable": .9, "questionable": .55, "doubtful": .15, "day-to-day": .5, "game time decision": .5}
 # When expected minutes fall short of 240, conditional minutes rise by at most
 # these fractions (protected rotation, bench) and never past 48. Chosen on the
@@ -80,8 +84,13 @@ STATUS_PARTICIPATION = {"probable": .9, "questionable": .55, "doubtful": .15, "d
 # fill left team totals short.
 UPLIFT_CAP = (.10, .25)
 # NBA rule: at most 13 players are active for a game, so a team's participation
-# probabilities cannot sum past 13.
+# probabilities cannot sum past 13. Teams used at least ten players in three
+# quarters of 2025-26 games (mean 10.8), so with ten or more projected players
+# the probabilities are raised to sum to at least ten: the role priors were
+# measured on everyone a box score lists, and the live roster has already lost
+# its out players.
 ACTIVE_LIST_MAX = 13
+ACTIVE_LIST_MIN_EXPECTED = 10
 
 
 def _time(value):
@@ -303,6 +312,8 @@ def _participation(player, rows, team_games, role_minutes):
     """
     team = player["team_id"]
     appearances = {r["game_id"]: r for r in rows if r["team_id"] == team}
+    if len(team_games) < PARTICIPATION_MIN_TEAM_GAMES:
+        team_games = []
     first = next((i for i, (_, gid) in enumerate(team_games) if gid in appearances), None)
     start = max(len(team_games) - PARTICIPATION_WINDOW, first) if first is not None else len(team_games)
     window = [gid for _, gid in team_games[start:]]
@@ -315,8 +326,8 @@ def _participation(player, rows, team_games, role_minutes):
             "reported_status": player.get("reported_status"), "played": played, "games": len(window),
             "window_game_ids": window, "prior": prior, "pseudo_games": PARTICIPATION_PSEUDO_GAMES,
             "role_minutes": role_minutes, "method": "shrunk_recent_participation_rate",
-            "basis": "played with positive minutes in the team's last ten games since joining; 2025-26 role priors; "
-                     "reported status scales the rate"}
+            "basis": "played with positive minutes in the team's last ten current-season games since joining "
+                     "(role prior alone before three team games); 2025-26 role priors; reported status scales the rate"}
 
 
 def _expected_points(fga, fg3a, fta, shooting):
@@ -432,7 +443,8 @@ def _baseline_forecast(snapshot, history):
     home_court = _home_court(complete)
     team_games = defaultdict(set)
     for row in eligible:
-        team_games[row["team_id"]].add((_time(row["game_time"]), row["game_id"]))
+        if row["season"] == season:
+            team_games[row["team_id"]].add((_time(row["game_time"]), row["game_id"]))
     team_games = {team: sorted(items) for team, items in team_games.items()}
     games = {team: game for game in snapshot["games"] if game["season_type"] == "Regular Season"
              for team in (game["home_team_id"], game["away_team_id"])}
@@ -613,15 +625,26 @@ def _baseline_forecast(snapshot, history):
     for team in sorted(games):
         team_predictions = [p for p in predictions if p["team_id"] == team]
         projected_team = [p for p in team_predictions if p["status"] == "projected"]
-        # At most 13 players dress: scale the team's probabilities down if they sum past that.
+        # At most 13 players dress, and a full team uses at least ten: scale the
+        # team's probabilities into that range (never past 1 for a player).
         active_sum = sum(working[p["player_id"]][7] for p in projected_team)
-        if active_sum > ACTIVE_LIST_MAX:
+        goal = (ACTIVE_LIST_MAX if active_sum > ACTIVE_LIST_MAX else
+                ACTIVE_LIST_MIN_EXPECTED if active_sum < ACTIVE_LIST_MIN_EXPECTED and len(projected_team) >= ACTIVE_LIST_MIN_EXPECTED else None)
+        if goal is not None and active_sum:
+            for _ in range(3):
+                current_sum = sum(working[p["player_id"]][7] for p in projected_team)
+                movable = [p for p in projected_team if (goal < current_sum) or working[p["player_id"]][7] < 1 - 1e-9]
+                movable_sum = sum(working[p["player_id"]][7] for p in movable)
+                if abs(current_sum - goal) < 1e-9 or not movable_sum:
+                    break
+                ratio = 1 + (goal - current_sum) / movable_sum
+                for p in movable:
+                    items = list(working[p["player_id"]]); items[7] = min(1.0, items[7] * ratio)
+                    working[p["player_id"]] = tuple(items)
             for p in projected_team:
-                items = list(working[p["player_id"]]); items[7] *= ACTIVE_LIST_MAX / active_sum
-                working[p["player_id"]] = tuple(items)
-                p["participation_probability"] = items[7]
-                p["components"]["participation"].update(probability=items[7], active_list_cap=ACTIVE_LIST_MAX / active_sum,
-                                                          team_probability_sum_before_cap=active_sum)
+                p["participation_probability"] = working[p["player_id"]][7]
+                p["components"]["participation"].update(probability=working[p["player_id"]][7], team_probability_sum_before=active_sum,
+                                                          team_probability_goal=goal, team_probability_sum_after=sum(working[x["player_id"]][7] for x in projected_team))
         # The 240-minute budget constrains expected minutes: participation
         # probability times the minutes a player gets when he plays.
         expected = {p["player_id"]: working[p["player_id"]][7] * working[p["player_id"]][0] for p in projected_team}
