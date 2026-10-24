@@ -15,6 +15,23 @@
 .forecast-stage-buttons button[aria-pressed="true"] { background: #edf5ff; border-color: #2472d5; color: #1261cb; }
 .forecast-stage-buttons small { display: block; font-size: 10px; font-weight: 400; margin-top: 7px; }
 .forecast-stage-summary { margin: 12px 0 0; font-size: 11px; color: #64748b; line-height: 1.6; }
+.forecast-totals { margin: 20px 0; }
+.forecast-totals h2 { font-size: 18px; margin-bottom: 12px; }
+.point-total-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.point-total-grid article { background: white; border: 1px solid #dce6f3; border-radius: 7px; padding: 18px; min-width: 0; }
+.point-total-grid .combined-point-total { background: #edf5ff; border-color: #bdd5f2; }
+.total-kind { display: block; color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px; }
+.point-total-grid h3 { font-size: 14px; line-height: 1.5; margin: 0 0 10px; }
+.point-total-value { display: inline-block; font-size: 32px; font-variant-numeric: tabular-nums; margin-right: 10px; }
+.total-state { display: inline-block; font-size: 10px; padding: 4px 7px; border-radius: 4px; background: #eaf2fc; color: #245a9f; vertical-align: middle; }
+.total-state.partial, .total-state.unavailable { background: #fff2d8; color: #805314; }
+.point-total-grid p { font-size: 11px; color: #52637a; line-height: 1.6; margin: 8px 0 0; }
+.point-total-note { color: #64748b; font-size: 11px; line-height: 1.7; margin: 10px 0 0; }
+@media (max-width: 600px) {
+  .point-total-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .point-total-grid article { padding: 14px; }
+  .point-total-grid .combined-point-total { grid-column: 1 / -1; }
+}
 * {
   box-sizing: border-box;
 }

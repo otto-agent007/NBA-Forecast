@@ -22,6 +22,21 @@ requests, preserving the selected game, filters and any explicitly selected
 forecast stage. Its default view switches to the final when that run arrives.
 Static snapshot previews remain fixed until manually refreshed.
 
+Each selected forecast shows away and home team point totals and their combined
+game total. Model `regular-season-baseline-0.4.1` saves these aggregates with the
+forecast; older dashboard runs derive them from their original saved player
+predictions without changing ledger rows. Totals sum unrounded supported means,
+then round for display. They cover regulation and remain conditional on player
+participation and the projected rotation. They do not include overtime.
+
+Any withheld player, fewer than five projected players or unallocated team
+minutes marks the team's total partial; the game total inherits partial status.
+Projected minutes and withheld counts accompany each team. A team with no
+supported projections and a game missing either team estimate stay blank.
+Player searches, filters and sorting never change totals. No missing scoring
+or minutes are extrapolated, and individual uncertainty bounds are not summed
+into an unsupported game interval.
+
 Every captured check is retained under `injuries/games/GAME_ID/records/`,
 including checks for which roster or parsing failures prevent forecasting.
 `final.json` preserves the first fresh T−30 checkpoint for the scheduled start;

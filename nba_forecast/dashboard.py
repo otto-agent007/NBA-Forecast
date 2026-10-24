@@ -10,6 +10,7 @@ import re
 from urllib.parse import urlsplit,unquote
 from .validation import parse_time
 from .rotation import projected_lineups
+from .totals import game_totals
 
 
 def read_optional(path,default):
@@ -71,6 +72,7 @@ def dashboard_data(directory):
                         p['projected_starter']=p['player_id'] in lineups.get(p['team_id'],{}).get('player_ids',[])
                     view=dict(team_roles=[t for t in roles.get('teams',[]) if t['team_id'] in (game['home_team_id'],game['away_team_id'])],run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
                         stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],predictions=predictions,
+                        totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==game['game_id']),None) or game_totals(game,predictions),
                         review_queue=[q for q in forecast['review_queue'] if q['game_id']==game['game_id']],
                         injury_check=check,context=snapshot.get('schedule_context',{}),lineups=lineups,
                         preflight=snapshot.get('preflight'),injury_coverage_warnings=snapshot.get('injury_coverage_warnings',[]),

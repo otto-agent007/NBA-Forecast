@@ -181,6 +181,45 @@ test("automatic refresh preserves an explicitly selected preliminary and player 
   await expect(page.locator(".player-row .points").first()).toHaveText("24");
 });
 
+test("team and game point totals follow the forecast stage and ignore player filters", async ({ page }) => {
+  const response=structuredClone(dashboard);
+  const preliminary=response.games[0].forecast;
+  const teams=[
+    {team_id:'1610612744',side:'away',points_mean:100.05,status:'complete',projected_minutes:240,projected_players:8,withheld_player_ids:[],unallocated_minutes:0},
+    {team_id:'1610612747',side:'home',points_mean:90.1,status:'complete',projected_minutes:240,projected_players:8,withheld_player_ids:[],unallocated_minutes:0},
+  ];
+  preliminary.totals={status:'complete',points_mean:190.15,teams};
+  const final={...structuredClone(preliminary),stage:'final',totals:{status:'complete',points_mean:205.15,
+    teams:[{...teams[0],points_mean:110.05},{...teams[1],points_mean:95.1}]}};
+  response.games[0].forecasts={preliminary,final};response.games[0].forecast=final;
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.goto('/');
+  const totals=page.getByLabel('Forecast point totals');
+  await expect(totals.getByLabel('Golden State Warriors point total').getByTestId('point-total')).toHaveText('110.1');
+  await expect(totals.getByLabel('Los Angeles Lakers point total').getByTestId('point-total')).toHaveText('95.1');
+  await expect(totals.getByLabel('Game point total').getByTestId('point-total')).toHaveText('205.2');
+  await page.getByRole('textbox',{name:'Search players'}).fill('Nobody matches');
+  await expect(totals.getByLabel('Game point total').getByTestId('point-total')).toHaveText('205.2');
+  await page.getByRole('button',{name:'Preliminary forecast',exact:true}).click();
+  await expect(totals.getByLabel('Game point total').getByTestId('point-total')).toHaveText('190.2');
+});
+
+test("partial point totals disclose missing coverage and unavailable teams stay blank", async ({ page }) => {
+  const response=structuredClone(dashboard);
+  response.games[0].forecast.totals={status:'unavailable',points_mean:null,teams:[
+    {team_id:'1610612744',side:'away',status:'partial',points_mean:92.3,projected_minutes:210,projected_players:8,withheld_player_ids:['999'],unallocated_minutes:30},
+    {team_id:'1610612747',side:'home',status:'unavailable',points_mean:null,projected_minutes:0,projected_players:0,withheld_player_ids:['101'],unallocated_minutes:240},
+  ]};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.goto('/');
+  const totals=page.getByLabel('Forecast point totals');
+  await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('Partial');
+  await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('210 / 240 minutes');
+  await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('1 withheld');
+  await expect(totals.getByLabel('Los Angeles Lakers point total').getByTestId('point-total')).toHaveText('—');
+  await expect(totals.getByLabel('Game point total').getByTestId('point-total')).toHaveText('—');
+});
+
 
 test("Bucks information stays accessible with five projected starters and a visible cross-check block", async ({ page }) => {
   const staged = structuredClone(dashboard);

@@ -75,6 +75,10 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result['games'][0]['forecast']['run_id'],rid)
             self.assertEqual(len(result['players']),30)
             self.assertEqual(len(result['games'][0]['forecast']['predictions']),2)
+            total=result['games'][0]['forecast']['totals']
+            self.assertEqual(len(total['teams']),2)
+            self.assertAlmostEqual(total['points_mean'],30)
+            self.assertEqual(total['status'],'partial')
             schedule['games'][0]['status']='postponed'
             (folder/'schedule/latest.json').write_text(json.dumps(schedule))
             self.assertIsNone(dashboard_data(d)['games'][0]['forecast'])

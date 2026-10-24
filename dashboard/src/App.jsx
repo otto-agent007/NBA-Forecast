@@ -1,6 +1,7 @@
 import Postgame from "./Postgame";
 import Projections from "./Projections";
 import ForecastStages from "./ForecastStages";
+import ForecastTotals from "./ForecastTotals";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, TeamMark } from "./Icons";
 import PlayerTable from "./PlayerTable";
@@ -292,6 +293,7 @@ export default function App() {
               <>
                 {tab === "Games" && game && <Matchup game={game} />}
                 {tab === "Games" && game && <ForecastStages game={selectedGame} selected={game.forecast?.stage} onSelect={setForecastStage} />}
+                {tab === "Games" && game && <ForecastTotals game={game} />}
                 {tab === "Games" && !game ? (
                   <div className="empty">
                     <h2>No games on this date</h2>

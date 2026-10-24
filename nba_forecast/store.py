@@ -14,6 +14,7 @@ import sqlite3
 import uuid
 
 from .validation import parse_time, validate_history, validate_inputs
+from .totals import game_totals
 
 PROJECTION_FIELDS = (
     'expected_minutes', 'expected_fga', 'expected_fta', 'expected_tov',
@@ -159,6 +160,10 @@ def _validate_forecast(snapshot, forecast):
                     raise ValueError('forecast interval must contain its mean')
                 if row['expected_minutes'] > 60:
                     raise ValueError('expected minutes exceed supported forecast bound')
+        if 'game_totals' in forecast:
+            expected=[game_totals(g,rows) for g in snapshot['games'] if g['season_type']=='Regular Season']
+            if _canonical(forecast['game_totals'])!=_canonical(expected):
+                raise ValueError('forecast totals disagree with player projections')
     except (KeyError, TypeError) as exc:
         raise ValueError(f'incomplete forecast: {exc}') from exc
 

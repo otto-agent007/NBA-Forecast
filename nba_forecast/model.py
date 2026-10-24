@@ -42,8 +42,9 @@ from math import sqrt
 from statistics import fmean, pvariance
 from .rotation import rotation_role
 from .historical import season_prior
+from .totals import game_totals
 
-MODEL_VERSION = "regular-season-baseline-0.4.0"
+MODEL_VERSION = "regular-season-baseline-0.4.1"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -512,6 +513,7 @@ def forecast(snapshot, history):
     counts = Counter(p["status"] for p in predictions)
     return {"model_version": MODEL_VERSION, "as_of": snapshot["as_of"], "season": season,
             "predictions": predictions, "review_queue": queue,
+            "game_totals": [game_totals(g,predictions) for g in snapshot['games'] if g['season_type']=='Regular Season'],
             "forecast_stage": snapshot.get("forecast_stage", "preliminary"),
             "coverage": {"roster_players": len(snapshot["roster"]["players"]),
                          "pool_rows": len(predictions), "by_status": dict(sorted(counts.items())),
