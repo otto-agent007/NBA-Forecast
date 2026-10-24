@@ -21,7 +21,7 @@ import math
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import fmean, pstdev
+from statistics import fmean, pstdev, variance
 from zoneinfo import ZoneInfo
 
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
@@ -38,6 +38,16 @@ PLAYER_FIELDS = ('game_id', 'player_id', 'team_id', 'expected_minutes', 'actual_
                  'participation_probability')
 TEAM_FIELDS = ('game_id', 'team_id', 'home', 'projected_points', 'actual_points_regulation', 'actual_points',
                'projected_players', 'covered_actual_points')
+GAME_FIELDS = ('game_id', 'home_team_id', 'away_team_id', 'projected_margin', 'actual_margin', 'prior_sd',
+               'home_win_probability')
+# The margin distribution is the production one: a discrete normal centred on the
+# projected margin with the paired-final outcome dispersion of earlier game days
+# as its scale (margins.prepare_margin_inputs), once that many finals are known.
+MARGIN_PRIOR_MIN_GAMES = 100
+# Location and scale corrections are fitted on the same bounds as the live
+# prospective calibration, by likelihood of the actual margin.
+CALIBRATION_BIASES = [b / 2 for b in range(-16, 17)]
+CALIBRATION_SCALES = [s / 50 for s in range(35, 71)]
 LIMITATIONS = ('Rosters are the box score itself, all players available: no injury reports, so participation '
                'is not forecast and DNP players still draw minutes. No prior-season aggregate priors, no '
                'archive-bound enhancements. Player metrics condition on positive participation. Team points '
@@ -51,6 +61,26 @@ def read_json(path):
 
 def _day(value):
     return parse_time(value).astimezone(EASTERN).date()
+
+
+def _margin_prior_sd(margins):
+    """sqrt(sample variance + squared mean) of earlier paired final margins, as production prepares it."""
+    if len(margins) < MARGIN_PRIOR_MIN_GAMES:
+        return None
+    return math.sqrt(variance(margins) + fmean(margins) ** 2)
+
+
+def _normal_cdf(z):
+    return .5 * math.erfc(-z / math.sqrt(2.))
+
+
+def _home_win_probability(location, sd):
+    """P(final margin > 0) under the discrete normal: the mass above the half-integer step."""
+    return 1. - _normal_cdf((.5 - location) / sd)
+
+
+def _margin_cell_probability(actual, location, sd):
+    return max(_normal_cdf((actual + .5 - location) / sd) - _normal_cdf((actual - .5 - location) / sd), 1e-9)
 
 
 def evaluation_games(records, warmup_fraction=.3):
@@ -75,8 +105,9 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     if limit:
         evaluated = evaluated[-limit:]
     targets = {g['game_id'] for g in evaluated}
-    players, teams, skipped, prior = [], [], defaultdict(int), []
+    players, teams, games, skipped, prior = [], [], [], defaultdict(int), []
     prior_days = []  # (day, rows) in order, so the history before a game is a prefix.
+    margin_days = []  # (day, final home margins), the same way.
     for index, game in enumerate(ordered):
         rows = by_game.get(game['game_id'], [])
         day = _day(game['game_time'])
@@ -114,6 +145,17 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     teams.append([game['game_id'], tid, tid == g['home_team_id'], totals[tid]['projected'],
                                   stats['pts'] * 48 / (minutes / 5) if minutes else None, stats['pts'],
                                   totals[tid]['count'], totals[tid]['covered']])
+                if all(totals[t]['count'] for t in (g['home_team_id'], g['away_team_id'])):
+                    sd = _margin_prior_sd([m for d, batch in margin_days if d < day for m in batch])
+                    location = totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected']
+                    actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
+                    games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
+                                  _home_win_probability(location, sd) if sd else None])
+        final_margin = game['team_stats'][game['home_team_id']]['pts'] - game['team_stats'][game['away_team_id']]['pts']
+        if margin_days and margin_days[-1][0] == day:
+            margin_days[-1][1].append(final_margin)
+        else:
+            margin_days.append((day, [final_margin]))
         if rows:
             if prior_days and prior_days[-1][0] == day:
                 prior_days[-1][1].extend(rows)
@@ -121,7 +163,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 prior_days.append((day, list(rows)))
         if progress and index % 100 == 0:
             progress(dict(games_seen=index, player_rows=len(players)))
-    return dict(players=players, teams=teams, skipped=dict(skipped),
+    return dict(players=players, teams=teams, games=games, skipped=dict(skipped),
                 evaluated_games=len(evaluated), total_games=len(ordered))
 
 
@@ -129,6 +171,45 @@ def _records(rows, fields):
     """Rows saved without a newer field read back with it as None."""
     return [dict(zip(PLAYER_FIELDS if fields is PLAYER_FIELDS else fields, r)) if len(r) == len(fields)
             else {**dict.fromkeys(fields), **dict(zip(fields[:len(r)], r))} for r in rows]
+
+
+def _fit_margin_correction(rows):
+    """The location bias and scale factor that maximise the likelihood of the actual margins."""
+    def log_loss(bias, scale):
+        return fmean(-math.log(_margin_cell_probability(r['actual_margin'], r['projected_margin'] + bias, r['prior_sd'] * scale)) for r in rows)
+    best = min(((log_loss(b, s), b, s) for b in CALIBRATION_BIASES for s in CALIBRATION_SCALES), key=lambda x: (x[0], abs(x[1]), abs(x[2] - 1)))
+    return dict(location_bias=best[1], scale_factor=best[2], log_loss=best[0])
+
+
+def _margin_probability_metrics(rows):
+    """How good the production margin distribution would have been: winner Brier, log loss, reliability, fitted corrections."""
+    rows = [r for r in rows if r.get('prior_sd')]
+    if len(rows) < 2:
+        return dict(n=len(rows))
+    def brier(bias=0., scale=1.):
+        return fmean((_home_win_probability(r['projected_margin'] + bias, r['prior_sd'] * scale) - (r['actual_margin'] > 0)) ** 2 for r in rows)
+    def log_loss(subset, bias=0., scale=1.):
+        return fmean(-math.log(_margin_cell_probability(r['actual_margin'], r['projected_margin'] + bias, r['prior_sd'] * scale)) for r in subset)
+    bins = defaultdict(list)
+    for r in rows:
+        bins[min(int(r['home_win_probability'] * 10), 9)].append(r)
+    reliability = [dict(bin=k / 10, n=len(v), mean_probability=fmean(r['home_win_probability'] for r in v),
+                        home_win_share=fmean(r['actual_margin'] > 0 for r in v)) for k, v in sorted(bins.items())]
+    fit = _fit_margin_correction(rows)
+    half = len(rows) // 2
+    holdout = None
+    if half >= 16:
+        first = _fit_margin_correction(rows[:half])
+        holdout = dict(fitted_on=half, scored=len(rows) - half, location_bias=first['location_bias'], scale_factor=first['scale_factor'],
+                       log_loss_prior=log_loss(rows[half:]), log_loss_fitted=log_loss(rows[half:], first['location_bias'], first['scale_factor']))
+    return dict(n=len(rows), winner_brier=brier(), log_loss=log_loss(rows), mean_home_win_probability=fmean(r['home_win_probability'] for r in rows),
+                home_win_share=fmean(r['actual_margin'] > 0 for r in rows), mean_prior_sd=fmean(r['prior_sd'] for r in rows),
+                residual_sd=pstdev([r['projected_margin'] - r['actual_margin'] for r in rows]), reliability=reliability,
+                calibration_fit=dict(**fit, log_loss_prior=log_loss(rows), winner_brier_fitted=brier(fit['location_bias'], fit['scale_factor']),
+                                     biases=[CALIBRATION_BIASES[0], CALIBRATION_BIASES[-1]], scales=[CALIBRATION_SCALES[0], CALIBRATION_SCALES[-1]]),
+                holdout=holdout,
+                basis='Discrete normal on the projected margin with the paired-final dispersion of earlier game days; '
+                      'the home-win probability is the mass above zero.')
 
 
 def _metrics(rows):
@@ -156,7 +237,7 @@ def _participation_metrics(projected):
                 assume_all_play_brier=fmean((1 - y) ** 2 for _, y in outcomes))
 
 
-def summarize(players, teams):
+def summarize(players, teams, game_rows=()):
     rows = _records(players, PLAYER_FIELDS)
     projected = [r for r in rows if r['points_mean'] is not None]
     played = [r for r in projected if r['actual_status'] == 'played' and r['actual_minutes'] > 0]
@@ -185,7 +266,8 @@ def summarize(players, teams):
                    margin_bias_home=fmean(p - a for p, a in margins) if margins else None,
                    winner_accuracy=fmean((p > 0) == (a > 0) for p, a in margins if a != 0) if margins else None,
                    home_pick_share=fmean(p > 0 for p, a in margins) if margins else None,
-                   home_win_share=fmean(a > 0 for p, a in margins) if margins else None))
+                   home_win_share=fmean(a > 0 for p, a in margins) if margins else None,
+                   probabilities=_margin_probability_metrics(_records(game_rows, GAME_FIELDS))))
 
 
 def _paired(current, reference):
@@ -244,10 +326,21 @@ def compare(current, reference):
         margin_bias = {gid: (home[gid]['projected_points'] - away[gid]['projected_points'])
                        - (home[gid]['actual_points'] - away[gid]['actual_points']) for gid in home if gid in away}
         margins = {gid: abs(v) for gid, v in margin_bias.items()}
+        winner = {}
+        for r in _records(rows.get('games', []), GAME_FIELDS):
+            if r['prior_sd']:
+                winner[r['game_id']] = (r['home_win_probability'] - (r['actual_margin'] > 0)) ** 2
+        if not winner and prior_sd:
+            # A reference saved without margin rows is scored with the current run's prior scale.
+            for gid in margin_bias:
+                if prior_sd.get(gid):
+                    location = home[gid]['projected_points'] - away[gid]['projected_points']
+                    winner[gid] = (_home_win_probability(location, prior_sd[gid]) - (home[gid]['actual_points'] > away[gid]['actual_points'])) ** 2
         return dict(points=points, minutes=minutes, team_points=teams, margin=margins, participation=participation,
-                    points_bias=point_bias, team_points_bias=team_bias, margin_bias=margin_bias)
+                    winner=winner, points_bias=point_bias, team_points_bias=team_bias, margin_bias=margin_bias)
+    prior_sd = {r['game_id']: r['prior_sd'] for r in _records(current.get('games', []), GAME_FIELDS)}
     cur, ref = errors(current), errors(reference)
-    result = {name: _paired(cur[name], ref[name]) for name in ('points', 'minutes', 'team_points', 'margin', 'participation')}
+    result = {name: _paired(cur[name], ref[name]) for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner')}
     result.update({name: _bias(cur[name], ref[name]) for name in ('points_bias', 'team_points_bias', 'margin_bias')})
     verdicts = {v['verdict'] for v in result.values()}
     result['verdict'] = 'worse' if 'worse' in verdicts else 'improved' if 'improved' in verdicts else 'within_noise'
@@ -265,15 +358,15 @@ def run_backtest(history, records, output, *, reference=None, warmup_fraction=.3
     if out.exists() and any(out.iterdir()):
         raise ValueError('output directory exists and is not empty')
     replayed = replay(history, records, as_of, warmup_fraction=warmup_fraction, limit=limit, progress=progress)
-    rows = dict(version=VERSION, player_fields=list(PLAYER_FIELDS), team_fields=list(TEAM_FIELDS),
-                players=replayed['players'], teams=replayed['teams'])
+    rows = dict(version=VERSION, player_fields=list(PLAYER_FIELDS), team_fields=list(TEAM_FIELDS), game_fields=list(GAME_FIELDS),
+                players=replayed['players'], teams=replayed['teams'], games=replayed['games'])
     scoreboard = dict(
         schema_version=1, version=VERSION, created_at=as_of, model_version=MODEL_VERSION,
         code_sha256=package_digest(Path(__file__).parent),
         sources=sources or {}, parameters=dict(warmup_fraction=warmup_fraction, limit=limit,
                                                  interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80),
         games=dict(total=replayed['total_games'], evaluated=replayed['evaluated_games'], skipped=replayed['skipped']),
-        metrics=summarize(replayed['players'], replayed['teams']), limitations=LIMITATIONS)
+        metrics=summarize(replayed['players'], replayed['teams'], replayed['games']), limitations=LIMITATIONS)
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
         ref_board = read_json(Path(reference) / 'scoreboard.json')
@@ -309,13 +402,20 @@ def format_scoreboard(board):
         lines.append(f"teams n={t['n']} points MAE {t['points_mae']:.2f} bias {t['points_bias']:+.2f} (projected players cover {t['covered_share']:.0%} of team points)")
     if g['n']:
         lines.append(f"games n={g['n']} margin MAE {g['margin_mae']:.2f} home bias {g['margin_bias_home']:+.2f} winner accuracy {g['winner_accuracy']:.1%} (home picked {g['home_pick_share']:.0%}, home won {g['home_win_share']:.0%})")
+    pr = g.get('probabilities') or {}
+    if pr.get('n', 0) > 1:
+        f, h = pr['calibration_fit'], pr.get('holdout')
+        lines.append(f"margin probabilities n={pr['n']} winner Brier {pr['winner_brier']:.4f} log loss {pr['log_loss']:.4f}; mean P(home) {pr['mean_home_win_probability']:.3f} vs home won {pr['home_win_share']:.3f}; prior sd {pr['mean_prior_sd']:.1f} vs residual sd {pr['residual_sd']:.1f}")
+        lines.append(f"  best correction location {f['location_bias']:+.2f} scale {f['scale_factor']:.2f}: log loss {f['log_loss_prior']:.4f} -> {f['log_loss']:.4f}, Brier {pr['winner_brier']:.4f} -> {f['winner_brier_fitted']:.4f}"
+                     + (f"; holdout ({h['scored']} games) log loss {h['log_loss_prior']:.4f} -> {h['log_loss_fitted']:.4f}" if h else ''))
+        lines.append('  reliability ' + ' | '.join(f"{b['bin']:.1f}: n={b['n']} P {b['mean_probability']:.2f} won {b['home_win_share']:.2f}" for b in pr['reliability']))
     c = board.get('comparison')
     if c:
         lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}")
-        for name in ('points', 'minutes', 'team_points', 'margin', 'participation'):
+        for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner'):
             item = c.get(name, {})
             if item.get('mean') is not None:
-                what = 'Brier change' if name == 'participation' else 'mean abs-error change'
+                what = 'Brier change' if name in ('participation', 'winner') else 'mean abs-error change'
                 lines.append(f"  {name:18s} n={item['n']:6d} {what} {item['mean']:+.4f} ± {2 * item['se']:.4f}  {item['verdict']}")
         for name in ('points_bias', 'team_points_bias', 'margin_bias'):
             item = c.get(name, {})

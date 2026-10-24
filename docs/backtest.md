@@ -56,6 +56,7 @@ baseline path, 868 games, 18,548 played player-games.
 | 20–30 | 6,676 | 4.81 | −0.23 | 4.77 | 76.3% | 14.4 |
 | 30+ | 4,302 | 5.77 | +0.59 | 4.14 | 77.3% | 17.7 |
 
+Winner Brier 0.218 (see Margin probabilities below).
 Participation: Brier 0.153 (constant rate 0.228; assume everyone plays 0.352);
 mean probability 0.65, played share 0.65. Teams: points MAE 9.73, bias −0.43.
 Games: margin MAE 12.16, home bias −0.19, winner accuracy 66.4%.
@@ -75,6 +76,34 @@ players' conditional minutes by at most 10% (protected rotation) or 25%
 
 Earlier references: `datasets/backtest-2026-10-24-home-court/` (home court),
 `datasets/backtest-2026-10-24/` (model 0.4.2).
+
+## Margin probabilities
+
+Since 2026-10-24 the scoreboard also scores the production margin distribution:
+a discrete normal centred on the projected margin (home minus away p-weighted
+team points) whose scale is the paired-final outcome dispersion of earlier game
+days, exactly as `margins.prepare_margin_inputs` builds it live (once 100
+finals are known). It reports the winner Brier score and log loss of the actual
+margin, a reliability table of the home-win probability by decile, and the
+location bias and scale factor that would maximise the likelihood of the actual
+margins on the same bounds the live prospective calibration uses (±8 points,
+scale 0.7–1.4), together with a chronological holdout (fit on the first half,
+scored on the second). The gate pairs the winner Brier by game like the other
+metrics; a reference saved without margin rows is scored with the current
+run's prior scale.
+
+On the 2026-10-24 participation reference (868 games): winner Brier 0.218, log
+loss 4.157, mean prior sd 15.7 against a residual sd of 15.4, best correction
+location +0.00 and scale 0.98 with a holdout log loss gain of 0.0004. The
+uncalibrated distribution is calibrated to within noise, so no replay-fitted
+correction ships; the live prospective calibration remains the mechanism once
+it has 64 training and 32 validation games. The one visible pattern is in the
+0.5–0.6 bins, where home teams the model makes 55–65% favourites won 63–70%
+(about two standard errors), consistent with a slightly small home edge; the
+replay's margin home bias is −0.19 points. Rest was checked at the same time:
+team points show no rest effect (back-to-back +0.39, two days +0.39, three or
+more +0.59 points of actual minus projected), and margins only a one-standard-
+error hint (home on a back-to-back −1.8 ± 1.6), so no rest term was added.
 
 ## Reading the numbers
 

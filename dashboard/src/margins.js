@@ -5,7 +5,7 @@ export function marginPercent(value) {
 }
 
 export function marginUnavailableReason(reason) {
-  if (reason === "incomplete_team_totals") return "Both teams need complete projections. Missing minutes or unresolved player availability are keeping this estimate unavailable.";
+  if (reason === "incomplete_team_totals") return "Both teams need complete projections. Unresolved player availability or roles, or a roster too thin to project, are keeping this estimate unavailable.";
   if (["missing_margin_inputs", "insufficient_historical_games", "insufficient_outcome_dispersion"].includes(reason)) return "There is not enough verified historical evidence to estimate the game's uncertainty.";
   if (reason === "not_pregame") return "A margin forecast must be saved before tipoff.";
   if (reason === "margin_location_or_scale_outside_support") return "This game's estimated margin or uncertainty is outside the model's supported range.";

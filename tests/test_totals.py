@@ -63,7 +63,10 @@ class TotalsTests(unittest.TestCase):
             if edit in ('questionable','unknown'):candidate['components']['availability']['status']=edit
             elif edit=='played':candidate['components']['history']['played_games']=1
             else:candidate['flags'].append('new_team_role_unobserved')
-            self.assertEqual(game_totals(GAME,predictions()+[candidate])['status'],'partial')
+            if edit!='played':
+                self.assertEqual(game_totals(GAME,predictions()+[candidate])['status'],'partial',edit)
+            # Schema 3 also required zero played games; schema 4 covers evidence-only withholding regardless.
+            self.assertEqual(game_totals(GAME,predictions()+[candidate],schema_version=3)['status'],'partial',edit)
 
     def test_out_player_is_known_zero_and_missing_minutes_are_disclosed(self):
         rows=predictions()+[dict(player_id='out',name='Out',game_id='g',team_id='A',
@@ -74,6 +77,37 @@ class TotalsTests(unittest.TestCase):
         self.assertEqual(total['teams'][0]['unallocated_minutes'],18)
         self.assertEqual(total['teams'][0]['withheld_player_ids'],[])
         self.assertEqual(total['teams'][1]['status'],'complete')
+
+    def test_unallocated_minutes_score_at_the_replacement_rate_for_a_full_rotation(self):
+        from nba_forecast.totals import REPLACEMENT_POINTS_PER_MINUTE
+        rows=[dict(player_id=f'A{i}',name=f'A{i}',game_id='g',team_id='A',status='projected',points_mean=10.,expected_minutes=25.) for i in range(8)]
+        rows+=[p for p in predictions() if p['team_id']=='H']
+        rows.append(dict(player_id='out',name='Out',game_id='g',team_id='A',status='out',points_mean=0,expected_minutes=0))
+        team=game_totals(GAME,rows)['teams'][0]
+        self.assertEqual(team['status'],'complete')
+        self.assertEqual((team['unallocated_minutes'],team['residual_minutes']),(40,40))
+        self.assertAlmostEqual(team['residual_points'],40*REPLACEMENT_POINTS_PER_MINUTE)
+        self.assertAlmostEqual(team['points_mean'],80+40*REPLACEMENT_POINTS_PER_MINUTE)
+        self.assertAlmostEqual(team['points_mean_projected'],80)
+        # Fewer than eight projected players: the deficit is disclosed, not filled.
+        thin=game_totals(GAME,rows[2:])['teams'][0]
+        self.assertEqual((thin['status'],thin['residual_minutes'],thin['points_mean']),('partial',0,60))
+        self.assertEqual(game_totals(GAME,rows,schema_version=3)['teams'][0]['status'],'partial')
+
+    def test_withheld_players_without_evidence_are_covered_by_the_residual(self):
+        rows=[dict(player_id=f'A{i}',name=f'A{i}',game_id='g',team_id='A',status='projected',points_mean=10.,expected_minutes=25.) for i in range(8)]
+        rows+=[p for p in predictions() if p['team_id']=='H']
+        covered=dict(player_id='rookie',name='Rookie',game_id='g',team_id='A',status='needs_review',points_mean=None,expected_minutes=None,
+                     flags=['no_scoring_opportunity_evidence','team_minutes_unresolved'],
+                     components={'history':{'played_games':2},'availability':{'status':'available'}})
+        team=game_totals(GAME,rows+[covered])['teams'][0]
+        self.assertEqual((team['status'],team['cold_start_player_ids'],team['unresolved_player_ids']),('complete',['rookie'],[]))
+        for edit in ('questionable','starter','role'):
+            candidate=deepcopy(covered)
+            if edit=='questionable':candidate['components']['availability']['status']='questionable'
+            elif edit=='starter':candidate['projected_starter']=True
+            else:candidate['flags'].append('new_team_role_unobserved')
+            self.assertEqual(game_totals(GAME,rows+[candidate])['teams'][0]['status'],'partial',edit)
 
     def test_missing_team_is_unavailable_and_combined_total_stays_null(self):
         total=game_totals(GAME,[p for p in predictions() if p['team_id']=='A'])

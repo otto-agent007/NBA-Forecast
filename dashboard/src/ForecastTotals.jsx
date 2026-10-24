@@ -54,7 +54,8 @@ export default function ForecastTotals({ game }) {
             <strong className="point-total-value" data-testid="point-total">{points(team.points_mean)}</strong>
             <span className={`total-state ${team.status}`}>{label(team.status)}</span>
             <p>{minutes(team.projected_minutes)} / 240 minutes · {team.projected_players} projected</p>
-            {!!team.cold_start_player_ids?.length && <p>{team.cold_start_player_ids.length} roster {team.cold_start_player_ids.length === 1 ? "player" : "players"} without playing history</p>}
+            {team.residual_minutes > 0 && <p>{minutes(team.residual_minutes)} unallocated minutes at the replacement rate · {points(team.residual_points)} pts</p>}
+            {!!team.cold_start_player_ids?.length && <p>{team.cold_start_player_ids.length} roster {team.cold_start_player_ids.length === 1 ? "player" : "players"} without playing or scoring evidence{team.residual_minutes > 0 ? " · covered by the replacement minutes" : ""}</p>}
             {!!unresolved(team) && <p>{unresolved(team)} withheld · Availability or role review</p>}
           </article>
         ))}
@@ -66,7 +67,7 @@ export default function ForecastTotals({ game }) {
           <p>{game.forecast.stage === "final" ? "Final" : "Preliminary"} forecast · Regulation only</p>
         </article>
       </div>
-      <p className="point-total-note">Sum of the selected forecast’s player projections weighted by each player’s probability of playing; individual projections are conditional on playing. Players without playing history stay unprojected. Missing minutes or unresolved availability and roles are marked Partial.</p>
+      <p className="point-total-note">Sum of the selected forecast’s player projections weighted by each player’s probability of playing, plus any regulation minutes the rotation leaves unallocated at a replacement scoring rate; individual projections are conditional on playing. Players without playing or scoring evidence stay unprojected and are covered by those minutes. Unresolved availability and roles are marked Partial.</p>
     </section>
   );
 }

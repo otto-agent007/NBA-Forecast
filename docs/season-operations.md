@@ -34,18 +34,23 @@ predictions without changing ledger rows. Totals sum unrounded supported means,
 then round for display. They cover regulation and remain conditional on player
 participation and the projected rotation. They do not include overtime.
 
-Unresolved availability/roles, fewer than five projected players or unallocated
-team minutes marks the team's total partial; the game total inherits that status.
-A fully allocated rotation remains complete when another roster player, outside
-the projected starting five, has only
-the `cold_start` flag, zero captured positive-minute appearances and sourced
-available status. These unprojected players are disclosed separately. This does
-not assert they will be inactive or invent zero scoring/minutes for them.
-Projected minutes and review counts accompany each team. A team with no
-supported projections and a game missing either team estimate stay blank.
-Player searches, filters and sorting never change totals. No missing scoring
-or minutes are extrapolated, and individual uncertainty bounds are not summed
-into an unsupported game interval.
+Unresolved availability/roles or fewer than five projected players mark the
+team's total partial; the game total inherits that status. Regulation minutes
+the projected rotation leaves unallocated (outs, doubtful players, a thin bench)
+are still played by someone: totals schema 4 scores them at the replacement
+rate, 0.38 points per minute (the 2025-26 minutes-weighted rate of players
+averaging under 20 minutes), as a separate disclosed `residual_points` term,
+when at least eight players are projected; with fewer the deficit stays a
+disclosed partial. A withheld roster player outside the projected starting five
+whose only reasons are missing evidence (`cold_start`,
+`no_scoring_opportunity_evidence`) and whose sourced status is available is
+covered by that residual and does not make the total partial. Player
+projections are never raised for the residual. Earlier schemas (1–3) keep their
+saved semantics. Projected minutes, residual minutes and review counts accompany
+each team. A team with no supported projections and a game missing either team
+estimate stay blank. Player searches, filters and sorting never change totals,
+and individual uncertainty bounds are not summed into an unsupported game
+interval.
 
 Coverage schema 2 separates these roster observations from rotation completeness.
 The dashboard derives current coverage annotations from each run's original
@@ -444,6 +449,8 @@ These priors replace overlapping game-history scoring priors. Season weights are
 Rates use0.90 recency decay. Current-team role minutes remain separate. In the
 team budget, observed starters and supported high-minute rotation roles are
 preserved while excess bench estimates are scaled first. If the core alone
-exceeds240 minutes, it is scaled too; missing minutes are never invented.
+exceeds240 minutes, it is scaled too. A shortfall raises supported players' conditional
+minutes by a bounded share; the rest is scored only in the team total, at the
+replacement rate, never in player projections.
 Player details disclose the historical PPG, games and source actually used.
 Regenerated preliminaries remain selectable after a final run is saved.

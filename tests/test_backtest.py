@@ -5,6 +5,7 @@ from pathlib import Path
 import random
 import tempfile
 import unittest
+import unittest.mock
 
 from nba_forecast import backtest
 
@@ -107,6 +108,26 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(board['comparison']['verdict'], 'within_noise')
         self.assertEqual(board['comparison']['points']['n'], board['metrics']['players']['all']['n'])
         self.assertIn('vs reference', backtest.format_scoreboard(board))
+
+    def test_margin_probabilities_are_scored_and_compared(self):
+        with unittest.mock.patch.object(backtest, 'MARGIN_PRIOR_MIN_GAMES', 10), tempfile.TemporaryDirectory() as d:
+            board = backtest.run_backtest(self.history, self.records, Path(d) / 'p', warmup_fraction=.5, as_of=AS_OF)
+            rows = backtest.read_json(Path(d) / 'p' / 'rows.json.gz')
+        pr = board['metrics']['games']['probabilities']
+        self.assertEqual((pr['n'], rows['game_fields']), (24, list(backtest.GAME_FIELDS)))
+        self.assertTrue(0 <= pr['winner_brier'] <= 1 and pr['log_loss'] > 0)
+        self.assertEqual(sum(b['n'] for b in pr['reliability']), 24)
+        fit = pr['calibration_fit']
+        self.assertTrue(-8 <= fit['location_bias'] <= 8 and .7 <= fit['scale_factor'] <= 1.4)
+        self.assertLessEqual(fit['log_loss'], fit['log_loss_prior'])
+        self.assertIsNone(pr['holdout'], 'too few games to hold out')
+        self.assertIn('margin probabilities', backtest.format_scoreboard(board))
+        same = backtest.compare(rows, rows)
+        self.assertEqual((same['winner']['n'], same['winner']['mean']), (24, 0))
+        legacy = dict(rows); legacy.pop('games')
+        self.assertEqual((backtest.compare(rows, legacy)['winner']['n'], backtest.compare(rows, legacy)['winner']['mean']), (24, 0),
+                         'a reference without margin rows is scored with the current prior scale')
+        self.assertEqual(backtest.compare(legacy, rows)['winner'].get('n'), 0)
 
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
