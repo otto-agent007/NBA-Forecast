@@ -16,9 +16,10 @@ from .roster_review import apply_roster_reviews,resolution
 from .historical import verify_priors
 from .enhancements import verify_enhancements
 from .shot_profiles import verify_shot_profiles
+from .model_versions import uses_refinements
 import json
 
-PREFLIGHT_VERSION='independent-inputs-6'
+PREFLIGHT_VERSION='independent-inputs-7'
 
 
 def validate_extraction(extraction,cutoff):
@@ -130,6 +131,15 @@ def run_preflight(snapshot,history,profiles,directory,*,cache_dir=None):
         verify_enhancements(snapshot,directory)
         phase='shot_archive_unverified'
         verify_shot_profiles(snapshot,history,directory)
+        if uses_refinements(snapshot):
+            from .role_context import verify_role_context
+            from .shot_quality import verify_shot_quality
+            phase='role_context_archive_unverified'
+            if 'role_context' not in snapshot:raise ValueError('Refined forecasts require a prepared injury-exit context, including empty coverage.')
+            verify_role_context(snapshot,history,directory)
+            phase='shot_quality_archive_unverified'
+            if 'shot_quality' not in snapshot:raise ValueError('Refined forecasts require prepared shot-quality evidence, including empty coverage.')
+            verify_shot_quality(snapshot,history,directory)
         phase='injury_archive_unverified'
         verify_priors(snapshot,directory)
         verified=verify_extractions(snapshot,cache_dir or Path(directory)/'raw')

@@ -4,6 +4,7 @@ from pathlib import Path
 from .game_environment import build_environment
 from .schedule import atomic_json,canonical
 from .validation import parse_time
+from .model_versions import ENHANCED_VERSIONS, REFINED_VERSION
 
 
 def install_artifact(directory,artifact):
@@ -19,8 +20,12 @@ def _read(directory,digest,as_of):
     raw=(Path(directory)/'model-artifacts'/(digest+'.json')).read_bytes()
     if hashlib.sha256(raw).hexdigest()!=digest:raise ValueError('Model artifact archive hash mismatch')
     artifact=json.loads(raw);cutoff=parse_time(as_of);known=parse_time(artifact['known_at'])
-    if artifact['model_version']!='regular-season-baseline-0.5.0' or known>cutoff:
+    if artifact['model_version'] not in ENHANCED_VERSIONS or known>cutoff:
         raise ValueError('Unsupported or future-known model artifact')
+    if artifact['model_version']==REFINED_VERSION:
+        from .runner_release import package_digest
+        if artifact.get('runner_package_sha256')!=package_digest(Path(__file__).parent):
+            raise ValueError('Refined model artifact does not match the running code release')
     if any(parse_time(g['known_at'])>known for g in artifact['team_games']):raise ValueError('Model training used future-known team data')
     for key in ('context_model','calibration'):
         item=artifact.get(key)
@@ -62,10 +67,14 @@ def prepare(artifact,digest,game,as_of,*,directory=None):
         previous=records.get(record['game_id'])
         if previous is None or parse_time(record['known_at'])>=parse_time(previous['known_at']):records[record['game_id']]=record
     environment=build_environment(list(records.values()),game,as_of,parameters=artifact['parameters'].get('environment_parameters'))
-    return dict(artifact_sha256=digest,prepared_at=as_of,known_at=artifact['known_at'],
+    result=dict(artifact_sha256=digest,prepared_at=as_of,known_at=artifact['known_at'],
         model_version=artifact['model_version'],model_key=artifact['model_key'],parameters=artifact['parameters'],
         context_model=artifact.get('context_model'),calibration=artifact.get('calibration'),environment=environment,
         excluded_history_game_ids=artifact.get('excluded_history_game_ids',[]),live_team_game_sources=sources)
+    if artifact['model_version']==REFINED_VERSION:
+        from .margins import prepare_margin_inputs
+        result['margin_inputs']=prepare_margin_inputs(list(records.values()),as_of,artifact['model_key'])
+    return result
 
 
 def verify_enhancements(snapshot,directory):

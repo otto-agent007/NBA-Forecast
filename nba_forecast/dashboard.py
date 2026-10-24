@@ -74,6 +74,7 @@ def dashboard_data(directory):
                         stage=forecast.get('forecast_stage','preliminary'),model_version=forecast['model_version'],boxscore_model_version=forecast.get('boxscore_model_version'),predictions=predictions,
                         totals=game_totals(game,predictions,lineups=snapshot.get('preflight',{}).get('lineups')),
                         saved_totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==game['game_id']),None),
+                        margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==game['game_id']),None),
                         review_queue=[q for q in forecast['review_queue'] if q['game_id']==game['game_id']],
                         injury_check=check,context=snapshot.get('schedule_context',{}),lineups=lineups,
                         preflight=snapshot.get('preflight'),injury_coverage_warnings=snapshot.get('injury_coverage_warnings',[]),

@@ -3,7 +3,11 @@ import { number } from "./data";
 
 export default function ModelValidation({ model }) {
   const report=model?.validation, held=report?.holdout;
-  if (!held) return null;
+  if (!held) return model ? <section className="performance-group" aria-label="Model validation status">
+    <h3>Model validation · {model.model_version}</h3>
+    <p>Collecting results for this model version. Earlier models’ accuracy and calibration do not establish this version’s performance.</p>
+    <p>{model.prospective?.game_count ?? 0} matched games · {model.prospective?.sample_count ?? 0} player outcomes.</p>
+  </section> : null;
   const prospective=model.prospective;
   const conflicts=model.outcomes?.pending_details?.filter(row=>row.evidence)?.length ?? 0;
   return <section className="performance-group" aria-label="Historical model validation">

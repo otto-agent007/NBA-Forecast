@@ -95,21 +95,22 @@ def _donor_rates(profile, rows):
     return result
 
 
-def _recipient(player, item, rows, support):
+def _recipient(player, item, rows, support, *, excluded_minute_game_ids=None):
     minutes, rates = item['minutes'], item['rates']
-    observed_cap = _quantile([r['minutes'] for r in rows])
+    normal_rows=[r for r in rows if r['game_id'] not in (excluded_minute_game_ids or ())]
+    observed_cap = _quantile([r['minutes'] for r in normal_rows])
     manual_cap = min(48., max(0., float(item.get('minute_cap', 48.))))
     cap = min(manual_cap, max(minutes, observed_cap))
     rate_caps = {field: max(rates[field], _rate_quantile(rows, field)) for field in FIELDS}
     attempt_caps = {field: max(minutes * rates[field], _quantile([r[field] for r in rows]))
                     for field in FIELDS}
-    headroom = max(0., cap - minutes) if rows and not item.get('locked_minutes') else 0.
+    headroom = max(0., cap - minutes) if normal_rows and not item.get('locked_minutes') else 0.
     # Extra minutes themselves must stay within observed attempt capacities.
     # Baselines are retained even when a manual role exceeds the empirical cap.
     for field in FIELDS:
         if rates[field] > 0:
             headroom = min(headroom, max(0., attempt_caps[field] - minutes * rates[field]) / rates[field])
-    return dict(player_id=player['player_id'], support=support,
+    result=dict(player_id=player['player_id'], support=support,
                 baseline_minutes=minutes, adjusted_minutes=minutes,
                 baseline_rates=deepcopy(rates), adjusted_rates=deepcopy(rates),
                 minute_cap=cap, manual_minute_cap=manual_cap, observed_minute_cap=observed_cap,
@@ -119,6 +120,10 @@ def _recipient(player, item, rows, support):
                 history_game_ids=[r['game_id'] for r in rows], history_sources=_sources(rows),
                 extra_minutes_attempts={field: 0. for field in FIELDS},
                 rate_added_attempts={field: 0. for field in FIELDS})
+    if excluded_minute_game_ids is not None:
+        result.update(minute_capacity_game_ids=[r['game_id'] for r in normal_rows],
+            injury_shortened_minute_capacity_game_ids=sorted({r['game_id'] for r in rows if r['game_id'] in excluded_minute_game_ids}))
+    return result
 
 
 def _add_minutes(recipients, adjusted, available_minutes, remaining_attempts):
@@ -274,7 +279,8 @@ def redistribute(players, profiles, projection_inputs, history, as_of):
                 # against a late-known availability assertion when one is given.
                 if player.get('status_observed_at') and not _sourced_availability(player, cutoff):
                     rows, support = [], 'availability_unsourced_or_future_known'
-                audit['recipients'][pid] = _recipient(player, adjusted[pid], rows, support)
+                excluded_minutes=(profile_map.get(pid,{}).get('role_minutes_evidence') or {}).get('injury_shortened_role_game_ids')
+                audit['recipients'][pid] = _recipient(player,adjusted[pid],rows,support,excluded_minute_game_ids=excluded_minutes)
         remaining_attempts = audit['vacated_attempts'].copy()
         available_minutes = min(audit['vacated_minutes'], max(0., 240. - before))
         _add_minutes(audit['recipients'], adjusted, available_minutes, remaining_attempts)

@@ -55,6 +55,7 @@ def _selected(folder,games,as_of,season):
                         model_version=forecast['model_version'],model_key=forecast.get('model_key'),season=forecast['season'],
                         forecast_sha256=row['forecast_sha256'],predictions=predictions,
                         totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==game['game_id']),None),
+                        margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==game['game_id']),None),
                         lineups=snapshot.get('preflight',{}).get('lineups'))
     return chosen
 
@@ -128,8 +129,10 @@ def _stage(game,selection,actuals,evidence):
     actual_team={t:sum(r['pts'] for r in actuals if r['team_id']==t) for t in teams} if actuals else {}
     score=sum(actual_team.values()) if actual_team else None
     prediction=totals.get('points_mean')
+    from .margin_feedback import score_game_margin
+    margin=score_game_margin(selection.get('margin_forecast'),game,actuals)
     return dict(**{k:selection[k] for k in ('run_id','created_at','as_of','model_version','model_key','forecast_sha256')},
-        players=players,totals=totals,totals_origin=origin,
+        players=players,totals=totals,totals_origin=origin,margin_evaluation=margin,
         game_total_error=score-prediction if score is not None and prediction is not None else None,
         overtime=evidence['period']>4 if evidence.get('period') is not None else None,
         team_total_errors=[dict(team_id=t['team_id'],team=teams[t['team_id']],forecast=t.get('points_mean'),actual=actual_team.get(t['team_id']),status=t['status'],
@@ -145,7 +148,11 @@ def _summarize(games,stage):
     dnp=[p for p in projected if p['actual_status']=='dnp']
     complete=[s for s in selected if s['totals']['status']=='complete' and s['overtime'] is False and s['game_total_error'] is not None]
     saved=[s for s in complete if s['totals_origin']=='saved_forecast']
+    margins=[s['margin_evaluation'] for s in selected if s.get('margin_evaluation',{}).get('status')=='evaluated']
     return dict(forecasts=len(selected),model_versions=dict(Counter(s['model_version'] for s in selected)),
+        margin_probabilities=dict(count=len(margins),home_win_brier=sum(r['home_win_brier'] for r in margins)/len(margins) if margins else None,
+            ranked_probability_score=sum(r['ranked_probability_score'] for r in margins)/len(margins) if margins else None,
+            calibration_status='uncalibrated',selection='Latest pregame forecast per game and stage, selected before reading outcomes.'),
         projected=_metric(projected),out=_metric(outs),all_numeric=_metric(projected+outs),
         projected_count=len(projected),missing_actuals=sum(p['actual'] is None for p in players),
         missing_projected_actuals=sum(p['actual'] is None for p in projected),missing_out_actuals=sum(p['actual'] is None for p in outs),

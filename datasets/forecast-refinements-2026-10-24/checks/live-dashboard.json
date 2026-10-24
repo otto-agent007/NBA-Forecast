@@ -1,0 +1,9 @@
+{
+  "verified_at": "2026-10-24T09:10:54.945Z",
+  "url": "http://127.0.0.1:8765/",
+  "model_version": "regular-season-baseline-0.6.0",
+  "model_key": "67628af97d8da9e2d58b5a581ba8f41d759f2749dcb29185b27d6dd74876d21f",
+  "page_errors": [],
+  "validation_text": "Model validation · regular-season-baseline-0.6.0\n\nCollecting results for this model version. Earlier models’ accuracy and calibration do not establish this version’s performance.\n\n0 matched games · 0 player outcomes.",
+  "synthetic_data": false
+}

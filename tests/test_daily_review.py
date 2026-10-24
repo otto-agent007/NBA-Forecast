@@ -10,6 +10,15 @@ from nba_forecast.daily_review import review_day,build_daily_reviews
 ASOF='2026-10-23T06:00:00Z'
 
 class DailyReviewTests(unittest.TestCase):
+    def test_margin_feedback_does_not_grade_partial_player_actuals_as_a_final_score(self):
+        from tests.test_margins import small_distribution
+        self.f['margin_forecasts']=[dict(small_distribution(),game_id='G1',home_team_id='T1',away_team_id='T2')]
+        self.rows[0].update(ftm=3,pts=25)
+        self.write_actuals();self.save('with-margin',created='2026-10-22T13:00:00Z')
+        stage=self.report()['games'][0]['stages']['final']
+        self.assertEqual(stage['margin_evaluation']['status'],'pending')
+        self.assertEqual(len(stage['players']),2)
+
     def setUp(self):
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.s,_,self.f=inputs();self.g=self.s['games'][0]

@@ -8,6 +8,7 @@ from .context_effects import context_adjustment
 from .calibration import calibrated_interval
 from .totals import game_totals
 from .validation import parse_time
+from .model_versions import ENHANCED_VERSIONS
 
 VERSION='regular-season-baseline-0.5.0'
 
@@ -21,7 +22,7 @@ def _strength(parameters,name):
 
 def forecast_candidate(snapshot,history):
     enhancement=snapshot['model_enhancements'];cutoff=parse_time(snapshot['as_of'])
-    if enhancement['model_version']!=VERSION or parse_time(enhancement['known_at'])>cutoff:
+    if enhancement['model_version'] not in ENHANCED_VERSIONS or parse_time(enhancement['known_at'])>cutoff:
         raise ValueError('Unsupported or future-known model enhancement')
     environment=enhancement['environment'];parameters=enhancement['parameters']
     if environment.get('audit',{}).get('evidence_kind')!='live' and not snapshot.get('research_reconstruction'):
@@ -149,7 +150,7 @@ def forecast_candidate(snapshot,history):
                     reason=p['reason'],tier='reasoning_review',priority='normal',action='Inspect sourced vacancy allocation and observed role caps.')
         if p['player_id'] in queue:queue[p['player_id']]['flags']=p['flags'].copy()
     result['review_queue']=list(queue.values())
-    result.update(model_version=VERSION,model_key=enhancement['model_key'],
+    result.update(model_version=enhancement['model_version'],model_key=enhancement['model_key'],
         allocation_audit=allocations,environment_audit=environment.get('audit',{}))
     result['game_totals']=[game_totals(g,result['predictions'],lineups=snapshot.get('preflight',{}).get('lineups')) for g in snapshot['games'] if g['season_type']=='Regular Season']
     result['coverage']['calibration']='Empirical retrospective intervals when a matching artifact is ready; otherwise explicit heuristic fallback. Prospective coverage is monitored separately.'

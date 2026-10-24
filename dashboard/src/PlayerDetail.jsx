@@ -192,6 +192,13 @@ export default function PlayerDetail({ player, onClose }) {
               </section>}
               <section>
                 <h3>Role & minutes</h3>
+                {c.role_context?.events?.length > 0 && <div className="injury-role-context">
+                  <p>Verified injury-shortened games are excluded from normal playing-time estimates. Their actual shooting and production are retained.</p>
+                  <ul>{c.role_context.events.map(event => <li key={event.game_id}>
+                    {dateKey(event.game_time)} · {event.return_status || "Injury exit"}{" "}
+                    {safeSource(event.source_url) && <a href={safeSource(event.source_url)} target="_blank" rel="noreferrer">Source</a>}
+                  </li>)}</ul>
+                </div>}
                 <p className="role-label">
                   {c.rotation_role?.label || "Role not yet established"}
                 </p>
@@ -222,6 +229,13 @@ export default function PlayerDetail({ player, onClose }) {
                   ))}
                 </ul>
               </section>
+              {c.shot_quality && <section aria-label="Shot location adjustment">
+                <h3>Shot location adjustment</h3>
+                <p>{c.shot_quality.status === "applied"
+                  ? `Location evidence changes projected scoring by ${number(c.shot_quality.points_delta)} points while retaining historical shooting ability.`
+                  : "The historical shooting baseline is retained because supported location evidence is insufficient."}</p>
+                <p className="tiny">Court location is one part of shot quality. These charts do not measure defender distance or shot difficulty in full.</p>
+              </section>}
             </div>
             <h3>Recent scoring</h3>
             {recent.length ? (

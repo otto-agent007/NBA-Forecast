@@ -25,6 +25,7 @@ export default function DailyReview({report,date,onGame,onPlayer}) {
     <p>{final.projected_dnp.count} projected players did not play: {number(final.projected_dnp.minutes)} forecast minutes and {number(final.projected_dnp.points)} points. {final.missing_projected_actuals ?? 0} projected player rows have no matching final row.</p>
     <p className="tiny">Models used: {Object.entries(final.model_versions).map(([version,count])=>`${version} (${count} games)`).join(" · ")}. These are the versions actually saved before tipoff.</p>
     <h4>Every game</h4>
+    {!!final.margin_probabilities?.count && <p>Margin probabilities: {final.margin_probabilities.count} scored games · Winner Brier score {metric(final.margin_probabilities.home_win_brier)}. Lower scores mean smaller probability errors; this is a running evaluation, not a calibration claim.</p>}
     <div className="table-scroll"><table><thead><tr><th>Game</th><th>Final score</th><th>Preliminary total</th><th>Final total</th><th>Actual − final</th></tr></thead>
       <tbody>{report.games.map(game=><tr key={game.game_id}>
         <td><button className="daily-review-link" onClick={()=>onGame?.(game.game_id)}>{game.matchup}</button></td>

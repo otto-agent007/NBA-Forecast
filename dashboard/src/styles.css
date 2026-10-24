@@ -17,6 +17,21 @@
 .forecast-stage-summary { margin: 12px 0 0; font-size: 11px; color: #64748b; line-height: 1.6; }
 .runner-issues { font-size: 11px; color: #9a382a; line-height: 1.6; padding-left: 16px; overflow-wrap: anywhere; }
 .forecast-totals { margin: 20px 0; }
+.margin-forecast { margin: 20px 0; padding: 20px; border: 1px solid #dce6f3; border-radius: 7px; background: white; }
+.margin-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.margin-heading h2 { font-size: 18px; margin: 0; }
+.margin-forecast p { color: #52637a; font-size: 12px; line-height: 1.7; }
+.margin-controls { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+.margin-controls label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; max-width: 100%; }
+.margin-controls select, .margin-controls input { padding: 10px; border: 1px solid #aebed0; border-radius: 5px; background: white; color: #20334c; font: inherit; max-width: 100%; }
+.margin-controls input { width: 140px; }
+.margin-probabilities { display: flex; gap: 32px; }
+.margin-probabilities div { display: flex; flex-direction: column; gap: 3px; }
+.margin-probabilities span { font-size: 11px; color: #52637a; }
+.margin-probabilities strong { font-size: 26px; font-variant-numeric: tabular-nums; }
+.margin-bar { height: 8px; border-radius: 4px; overflow: hidden; background: #dce6f3; margin: 12px 0; }
+.margin-bar span { display: block; height: 100%; background: #2563eb; }
+.margin-forecast summary { cursor: pointer; font-size: 12px; margin-top: 14px; }
 .forecast-totals h2 { font-size: 18px; margin-bottom: 12px; }
 .point-total-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .point-total-grid article { background: white; border: 1px solid #dce6f3; border-radius: 7px; padding: 18px; min-width: 0; }

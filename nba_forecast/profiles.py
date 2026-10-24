@@ -5,6 +5,7 @@ from .model import _previous_season, _opportunities
 from .validation import parse_time, validate_history
 from .rotation import rotation_role
 from .historical import season_prior
+from .model_versions import uses_refinements
 
 
 def eligible_history(snapshot,history):
@@ -23,7 +24,11 @@ def build_profiles(snapshot,history):
         rows=by_player[p['player_id']];current=[r for r in rows if r['season']==snapshot['season']]
         previous=[r for r in rows if r['season']!=snapshot['season']];recent=current[-5:]
         supported=any(r['minutes']>0 for r in rows)
-        minutes,rates,variance,components=_opportunities(previous,current,p['team_id'],season_prior(snapshot,p['player_id']))
+        excluded=None
+        if uses_refinements(snapshot):
+            from .role_context import role_excluded_game_ids
+            excluded=role_excluded_game_ids(snapshot,p['player_id'],rows)
+        minutes,rates,variance,components=_opportunities(previous,current,p['team_id'],season_prior(snapshot,p['player_id']),excluded_role_game_ids=excluded)
         flags=[]
         if not supported:flags.append('cold_start')
         if not current:flags.append('current_role_unobserved')
@@ -31,7 +36,11 @@ def build_profiles(snapshot,history):
         previous_played=[r for r in previous if r['status']=='played' and r['minutes']>0]
         if recent and previous_played and abs(fmean(r['minutes'] for r in recent)-fmean(r['minutes'] for r in previous_played))>=5:
             flags.append('minutes_change')
-        rotation=rotation_role(p,rows)
+        if excluded:
+            flags.append('injury_shortened_role_excluded')
+            if not components['normal_role_supported']:
+                supported=False;flags.append('normal_role_unobserved')
+        rotation=rotation_role(p,rows,excluded_game_ids=excluded)
         profile=dict(player_id=p['player_id'],name=p['name'],team_id=p['team_id'],availability=p['status'],
                      previous_games=len(previous),current_games=len(current),recent_game_ids=[r['game_id'] for r in recent],
                      expected_minutes_baseline=minutes if supported else None,

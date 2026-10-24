@@ -21,6 +21,7 @@ from .validation import parse_time,validate_history,validate_inputs,_source
 from .enhancements import load_active,prepare
 from .boxscore_model import VERSION as BOX_MODEL_VERSION
 from .shot_profiles import prepare_shot_profiles
+from .model_versions import uses_refinements
 
 
 def _now():return datetime.now(timezone.utc).isoformat()
@@ -222,6 +223,11 @@ def _tick(folder,history,report):
                 snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
             if active_model:snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
             snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable)
+            if uses_refinements(snapshot):
+                from .role_context import prepare_role_context
+                from .shot_quality import prepare_shot_quality
+                snapshot['role_context']=prepare_role_context(folder,snapshot,usable)
+                snapshot['shot_quality']=prepare_shot_quality(folder,snapshot,usable)
             profiles=build_profiles(snapshot,usable)
             verification=run_preflight(snapshot,usable,profiles,folder)
             if verification['status']!='passed':

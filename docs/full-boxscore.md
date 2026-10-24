@@ -18,6 +18,10 @@ volume. Expected two-point, three-point and free-throw makes receive a bounded
 proportional probability adjustment so `PTS = 2*FGM + 3PM + FTM`, with makes
 never exceeding attempts. An impossible scoring allocation is rejected.
 
+The selected point model can change those inputs before this extension runs.
+Version 0.6.0 adds [injury-aware minutes and location-adjusted shooting](forecast-refinements.md),
+plus separately labeled winning-margin estimates.
+
 Rebounds, assists, steals, blocks and personal fouls use per-minute rates with
 observed exposure. The prior is capped at 600 effective minutes; available exact
 season totals from the last three completed seasons replace overlapping prior

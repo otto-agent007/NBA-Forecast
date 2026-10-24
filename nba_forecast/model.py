@@ -43,6 +43,7 @@ from statistics import fmean, pvariance
 from .rotation import rotation_role
 from .historical import season_prior
 from .totals import game_totals
+from .model_versions import uses_refinements
 
 MODEL_VERSION = "regular-season-baseline-0.4.2"
 NUMERIC_FIELDS = (
@@ -107,7 +108,7 @@ def _shooting(previous, current, historical=None):
     return result
 
 
-def _opportunities(previous, current, team_id=None, historical=None):
+def _opportunities(previous, current, team_id=None, historical=None, *, excluded_role_game_ids=None):
     prior_dnp=sum(r['status']=='dnp' for r in previous)
     previous=[r for r in previous if r['status']=='played' and r['minutes']>0]
     prior_weight = min(len(previous), 20) * 0.90 ** len(current)
@@ -132,6 +133,11 @@ def _opportunities(previous, current, team_id=None, historical=None):
     if current_team:
         role_previous=[r for r in previous if r['team_id']==team_id]
         role_current=current_team
+    # Only normal-role learning excludes a verified early injury exit. All
+    # observed attempts, makes, turnovers and exposure above remain intact.
+    excluded=set(excluded_role_game_ids or ())
+    role_previous=[r for r in role_previous if r['game_id'] not in excluded]
+    role_current=[r for r in role_current if r['game_id'] not in excluded]
     role_prior_weight=min(len(role_previous),6)*.70**len(role_current)
     role_weighted=[(r,.75**age) for age,r in enumerate(reversed(role_current))]
     if role_previous:role_weighted += [(r,role_prior_weight/len(role_previous)) for r in role_previous]
@@ -143,7 +149,7 @@ def _opportunities(previous, current, team_id=None, historical=None):
     observed_variance = (sum(w * (r["minutes"] - minutes) ** 2 for r, w in role_weighted)
                          / role_mass if role_mass else 0.0)
     minute_variance = (observed_variance * role_mass + 16.0 * 4) / (role_mass + 4)
-    return minutes, rates, minute_variance, {
+    audit = {
         "prior_effective_games": prior_weight, "current_weight": mass - prior_weight,
         "prior_decay_per_current_game": 0.90, "current_decay_per_game": 0.90,
         "minutes_before_adjustment": minutes, "per_minute_rates": rates.copy(),
@@ -153,6 +159,11 @@ def _opportunities(previous, current, team_id=None, historical=None):
         "role_prior_team_ids":sorted({r['team_id'] for r in role_previous}),
         "role_team_id":team_id,"role_minutes_policy":"Prior appearances and current-team role; current-season DNPs remain role evidence.",
     }
+    if excluded_role_game_ids is not None:
+        audit.update(injury_shortened_role_game_ids=sorted(excluded),
+            normal_role_supported=any(r['minutes']>0 for r in role_previous+role_current),
+            role_minutes_policy='Verified injury-shortened games excluded from normal minutes only; actual production and exposure retained.')
+    return minutes, rates, minute_variance, audit
 
 
 def _multistat(previous, current):
@@ -251,6 +262,12 @@ def _shot_variance(fga, fg3a, fta, shooting):
 def _project_numbers(prediction, minutes, rates, shooting, rows, minute_variance, factor):
     fga, fg3a, fta, tov = (minutes * rates[k] for k in ("fga", "fg3a", "fta", "tov"))
     points = _expected_points(fga, fg3a, fta, shooting) * factor
+    quality=prediction['components'].get('shot_quality')
+    if quality and 'baseline_percentages' in quality:
+        baseline={kind:{'percentage':value} for kind,value in quality['baseline_percentages'].items()}
+        original_points=_expected_points(fga,fg3a,fta,baseline)*factor
+        quality.update(points_without_location_adjustment=original_points,
+            points_delta=points-original_points)
     binomial = _shot_variance(fga, fg3a, fta, shooting) * factor ** 2
     residuals = [r["pts"] - _expected_points(r["fga"], r["fg3a"], r["fta"], shooting)
                  for r in rows if r["minutes"] > 0]
@@ -301,7 +318,11 @@ def forecast(snapshot, history):
         result = _baseline_forecast(snapshot,history)
     from .boxscore_model import extend_boxscore
     from .shot_profiles import apply_shot_profiles
-    return apply_shot_profiles(extend_boxscore(result,snapshot,history),snapshot)
+    result=apply_shot_profiles(extend_boxscore(result,snapshot,history),snapshot)
+    if uses_refinements(snapshot):
+        from .margins import build_margin_forecasts
+        result['margin_forecasts']=build_margin_forecasts(snapshot,result)
+    return result
 
 
 def _baseline_forecast(snapshot, history):
@@ -399,8 +420,14 @@ def _baseline_forecast(snapshot, history):
             p["flags"].append("team_change")
         # Prefer an established current-season role over a stale prior-season
         # comparison; the most recent three games can then reveal a new role.
-        baseline = current[-13:-3] if len(current) >= 6 else [r for r in previous if r['status']=='played' and r['minutes']>0]
-        recent = current[-3:] if len(current) >= 6 else current[-5:]
+        excluded_role=None
+        if uses_refinements(snapshot):
+            from .role_context import role_excluded_game_ids
+            excluded_role=role_excluded_game_ids(snapshot,pid,previous+current)
+        normal_current=[r for r in current if r['game_id'] not in (excluded_role or ())]
+        normal_previous=[r for r in previous if r['game_id'] not in (excluded_role or ())]
+        baseline = normal_current[-13:-3] if len(normal_current) >= 6 else [r for r in normal_previous if r['status']=='played' and r['minutes']>0]
+        recent = normal_current[-3:] if len(normal_current) >= 6 else normal_current[-5:]
         if baseline and recent:
             old_minutes = fmean(r["minutes"] for r in baseline)
             new_minutes = fmean(r["minutes"] for r in recent)
@@ -414,7 +441,7 @@ def _baseline_forecast(snapshot, history):
                     or (not old_rate and new_rate > 0)):
                 p["flags"].append("opportunity_change")
             p["components"]["role_comparison"] = {
-                "baseline": "earlier_current_season" if len(current) >= 6 else "previous_season",
+                "baseline": "earlier_current_season" if len(normal_current) >= 6 else "previous_season",
                 "baseline_game_ids": [r["game_id"] for r in baseline],
                 "recent_game_ids": [r["game_id"] for r in recent],
                 "baseline_minutes": old_minutes, "recent_minutes": new_minutes,
@@ -426,7 +453,17 @@ def _baseline_forecast(snapshot, history):
         if any(r["status"] == "dnp" for r in current[-3:]):
             p["flags"].append("recent_dnp_role_review")
         historical=season_prior(snapshot,pid)
-        minutes, rates, variance, opportunities = _opportunities(previous, current,team,historical)
+        minutes, rates, variance, opportunities = _opportunities(previous,current,team,historical,excluded_role_game_ids=excluded_role)
+        if excluded_role:
+            p['flags'].append('injury_shortened_role_excluded')
+            p['components']['role_context']={'excluded_game_ids':sorted(excluded_role),
+                'events':[deepcopy(e) for e in snapshot['role_context']['events'] if e['player_id']==pid and e['game_id'] in excluded_role],
+                'policy':'Normal-role minutes exclude verified injury exits; observed production remains in the model.'}
+            if not opportunities['normal_role_supported'] and not adjustments.get((pid,game['game_id'])):
+                p.update(status='needs_review',reason='Only injury-shortened evidence is available for this team role; normal minutes need supported observations or a sourced restriction.')
+                p['flags'].append('normal_role_unobserved')
+                p['components']['opportunities']=opportunities
+                continue
         if (any(r['team_id']==team for r in current) and
             not any(r['team_id']==team and r['minutes']>0 for r in previous+current) and
             not adjustments.get((pid,game['game_id']))):
@@ -435,19 +472,28 @@ def _baseline_forecast(snapshot, history):
             p['components']['opportunities']=opportunities
             continue
         shooting = _shooting(previous, current,historical)
+        if uses_refinements(snapshot):
+            from .shot_quality import adjust_shooting
+            before={kind:detail['percentage'] for kind,detail in shooting.items()}
+            shooting,quality=adjust_shooting(shooting,snapshot,pid)
+            quality['baseline_percentages']=before
+            quality['adjusted_percentages']={kind:detail['percentage'] for kind,detail in shooting.items()}
+            p['components']['shot_quality']=quality
+            if quality.get('scoring_changed'):p['flags'].append('location_shooting_adjustment')
         if historical:p['components']['historical_prior']=historical
         p["components"]["multistat"] = _multistat(previous, current)
         recent_role = (current or previous)[-5:]
+        normal_recent_role=[r for r in recent_role if r['game_id'] not in (excluded_role or ())]
         starts = [r["starter"] for r in recent_role if "starter" in r]
         p["components"]["rotation_role"] = {
             "label": ("frequent_starter" if sum(starts) >= 3 else "mixed_or_bench" if len(starts) >= 3 else "unknown"),
             "method": "Descriptive last-five-game evidence; no inferred coaching decisions.",
             "game_ids": [r["game_id"] for r in recent_role],
             "starter_observations": len(starts), "starts": sum(starts),
-            "recent_mean_minutes": fmean(r["minutes"] for r in recent_role),
+            "recent_mean_minutes": fmean(r["minutes"] for r in normal_recent_role) if normal_recent_role else None,
             "recent_dnp_count": sum(r["status"] == "dnp" for r in recent_role),
         }
-        p['components']['current_team_rotation']=rotation_role(player,rows)
+        p['components']['current_team_rotation']=rotation_role(player,rows,excluded_game_ids=excluded_role)
         adjustment = adjustments.get((pid, game["game_id"]))
         if adjustment:
             p["components"]["manual_adjustment"] = deepcopy(adjustment)

@@ -16,6 +16,7 @@ import uuid
 from .validation import parse_time, validate_history, validate_inputs
 from .totals import game_totals
 from .boxscore_model import validate_boxscore, PERCENTAGES, VERSION as BOX_MODEL_VERSION
+from .model_versions import uses_refinements, REFINED_VERSION
 
 PROJECTION_FIELDS = (
     'expected_minutes', 'expected_fga', 'expected_fta', 'expected_tov',
@@ -174,6 +175,14 @@ def _validate_forecast(snapshot, forecast):
             expected=[game_totals(g,rows,schema_version=version,lineups=snapshot.get('preflight',{}).get('lineups')) for g in snapshot['games'] if g['season_type']=='Regular Season']
             if _canonical(forecast['game_totals'])!=_canonical(expected):
                 raise ValueError('forecast totals disagree with player projections')
+        if uses_refinements(snapshot):
+            from .margins import build_margin_forecasts
+            if forecast['model_version']!=REFINED_VERSION or forecast.get('model_key')!=snapshot['model_enhancements']['model_key']:
+                raise ValueError('Refined model configuration does not match its snapshot')
+            if _canonical(forecast.get('margin_forecasts'))!=_canonical(build_margin_forecasts(snapshot,forecast)):
+                raise ValueError('Forecast margins disagree with the frozen model inputs and player totals')
+        elif 'margin_forecasts' in forecast:
+            raise ValueError('Margin distributions require a matching refined model snapshot')
     except (KeyError, TypeError) as exc:
         raise ValueError(f'incomplete forecast: {exc}') from exc
 

@@ -4,17 +4,21 @@ from collections import defaultdict
 from .validation import parse_time
 
 
-def rotation_role(player,rows):
+def rotation_role(player,rows,*,excluded_game_ids=None):
     recent=sorted((r for r in rows if player.get('team_id') and r.get('team_id')==player['team_id'] and r['status']=='played'),
                   key=lambda r:(parse_time(r['game_time']),r['game_id']))[-5:]
     observed=[r for r in recent if type(r.get('starter')) is bool]
     starts=sum(r['starter'] for r in observed)
-    return dict(label=('starter' if starts>len(observed)/2 else 'bench') if observed else 'unknown',
+    normal=[r for r in recent if r['game_id'] not in set(excluded_game_ids or ())]
+    result=dict(label=('starter' if starts>len(observed)/2 else 'bench') if observed else 'unknown',
                 observations=len(observed),starts=starts,game_ids=[r['game_id'] for r in observed],
-                recent_minutes=fmean(r['minutes'] for r in recent) if recent else None,
+                recent_minutes=fmean(r['minutes'] for r in normal) if normal else None,
                 last_game_time=recent[-1]['game_time'] if recent else None,
                 last_game_started=recent[-1].get('starter') if recent else None,
                 confirmed_lineup=False,basis='Last five captured appearances on the current team; upcoming lineup unconfirmed.')
+    if excluded_game_ids is not None:
+        result['injury_shortened_game_ids']=sorted({r['game_id'] for r in recent if r['game_id'] in excluded_game_ids})
+    return result
 
 
 def projected_lineups(players,profiles):
