@@ -323,6 +323,51 @@ class ESPNActualTests(unittest.TestCase):
             rows = fetch_espn_final(self.game, self.roster, "unused", history=iter([person]))
         self.assertEqual(rows[0]["player_id"], "10")
 
+    def test_explicit_dnp_can_use_unique_exact_sourced_historical_nba_identity(self):
+        person = self.roster["players"].pop(2)
+        previous = dict(person, team_id="OLD", game_id="0022500002",
+                        source_url="https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022500002.json",
+                        known_at="2026-01-04T23:00:00Z")
+        rows = self.normalize(history=[previous])
+        row = {r["player_id"]: r for r in rows}["30"]
+        self.assertEqual(row["status"], "dnp")
+        self.assertEqual(row["team_id"], "H")
+        self.assertEqual(row["identity_resolution"]["source_team_id"], "OLD")
+        self.assertEqual(row["identity_resolution"]["source_url"], previous["source_url"])
+        self.assertEqual(row["identity_resolution"]["source_known_at"], previous["known_at"])
+        self.assertEqual(row["known_at"], self.meta["retrieved_at"])
+
+    def test_historical_dnp_identity_never_bypasses_ambiguity_or_source_cutoff(self):
+        person = self.roster["players"].pop(2)
+        previous = dict(person, team_id="OLD", game_id="0022500002",
+                        source_url="https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022500002.json",
+                        known_at="2026-01-04T23:00:00Z")
+        for change in ("ambiguous", "future_known", "not_nba", "unobserved"):
+            with self.subTest(change=change):
+                evidence = copy.deepcopy(previous)
+                history = [evidence]
+                if change == "ambiguous": history.append(dict(evidence, player_id="31"))
+                if change == "future_known": evidence["known_at"] = "2026-01-06T00:00:00Z"
+                if change == "not_nba": evidence["source_url"] = "https://example.test/identity"
+                if change == "unobserved": del evidence["known_at"]
+                with self.assertRaisesRegex(ValueError, "identity"): self.normalize(history=history)
+
+    def test_cross_team_historical_identity_never_admits_an_unsupported_played_row(self):
+        person = self.roster["players"].pop(0)
+        previous = dict(person, team_id="OLD", game_id="0022500002",
+                        source_url="https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022500002.json",
+                        known_at="2026-01-04T23:00:00Z")
+        with self.assertRaisesRegex(ValueError, "identity"): self.normalize(history=[previous])
+
+    def test_exact_historical_dnp_identity_does_not_admit_positive_count_contradiction(self):
+        person = self.roster["players"].pop(2)
+        previous = dict(person, team_id="OLD", game_id="0022500002",
+                        source_url="https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022500002.json",
+                        known_at="2026-01-04T23:00:00Z")
+        entry = self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][1]
+        entry["stats"] = ["1", "9", "3-7", "1-3", "2-2", "1", "5", "2", "1", "0", "2"]
+        with self.assertRaises(ValueError): self.normalize(history=[previous])
+
 
 if __name__ == "__main__":
     unittest.main()

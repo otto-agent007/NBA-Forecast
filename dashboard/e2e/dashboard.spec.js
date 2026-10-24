@@ -87,6 +87,29 @@ test("historical validation is separated from prospective calibration evidence",
   await expect(report).toContainText('0 / 200 outcomes');
 });
 
+test("daily review shows date-specific coverage and preserves partial forecast totals",async({page})=>{
+  const response=structuredClone(dashboard);
+  response.daily_reviews={'2026-10-21':{date:'2026-10-21',status:'complete',coverage:{scheduled_games:1,verified_finals:1,final_forecasts:1,play_by_play_games:0},
+    stages:{final:{projected:{count:10,points_mae:4.25,minutes_mae:5.88,interval80_coverage:.64},projected_dnp:{count:2,minutes:18,points:7},model_versions:{'test-v1':1},largest_misses:[]}},
+    paired_stages:{count:10,preliminary_mae:4.3,final_mae:4.2,changed_predictions:2},improvement_queue:[{code:'minutes',title:'Check the largest minutes misses',action:'Verify recent rotation evidence.',evidence:[]}],
+    games:[{game_id:gameId,matchup:'GSW @ LAL',home_team_id:'1610612747',away_team_id:'1610612744',score:{'1610612747':100,'1610612744':98},actuals:{status:'verified'},
+      stages:{final:{model_version:'test-v1',totals:{status:'partial',points_mean:180},totals_origin:'saved_forecast',game_total_error:18,
+        team_total_errors:[{team_id:'1610612747',team:'LAL',forecast:90,actual:100,error:10,status:'partial'},{team_id:'1610612744',team:'GSW',forecast:90,actual:98,error:8,status:'partial'}]}},play_by_play_available:false}]}};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));await page.goto('/');
+  await page.getByRole('button',{name:'Performance',exact:true}).click();
+  const review=page.getByLabel('Daily forecast review');
+  await expect(review).toContainText('1 / 1 final boxscores');
+  await expect(review).toContainText('partial');
+  await expect(review).toContainText('64%');
+  await expect(review).toContainText('Verify recent rotation evidence.');
+  await review.getByText('Team totals and errors',{exact:true}).click();
+  await expect(review.getByLabel('Daily team totals').locator('tbody tr')).toHaveCount(2);
+  await expect(review.getByLabel('Daily team totals')).toContainText('+10');
+  await page.getByLabel('Game date',{exact:true}).fill('2026-10-22');
+  await expect(review).toContainText('No daily review saved for 2026-10-22');
+  await expect(review).not.toContainText('64%');
+});
+
 test("player details show applied environment effects and empirical interval evidence",async({page})=>{
   const response=structuredClone(dashboard);
   response.games[0].forecast.predictions[0].components={game_environment:{expected_possessions:101.2,pace_factor:1.01,defense_factor:.98,context_factor:.993},

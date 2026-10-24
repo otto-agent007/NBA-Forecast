@@ -277,7 +277,7 @@ export default function App() {
             {tab === "Postgame" ? (
               <Postgame game={game} refreshRevision={refreshRevision} />
             ) : tab === "Performance" ? (
-              <Performance data={data} />
+              <Performance data={data} date={date} onSelect={setDetail} onGame={id=>{setSelected(id);setTab("Games");}} />
             ) : tab === "Projections" ? (
               <Projections
                 players={players}

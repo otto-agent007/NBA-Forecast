@@ -98,7 +98,8 @@ def dashboard_data(directory):
     for p in players:p['projected_starter']=p['player_id'] in pool_lineups[p['team_id']]['player_ids']
     model_status=read_optional(folder/'model-status.json',None)
     if model_status:model_status['prospective']=read_optional(folder/'prospective-calibration-status.json',None)
-    return dict(schema_version=1,generated_at=datetime.now(timezone.utc).isoformat(),source_mode='saved_operations',model_upgrade=model_status,
+    reviews={p.stem:read_optional(p,None) for p in (folder/'daily-reviews').glob('????-??-??.json')}
+    return dict(schema_version=1,generated_at=datetime.now(timezone.utc).isoformat(),source_mode='saved_operations',model_upgrade=model_status,daily_reviews=reviews,
                 season=schedule.get('season'),schedule_observed_at=schedule.get('observed_at'),coverage=schedule.get('coverage',{}),
                 games=games,players=players,roster_observed_at=roster_observed,
                 runner=read_optional(folder/'last-tick.json',None),

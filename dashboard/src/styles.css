@@ -1597,3 +1597,8 @@ pre {
 .preflight-status p, .preflight-status li { font-size:13px; }
 .preflight-status ul { padding-left:18px; }
 @media (max-width:600px) { .team-selector { padding:0 12px 12px; } .team-selector button { font-size:12px; flex-wrap:wrap; } }
+.daily-review-link { background: transparent; border: 0; padding: 4px 0; color: #155fca; text-align: left; font: inherit; cursor: pointer; }
+.daily-review-link:hover { text-decoration: underline; }
+.daily-review li { margin-bottom: 14px; line-height: 1.5; }
+.daily-review details { margin-top: 12px; }
+.daily-review h4 { margin-top: 24px; }

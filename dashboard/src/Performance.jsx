@@ -1,7 +1,8 @@
 import React from "react";
 import { number, stamp } from "./data";
 import ModelValidation from "./ModelValidation";
-export default function Performance({ data }) {
+import DailyReview from "./DailyReview";
+export default function Performance({ data,date,onGame,onSelect }) {
   const report = data.performance,
     groups = report?.groups || [],
     count = report?.sample_counts?.evaluated || 0;
@@ -11,6 +12,12 @@ export default function Performance({ data }) {
         <h2>How the model is doing</h2>
         <p>Prospective results from predictions saved before tipoff.</p>
       </div>
+      <DailyReview report={data.daily_reviews?.[date]} date={date} onGame={onGame} onPlayer={row=>{
+        const game=data.games.find(g=>g.game_id===row.game_id);
+        const forecast=game?.forecasts?.final || game?.forecast;
+        const player=forecast?.predictions.find(p=>p.player_id===row.player_id);
+        if(player) onSelect?.(player);
+      }}/>
       <ModelValidation model={data.model_upgrade} />
       {!count ? (
         <div className="empty performance-empty">

@@ -144,6 +144,42 @@ def _identities(roster, history, aliases):
     return names, canonical, alias_evidence
 
 
+def _historical_dnp_identity(history, names, espn_name, known_at):
+    """Resolve identity only, never participation, from exact NBA observations.
+
+    An explicitly inactive final entry need not remain on a current roster.
+    Its NBA identity can survive a trade, while the verified ESPN final supplies
+    its game/team and explicit DNP status. Played entries cannot use this path.
+    """
+    name_key = normalized(espn_name)
+    ids = {pid for (_, key), matches in names.items() if key == name_key for pid in matches}
+    if len(ids) != 1:
+        return None
+    pid = next(iter(ids))
+    sources = []
+    for person in history:
+        gid = person.get("game_id")
+        if (str(person.get("player_id")) != pid or normalized(person.get("name", "")) != name_key
+                or not isinstance(gid, str) or not re.fullmatch(r"002\d{7}", gid)
+                or person.get("source_url") != f"https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{gid}.json"):
+            continue
+        try:
+            if parse_time(person["known_at"]) > parse_time(known_at):
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        sources.append(person)
+    if not sources:
+        return None
+    source = max(sources, key=lambda person: parse_time(person["known_at"]))
+    audit = dict(basis="globally unique exact NBA historical identity for explicit ESPN DNP",
+                 source_game_id=source["game_id"], source_team_id=str(source["team_id"]),
+                 source_url=source["source_url"], source_known_at=source["known_at"],
+                 source_name=source["name"], source_player_id=pid,
+                 team_basis="verified ESPN final supplies game/team; historical source supplies person identity only")
+    return pid, source["name"], audit
+
+
 def _stats(values, keys):
     if not isinstance(values, list) or len(values) != len(keys):
         raise ValueError("ESPN player statistics columns are incomplete")
@@ -161,6 +197,7 @@ def _counts(stats):
 
 
 def _normalize(summary, game, roster, metadata, history, name_aliases):
+    history = tuple(history)
     season = _season(game)
     start = parse_time(game["start_time"])
     header = summary["header"]
@@ -237,9 +274,16 @@ def _normalize(summary, game, roster, metadata, history, name_aliases):
                 raise ValueError("ESPN athlete full identity missing")
             key = (tid, normalized(espn_name))
             matches = names.get(key, set())
-            if len(matches) != 1:
+            identity_resolution = None
+            historical = (_historical_dnp_identity(history, names, espn_name, known_at)
+                          if not matches and entry.get("didNotPlay") is True else None)
+            if historical is not None:
+                pid, nba_name, identity_resolution = historical
+            elif len(matches) != 1:
                 raise ValueError(f"unknown or ambiguous ESPN player identity: {tid} {espn_name}")
-            pid = next(iter(matches))
+            else:
+                pid = next(iter(matches))
+                nba_name = canonical[(tid, pid)]
             espn_id = str(athlete["id"])
             if pid in seen or espn_id in espn_seen:
                 raise ValueError("duplicate ESPN player identity")
@@ -252,10 +296,12 @@ def _normalize(summary, game, roster, metadata, history, name_aliases):
                        source_url=metadata["source_url"], source_sha256=metadata["sha256"],
                        source_provenance=provenance, provider_event_id=event_id,
                        provider_player_id=espn_id, source_name=espn_name,
-                       player_id=pid, name=canonical[(tid, pid)], team_id=tid, opponent_id=opponent,
+                       player_id=pid, name=nba_name, team_id=tid, opponent_id=opponent,
                        venue_timezone=venue_zone,venue_address=address,
                        status="dnp" if entry["didNotPlay"] else "played", optional_stat_errors={},
                        team_boxscore=team_counts, team_optional_stat_errors=team_optional_errors)
+            if identity_resolution is not None:
+                row["identity_resolution"] = identity_resolution
             if (key, pid) in aliases:
                 row["identity_alias"] = aliases[(key, pid)]
             if "starter" in entry:

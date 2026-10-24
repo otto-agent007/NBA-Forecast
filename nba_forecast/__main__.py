@@ -115,6 +115,10 @@ def _parser():
     post=sub.add_parser('postgame')
     post.add_argument('--directory',required=True)
     post.add_argument('--output')
+    daily=sub.add_parser('daily-review')
+    daily.add_argument('--directory',required=True)
+    daily.add_argument('--date',help='Pacific date YYYY-MM-DD; defaults to automatic today/yesterday reports')
+    daily.add_argument('--output')
     enrich=sub.add_parser('enrich-history')
     enrich.add_argument('--archive',required=True)
     enrich.add_argument('--output',required=True)
@@ -162,6 +166,10 @@ def main(argv=None):
         elif args.command == 'postgame':
             from .postgame import build_postgames
             value=build_postgames(args.directory)
+        elif args.command == 'daily-review':
+            from .daily_review import build_daily_reviews,review_day
+            now=datetime.now(timezone.utc).isoformat()
+            value=review_day(args.directory,args.date,now) if args.date else build_daily_reviews(args.directory,now)
         elif args.command == 'enrich-history':
             from .player_sync import enrich_archive
             value=enrich_archive(args.archive)

@@ -295,3 +295,6 @@ def _tick(folder,history,report):
             report['warnings'].extend(dict(task='postgame',**e) for e in report['postgame']['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+    from .daily_review import build_daily_reviews
+    report['daily_review']=build_daily_reviews(folder,_now())
+    report['errors'].extend(dict(task='daily_review',**e) for e in report['daily_review']['errors'])
