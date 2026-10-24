@@ -11,7 +11,9 @@ backdates a missed capture. `injuries/status.json` exposes waiting, captured
 or retrying state to the dashboard.
 
 Each scheduled game gets preliminary forecasts before its final window,
-starting at 9 AM Pacific on its game date and refreshed in 15-minute slots.
+starting at 9 AM Pacific on its game date and rebuilt whenever its evidence
+changes: a new official report edition for the game, ESPN's injury list, or the
+roster. The T−30 final checkpoint always produces a run.
 Earlier upcoming jobs are recorded as waiting, without treating unpublished
 next-day reports as forecast failures. An early-morning game's final window
 still opens at T−30, even before 9 AM. At tipoff minus 30 minutes, the next automatic
@@ -160,6 +162,21 @@ errors and warnings (`derived_reports.status: unchanged`, see
 `derived-reports.json`). Outcome discovery still runs every tick and keeps the
 model status's outcome summary current.
 
+## Market lines
+
+Each tick archives the sportsbook lines ESPN's game summary carries (spread,
+total and moneyline per provider, with opening and current values) for every
+upcoming game at the forecast cadence (hourly while the game waits for the
+morning checkpoint, every 15 minutes within a day, every 5 minutes in the last
+30), under `market/game-lines/GAME_ID.jsonl` with source URL, hash and
+retrieval time; a record is appended only when a provider's lines change. The
+last capture before tipoff is the closing line. `market/report.json` compares
+each finished game's latest pregame forecast with its closing line: the
+model's and the market's absolute error against the final margin and total,
+the record of model leans at several edge thresholds, and winner Brier scores.
+Leans on a small sample are not an edge. Player props are not captured; ESPN
+does not publish them.
+
 ## Preforecast cross-check
 
 Before the automated tick or a `forecast --mode live` call executes the model,
@@ -202,9 +219,10 @@ Everything else is a visible note (`notes`) on a forecast that still runs:
   starting five (starters only label team totals) are notes.
 
 A blocked job keeps its injury checkpoint and an archived audit under
-`preflight/GAME_ID/records/`. A failed job waits for its next 15- or 5-minute
-slot (`state.json` `failed_jobs`, tick `deferred_jobs`) instead of being rebuilt
-every minute. New validator versions invalidate completed job keys.
+`preflight/GAME_ID/records/`. A failed job is retried after fifteen minutes
+(five within the final window) (`state.json` `failed_jobs`, tick
+`deferred_jobs`) instead of every minute. Rosters are reused for three hours
+for preliminary forecasts and fifteen minutes at the final checkpoint. New validator versions invalidate completed job keys.
 Independent response bytes, retrieval times and SHA256 hashes are preserved
 under `references/`; schedule responses are reused for at most five minutes and
 rosters for fifteen. Demo and

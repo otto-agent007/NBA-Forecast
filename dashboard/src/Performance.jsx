@@ -2,6 +2,32 @@ import React from "react";
 import { number, stamp } from "./data";
 import ModelValidation from "./ModelValidation";
 import DailyReview from "./DailyReview";
+function MarketReport({ report }) {
+  const s = report?.summary;
+  if (!s?.rows) return null;
+  const record = (r) => r ? `${r.wins}-${r.losses}${r.pushes ? `-${r.pushes}` : ""}${r.win_rate != null ? ` (${Math.round(r.win_rate * 100)}%)` : ""}` : "—";
+  return (
+    <section className="performance-group market-report" aria-label="Model against the market">
+      <h3>Against the closing line · {s.games} games</h3>
+      <div className="metric-band">
+        {[["Margin error: model", s.margin_abs_error?.model], ["Margin error: market", s.margin_abs_error?.market],
+          ["Total error: model", s.total_abs_error?.model], ["Total error: market", s.total_abs_error?.market]].map(([label, value]) => (
+          <div key={label}><span>{label}</span><strong>{number(value)}</strong></div>
+        ))}
+      </div>
+      <div className="table-scroll"><table>
+        <thead><tr><th>Model lean of at least</th><th>Against the spread</th><th>Over/under</th></tr></thead>
+        <tbody>{Object.keys(s.spread_leans || {}).map((key) => (
+          <tr key={key}><td>{key.replace("edge>=", "")} pts</td><td>{record(s.spread_leans[key])}</td><td>{record(s.total_leans?.[key])}</td></tr>
+        ))}</tbody>
+      </table></div>
+      {s.winner && <p>Winner picks: model {Math.round(s.winner.model_pick_accuracy * 100)}% · market favorite {Math.round(s.winner.market_pick_accuracy * 100)}% ·
+        Brier market {number(s.winner.market_brier)}{s.winner.model_brier != null ? ` · model ${number(s.winner.model_brier)}` : ""} · {s.winner.n} games</p>}
+      <p>Closing line is the last capture before tipoff (ESPN game summary, DraftKings). Lean records on a small sample are not an edge; the error rows compare model and market against the same final scores.</p>
+    </section>
+  );
+}
+
 export default function Performance({ data,date,onGame,onSelect }) {
   const report = data.performance,
     groups = report?.groups || [],
@@ -19,6 +45,7 @@ export default function Performance({ data,date,onGame,onSelect }) {
         if(player) onSelect?.(player);
       }}/>
       <ModelValidation model={data.model_upgrade} />
+      <MarketReport report={data.market} />
       {!count ? (
         <div className="empty performance-empty">
           <span className="empty-score">—</span>

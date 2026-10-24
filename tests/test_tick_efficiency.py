@@ -71,7 +71,7 @@ class DerivedReportTests(unittest.TestCase):
 
     def build(self,folder,db,schedule,active_model,model_digest,report):
         self.builds+=1
-        for name in ('performance.json','benchmarks.json','daily-reviews/index.json'):
+        for name in ('performance.json','benchmarks.json','daily-reviews/index.json','market/report.json'):
             (folder/name).parent.mkdir(parents=True,exist_ok=True);(folder/name).write_text('{}')
         report['daily_review']=dict(build=self.builds);report['errors'].append(dict(task='daily_review',date='x'))
 

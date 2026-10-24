@@ -52,6 +52,29 @@ def fetch_reference(url,directory,max_age=300):
     return payload,meta
 
 
+def board_events(board):
+    """(sides, normalized event) for each two-team event on an ESPN daily scoreboard."""
+    out=[]
+    for event in board.get('events',[]):
+        competition=event['competitions'][0]
+        sides={c['homeAway']:c['team'] for c in competition['competitors']}
+        if set(sides)!={'home','away'}:continue
+        status=competition.get('status',event.get('status',{})).get('type',{})
+        out.append((sides,dict(home=code(sides['home']['abbreviation']),away=code(sides['away']['abbreviation']),
+                               start_time=competition.get('date') or event['date'],state=status.get('state'),
+                               status_name=status.get('name'),provider_event_id=event.get('id') or competition.get('id'))))
+    return out
+
+
+def scoreboard_event(game,directory):
+    """The unique ESPN event for a scheduled game, or None; the day's board is cached for five minutes."""
+    date=parse_time(game['start_time']).astimezone(ZoneInfo('America/New_York')).strftime('%Y%m%d')
+    board,meta=fetch_reference(BASE+'scoreboard?dates='+date,directory)
+    matches=[(sides,normalized) for sides,normalized in board_events(board)
+             if (normalized['home'],normalized['away'])==(game.get('home_tricode'),game.get('away_tricode'))]
+    return (matches[0][1],meta) if len(matches)==1 else (None,meta)
+
+
 def collect_references(snapshot,directory,roster_reviews=()):
     from .availability import official_coverage,summary_injuries,summary_no_injuries
     games=[];rosters={};sources=[];boards={};empty=[];espn=[];official={};failures=[]
@@ -62,14 +85,7 @@ def collect_references(snapshot,directory,roster_reviews=()):
             boards[date],meta=fetch_reference(BASE+'scoreboard?dates='+date,directory)
             sources.append(meta)
         candidates=[]
-        for event in boards[date].get('events',[]):
-            competition=event['competitions'][0]
-            sides={c['homeAway']:c['team'] for c in competition['competitors']}
-            if set(sides)!={'home','away'}:continue
-            normalized=dict(home=code(sides['home']['abbreviation']),away=code(sides['away']['abbreviation']),
-                            start_time=competition.get('date') or event['date'],state=competition.get('status',event.get('status',{})).get('type',{}).get('state'),
-                            status_name=competition.get('status',event.get('status',{})).get('type',{}).get('name'),
-                            provider_event_id=event.get('id') or competition.get('id'))
+        for sides,normalized in board_events(boards[date]):
             if new_date:games.append(normalized)
             if (normalized['home'],normalized['away'])==(game.get('home_tricode'),game.get('away_tricode')):
                 candidates.append((sides,normalized))

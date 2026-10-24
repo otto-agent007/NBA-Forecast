@@ -25,6 +25,7 @@ from .boxscore_model import VERSION as BOX_MODEL_VERSION
 from .shot_profiles import prepare_shot_profiles
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY
+from .market_lines import capture_game_lines,market_report
 
 
 def _now():return datetime.now(timezone.utc).isoformat()
@@ -37,6 +38,12 @@ CALENDAR_CHECK_HOUR=8
 CALENDAR_RETRY_SECONDS=(300,3*3600)
 # Derived reports are rebuilt when their inputs change, and at least this often.
 DERIVED_REFRESH_SECONDS=6*3600
+# A saved roster this recent serves preliminary forecasts; the T-30 final checkpoint
+# refreshes one older than fifteen minutes. Membership changes are an evidence change.
+ROSTER_REUSE_SECONDS=3*3600
+ROSTER_FINAL_REUSE_SECONDS=900
+# A job that failed is retried after this long (near tipoff, sooner).
+JOB_RETRY_SECONDS=(900,300)
 PACIFIC=ZoneInfo('America/Los_Angeles')
 
 _CODE_DIGEST=None
@@ -83,6 +90,41 @@ def _ledger_state(db):
     with closing(sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)) as conn:
         return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table}').fetchone())
                 for table in ('runs','evaluations')]
+
+
+def _roster(folder,season,raw,jobs,report):
+    """The roster for this tick's jobs: a recent saved copy, else a fresh capture, else a recent fallback."""
+    saved=_read(folder/'roster.json',None);now=parse_time(_now())
+    age=(now-parse_time(saved['observed_at'])).total_seconds() if saved else None
+    reuse=ROSTER_FINAL_REUSE_SECONDS if any(j['stage']=='final' for j in jobs) else ROSTER_REUSE_SECONDS
+    if saved and age is not None and 0<=age<=reuse:
+        report['roster_source']='saved';return saved
+    try:roster=fetch_roster(season,cache_dir=raw)
+    except (ValueError,OSError) as exc:
+        if saved and age is not None and 0<=age<=48*3600:
+            report['roster_source']='saved_after_failure'
+            report['warnings'].append(dict(task='roster',error=str(exc),action='Using recent saved roster.'))
+            return saved
+        report['roster_source']='unavailable'
+        report['warnings'].append(dict(task='roster',error=str(exc),action='Forecast withheld; injury capture still runs.'))
+        return None
+    atomic_json(folder/'roster.json',roster);report['roster_source']='fresh'
+    return roster
+
+
+def _evidence_key(check,espn_injuries,roster,stage):
+    """What a forecast would be built from; a new forecast is made only when this changes.
+
+    Without a usable injury check the key falls back to a time slot, so the
+    attempt is repeated periodically instead of never.
+    """
+    if isinstance(check,Exception) or check is None:
+        seconds=JOB_RETRY_SECONDS[1] if stage=='final' else JOB_RETRY_SECONDS[0]
+        reports=['unavailable',int(parse_time(_now()).timestamp())//seconds]
+    else:
+        reports=[[name,(item.get(name) or {}).get('sha256')] for item in check['games'] for name in ('anchor_report','latest_report')]
+    members=sorted((p['player_id'],p['team_id'],p.get('status','unknown')) for p in roster['players']) if roster else None
+    return hashlib.sha256(canonical(dict(reports=reports,espn_injuries=espn_injuries,roster=members))).hexdigest()
 
 
 def _calendar_due(state,now):
@@ -285,6 +327,7 @@ def _tick(folder,history,report):
             atomic_json(prior_path,expand_prior_fields(book,folder))
     jobs=due_jobs(schedule,_now(),include_waiting=True);by_id={g['game_id']:g for g in schedule['games']}
     report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
+    upcoming=[by_id[j['game_id']] for j in jobs]
     jobs=[j for j in jobs if not j.get('waiting')]
     # The day's cross-check is informational; each forecast's preflight confirms its own game.
     crosscheck=schedule.get('crosscheck',{})
@@ -293,12 +336,21 @@ def _tick(folder,history,report):
         error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
     reviews={}
     active_model,model_digest=load_active(folder,_now())
+    # Market lines for upcoming games, at the forecast cadence; never a reason to fail the tick.
+    capture={}
+    try:capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
+    except Exception as exc:report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
+    # A forecast is rebuilt when its evidence changes: the official report edition
+    # for the game, ESPN's injury list and the roster. These checks are cheap.
+    roster=_roster(folder,season,raw,jobs,report) if jobs else None
+    capture_cache={};checks={}
     for job in jobs:
-        # Refresh evidence throughout the day, then every five minutes near tipoff.
-        seconds=300 if job['stage']=='final' else 900
-        slot=int(parse_time(_now()).timestamp())//seconds
+        try:checks[job['game_id']]=fetch_injury_check(dict(season=season,games=[by_id[job['game_id']]],as_of=_now(),forecast_stage=job['stage']),raw,capture_cache=capture_cache)
+        except (ValueError,OSError) as exc:checks[job['game_id']]=exc
+    for job in jobs:
         version=active_model['model_version'] if active_model else MODEL_VERSION
-        job['key']+=f':model:{version}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:slot:{slot}'
+        evidence=_evidence_key(checks.get(job['game_id']),(capture.get('evidence') or {}).get(job['game_id']),roster,job['stage'])
+        job['key']+=f':model:{version}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:evidence:{evidence}'
         job['key']+=':boxscore:'+BOX_MODEL_VERSION
         if active_model:job['key']+=':configuration:'+active_model['model_key']+':artifact:'+model_digest
         prior_book=folder/'historical-priors.json'
@@ -309,24 +361,16 @@ def _tick(folder,history,report):
         if path.exists():
             review=json.loads(path.read_text());reviews[job['game_id']]=review
             job['key']+=':review:'+hashlib.sha256(canonical(review)).hexdigest()
-    # A job key is scoped to its 15- or 5-minute slot. One that failed waits for the
-    # next slot (a fresh key) instead of being rebuilt every minute meanwhile.
+    # A job that failed is retried after a pause instead of every minute.
     failed=state.setdefault('failed_jobs',{})
     for key in [k for k,v in failed.items() if (parse_time(_now())-parse_time(v['at'])).total_seconds()>86400]:del failed[key]
+    def deferred(job):
+        item=failed.get(job['key'])
+        pause=JOB_RETRY_SECONDS[1] if job['stage']=='final' else JOB_RETRY_SECONDS[0]
+        return bool(item) and (parse_time(_now())-parse_time(item['at'])).total_seconds()<pause
     report['deferred_jobs']=[dict(game_id=j['game_id'],stage=j['stage'],failed_at=failed[j['key']]['at'])
-                             for j in jobs if j['key'] in failed and j['key'] not in state['jobs']]
-    needed=[j for j in jobs if j['key'] not in state['jobs'] and j['key'] not in failed]
-    roster=None
-    if needed:
-        try:roster=fetch_roster(schedule['season'],cache_dir=raw)
-        except (ValueError,OSError) as exc:
-            saved=folder/'roster.json'
-            candidate=json.loads(saved.read_text()) if saved.exists() else None
-            if candidate and 0<=(parse_time(_now())-parse_time(candidate['observed_at'])).total_seconds()<=48*3600:
-                roster=candidate
-            report['warnings'].append(dict(task='roster',error=str(exc),action='Using recent saved roster.' if roster else 'Forecast withheld; injury capture still runs.'))
-    if roster:atomic_json(folder/'roster.json',roster)
-    capture_cache={}
+                             for j in jobs if j['key'] not in state['jobs'] and deferred(j)]
+    needed=[j for j in jobs if j['key'] not in state['jobs'] and not deferred(j)]
     for job in needed:
         try:
             game=by_id[job['game_id']]
@@ -334,7 +378,9 @@ def _tick(folder,history,report):
                           forecast_stage=job['stage'],operation_key=job['key'],schedule_version=schedule['version'],
                           schedule_context=game_context(schedule,game['game_id']))
             try:
-                check=fetch_injury_check(snapshot,raw,capture_cache=capture_cache);snapshot['as_of']=_now()
+                check=checks[job['game_id']]
+                if isinstance(check,Exception):raise check
+                snapshot['as_of']=_now()
                 snapshot['injury_check']=check
                 record_check(folder,check,job['stage'])
                 for item in check['games']:
@@ -485,7 +531,7 @@ def _refresh_derived(folder,db,schedule,active_model,model_digest,report):
     """
     path=folder/'derived-reports.json';saved=_read(path,{})
     signature=_derived_signature(folder,db,schedule,active_model,model_digest)
-    outputs=[folder/'performance.json',folder/'benchmarks.json',folder/'daily-reviews/index.json']
+    outputs=[folder/'performance.json',folder/'benchmarks.json',folder/'daily-reviews/index.json',folder/'market/report.json']
     if active_model:outputs.append(folder/'model-status.json')
     if (folder/'roster.json').exists():outputs.append(folder/'postgame/index.json')
     try:age=(parse_time(_now())-parse_time(saved['computed_at'])).total_seconds()
@@ -505,7 +551,7 @@ def _refresh_derived(folder,db,schedule,active_model,model_digest,report):
     _derived_reports(folder,db,schedule,active_model,model_digest,report)
     computed=_now()
     atomic_json(path,dict(signature=signature,computed_at=computed,
-        report={k:report[k] for k in ('prospective_calibration','prospective_margin_calibration','postgame','daily_review') if k in report},
+        report={k:report[k] for k in ('prospective_calibration','prospective_margin_calibration','postgame','daily_review','market') if k in report},
         errors=report['errors'][errors:],warnings=report['warnings'][warnings:]))
     report['derived_reports']=dict(status='rebuilt',computed_at=computed)
 
@@ -561,3 +607,8 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     from .daily_review import build_daily_reviews
     report['daily_review']=build_daily_reviews(folder,_now(),schedule=schedule)
     report['errors'].extend(dict(task='daily_review',**e) for e in report['daily_review']['errors'])
+    try:
+        market=market_report(folder,schedule,_now())
+        atomic_json(folder/'market/report.json',market);report['market']=market['summary']
+    except Exception as exc:
+        report['errors'].append(dict(task='market_report',error=f'{type(exc).__name__}: {exc}'))

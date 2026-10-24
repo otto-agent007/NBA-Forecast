@@ -154,6 +154,8 @@ def dashboard_data(directory):
               'observed_stats':summaries.get(p['player_id'])} for p in players]
     pool_lineups=projected_lineups([p for p in players if p['roster_membership']!='historical_appearance'],players)
     for p in players:p['projected_starter']=p['player_id'] in pool_lineups.get(p['team_id'],{}).get('player_ids',[])
+    market_lines=read_optional(folder/'market/index.json',None)
+    for g in games:g['market']=((market_lines or {}).get('games') or {}).get(g['game_id'])
     model_status=read_optional(folder/'model-status.json',None)
     if model_status:
         model_status['prospective']=read_optional(folder/'prospective-calibration-status.json',None)
@@ -165,7 +167,8 @@ def dashboard_data(directory):
                 games=games,players=players,roster_observed_at=roster_observed,
                 runner=read_optional(folder/'last-tick.json',None),
                 performance=read_optional(folder/'performance.json',None),benchmarks=read_optional(folder/'benchmarks.json',None),player_data=player_index,
-                injury_capture=read_optional(folder/'injuries/status.json',None))
+                injury_capture=read_optional(folder/'injuries/status.json',None),
+                market=read_optional(folder/'market/report.json',None),market_lines=market_lines)
 
 
 def serve_dashboard(directory,assets,port=8765):

@@ -16,25 +16,32 @@ ESPN_STATUS={'out':'out','suspension':'out','day-to-day':'questionable','questio
              'doubtful':'questionable','probable':'available'}
 
 
-def _summary_team_lists(payload,game,season,evidence):
-    """Each side's injury list from an identity-checked ESPN game summary: {side: list or None}."""
+def summary_sides(payload,game,season,evidence):
+    """Identity-check an ESPN game summary against a scheduled game: (event id, {side: team})."""
     from .reference import code
     match=re.fullmatch(SUMMARY_PATTERN,evidence['source_url'])
     if not match or not re.fullmatch('[a-f0-9]{64}',evidence['sha256']):raise ValueError('Unverified game-summary source')
     parse_time(evidence['retrieved_at'])
     header=payload['header'];competitions=header['competitions']
     if str(header['id'])!=match[1] or header['season']['year']!=int(season[:4])+1 or header['season']['type']!=2:
-        raise ValueError('Injury summary event or regular-season identity differs')
+        raise ValueError('Game summary event or regular-season identity differs')
     if len(competitions)!=1 or str(competitions[0]['id'])!=match[1] or parse_time(competitions[0]['date'])!=parse_time(game['start_time']):
-        raise ValueError('Injury summary matchup date or tipoff differs')
+        raise ValueError('Game summary matchup date or tipoff differs')
     competitors=competitions[0]['competitors'];sides={c['homeAway']:c['team'] for c in competitors}
     if len(competitors)!=2 or set(sides)!={'home','away'} or any(code(sides[s]['abbreviation'])!=game[s+'_tricode'] for s in sides):
-        raise ValueError('Injury summary home/away team identity differs')
+        raise ValueError('Game summary home/away team identity differs')
+    return match[1],sides
+
+
+def _summary_team_lists(payload,game,season,evidence):
+    """Each side's injury list from an identity-checked ESPN game summary: {side: list or None}."""
+    from .reference import code
+    event,sides=summary_sides(payload,game,season,evidence)
     entries=payload.get('injuries');lists={}
     for side,team in sides.items():
         selected=[entry for entry in entries if str(entry.get('team',{}).get('id'))==str(team['id']) and code(entry.get('team',{}).get('abbreviation'))==game[side+'_tricode']] if isinstance(entries,list) else []
         lists[side]=selected[0].get('injuries') if len(selected)==1 and isinstance(selected[0].get('injuries'),list) else None
-    return match[1],lists
+    return event,lists
 
 
 def summary_no_injuries(payload,game,season,evidence):
