@@ -6,6 +6,7 @@ import { Status } from "./PlayerTable";
 import { dateKey, number, safeSource, stamp } from "./data";
 import ShotChart from "./ShotChart";
 import BoxScoreTable from "./BoxScoreTable";
+import ColumnScroll from "./ColumnScroll";
 import { BOX_SCORE_COLUMNS, averageBoxScore, boxScoreTitle, boxScoreValue } from "./boxscore";
 export default function PlayerDetail({ player, onClose }) {
   const ref = useRef(null),
@@ -267,7 +268,7 @@ export default function PlayerDetail({ player, onClose }) {
         {tab === "Game log" && (
           <>
             <h3>Last 10 captured games</h3>
-            <div className="table-scroll boxscore-scroll" role="region" aria-label="Recent game boxscores scroll area" tabIndex={0}>
+            <ColumnScroll label="Recent game boxscores">
               <table className="boxscore-table game-log-table" aria-label="Recent game boxscores">
                 <thead>
                   <tr>
@@ -318,7 +319,7 @@ export default function PlayerDetail({ player, onClose }) {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </ColumnScroll>
             {!recent.length && (
               <p className="empty">No current-season game log captured.</p>
             )}

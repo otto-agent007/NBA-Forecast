@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { filterPlayers, groupPlayers, number, statusLabel } from "./data";
 import { BOX_SCORE_COLUMNS, boxScoreTitle, boxScoreValue } from "./boxscore";
 import { Icon, TeamMark } from "./Icons";
+import ColumnScroll from "./ColumnScroll";
 export function Status({ player }) {
   return (
     <span
@@ -73,15 +74,15 @@ export default function PlayerTable({
           />
         </label>
       </div>
-      <p className="boxscore-hint">Projected boxscore · Drag the bar below the table (or shift-scroll) for shooting splits and all stats; the player column stays put. MIN:SS is an estimate.</p>
-      <div className="table-scroll boxscore-scroll" role="region" aria-label={`${title} scroll area`} tabIndex={0}>
+      <p className="boxscore-hint">Projected boxscore · Move the More stats slider at the bottom of the screen (or shift-scroll) for shooting splits and all stats; the player column stays put. MIN:SS is an estimate.</p>
+      <ColumnScroll label={title}>
         <table className="boxscore-table" aria-label={`${title} full boxscore`}>
           <thead>
             <tr>
               <th scope="col" className="player-cell">Player</th>
               {expanded && <th scope="col">Matchup</th>}
               <th scope="col">Status</th>
-              <th scope="col" className="numeric">Season PPG</th>
+              <th scope="col" className="numeric observed-ppg">Season PPG</th>
               {BOX_SCORE_COLUMNS.map(column => <th key={column.id} scope="col" className="numeric" title={column.description} aria-label={column.label}>
                 {column.id === "pts" ? <button
                     className="sort"
@@ -116,10 +117,10 @@ export default function PlayerTable({
                     <PlayerPortrait key={p.player_id} player={p} />
                     <span>
                       {p.name}
-                      <small>
+                      <small title={p.history_games != null ? `${p.history_games} games of evidence` : undefined}>
                         {p.team_code || "NBA"}
                         {p.history_games != null
-                          ? ` · ${p.history_games} games of evidence`
+                          ? ` · ${p.history_games} games`
                           : ""}
                         {p.status === "projected" && typeof p.participation_probability === "number" && p.participation_probability < 0.95
                           ? ` · ${Math.round(p.participation_probability * 100)}% to play`
@@ -169,7 +170,7 @@ export default function PlayerTable({
             </button>
           </div>
         )}
-      </div>
+      </ColumnScroll>
       <div className="table-note">
         <Icon name="info" />
         <span>

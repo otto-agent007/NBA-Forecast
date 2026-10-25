@@ -443,11 +443,38 @@ h3 {
   overflow-x: scroll;
   scrollbar-width: auto;
   scrollbar-color: #8fa3bf #e9eef5;
-  scrollbar-gutter: stable;
 }
 .boxscore-scroll::-webkit-scrollbar { height: 14px; background: #e9eef5; }
 .boxscore-scroll::-webkit-scrollbar-thumb { background: #8fa3bf; border-radius: 7px; border: 3px solid #e9eef5; }
 .boxscore-scroll::-webkit-scrollbar-thumb:hover { background: #6d84a6; }
+/* ColumnScroll: the slider sticks to the bottom of the screen while its table is in view. */
+.column-slider {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: -1px;
+  padding: 8px 14px;
+  border: 1px solid #e1e7f0;
+  border-radius: 0 0 5px 5px;
+  background: #f0f4f9;
+  box-shadow: 0 -2px 6px rgba(15, 23, 42, 0.06);
+  color: #475569;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.column-slider input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: #1766cf;
+  cursor: ew-resize;
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -491,10 +518,47 @@ tbody tr:hover {
   outline: 2px solid #1766cf;
   outline-offset: 3px;
 }
+/* Compact box score: about twice as many players per screen, and most of the stat
+   columns fit before the slider is needed. */
 .boxscore-table th,
 .boxscore-table td {
-  padding-left: 12px;
-  padding-right: 12px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.boxscore-table td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.boxscore-table thead th {
+  height: 34px;
+}
+.boxscore-table tbody th {
+  height: auto;
+}
+.boxscore-table .team-heading th {
+  padding: 9px 12px;
+}
+.boxscore-table .role-heading th {
+  padding: 5px 12px;
+}
+.boxscore-table th.observed-ppg {
+  white-space: normal;
+  line-height: 1.2;
+}
+.boxscore-table .player-button {
+  gap: 8px;
+}
+.boxscore-table .player-button small {
+  margin-top: 2px;
+}
+.boxscore-table .player-portrait {
+  flex-basis: 34px;
+  width: 34px;
+  height: 30px;
+  border-radius: 6px;
+}
+.boxscore-table .status {
+  padding: 3px 6px;
 }
 .boxscore-table .player-cell,
 .boxscore-table .game-date-cell {
@@ -510,8 +574,8 @@ tbody tr:hover {
   z-index: 3;
 }
 .boxscore-table .player-cell {
-  min-width: 220px;
-  max-width: 260px;
+  min-width: 180px;
+  max-width: 230px;
 }
 .boxscore-table .player-row:hover .player-cell {
   background: #f7faff;

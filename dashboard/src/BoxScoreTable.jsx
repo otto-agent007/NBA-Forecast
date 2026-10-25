@@ -1,9 +1,10 @@
 import React from "react";
 import { BOX_SCORE_COLUMNS, boxScoreTitle, boxScoreValue } from "./boxscore";
+import ColumnScroll from "./ColumnScroll";
 
 export default function BoxScoreTable({ row, mode = "forecast", label, coverage }) {
   return (
-    <div className="table-scroll boxscore-scroll" role="region" aria-label={`${label} scroll area`} tabIndex={0}>
+    <ColumnScroll label={label}>
       <table className="boxscore-table single-boxscore" aria-label={label}>
         <thead><tr>
           {BOX_SCORE_COLUMNS.map(column => <th key={column.id} scope="col" className="numeric" title={column.description}>{column.label}</th>)}
@@ -18,6 +19,6 @@ export default function BoxScoreTable({ row, mode = "forecast", label, coverage 
           })}
         </tr></tbody>
       </table>
-    </div>
+    </ColumnScroll>
   );
 }

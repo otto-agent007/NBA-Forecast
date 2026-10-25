@@ -99,10 +99,17 @@ test("full box forecasts preserve team starters, signed values and unsupported c
   await expect(table.getByRole("columnheader", { name: "FTM/FTA", exact: true })).toHaveCount(1);
   await page.screenshot({ path: testInfo.outputPath("projections-first-viewport.png"), fullPage: false });
   const scroll = page.locator(".player-section .table-scroll");
-  await scroll.evaluate(element => {
-    element.scrollIntoView({ block: "start" });
-    element.scrollLeft = element.scrollWidth;
-  });
+  await scroll.evaluate(element => element.scrollIntoView({ block: "start" }));
+  // The column slider stays on screen while the table is in view; the native bar sits under the last row.
+  const slider = page.locator(".player-section").getByRole("slider", { name: /stat columns/ });
+  if (await scroll.evaluate(element => element.scrollWidth > element.clientWidth)) {
+    await expect(slider).toBeInViewport();
+    await slider.focus();
+    await page.keyboard.press("End");
+    await expect.poll(() => scroll.evaluate(element => element.scrollWidth - element.clientWidth - element.scrollLeft)).toBeLessThanOrEqual(1);
+  } else {
+    await expect(slider).toHaveCount(0);
+  }
   await expect(table.locator(".player-button").first()).toBeInViewport();
   await expect(table.getByRole("columnheader", { name: "+/-", exact: true })).toBeInViewport();
   const widths = await page.evaluate(() => ({ page: document.documentElement.scrollWidth, viewport: innerWidth }));
