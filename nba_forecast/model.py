@@ -49,7 +49,7 @@ from .totals import RESIDUAL_MIN_PROJECTED, game_totals
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
-MODEL_VERSION = "regular-season-baseline-0.4.7"
+MODEL_VERSION = "regular-season-baseline-0.4.8"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -77,7 +77,12 @@ PARTICIPATION_WINDOW = 10
 # little about who dresses now. Even one listing counts: with three pseudo-games
 # of prior, two DNPs take a newcomer from .79 to .47, which is what they mean.
 PARTICIPATION_MIN_TEAM_GAMES = 1
-STATUS_PARTICIPATION = {"probable": .9, "questionable": .55, "doubtful": .15, "day-to-day": .5, "game time decision": .5}
+# Factors on the role rate for a reported status, fitted on the 12:30 PM ET
+# game-day reports of each season and checked on the other (2024-25 / 2025-26
+# fits: probable 1.11 / 1.13, questionable .63 / .65, doubtful .040 / .048;
+# raw play rates 89%, 49%, 3%). Probable plays like an untagged player. The
+# ESPN-only labels keep .5.
+STATUS_PARTICIPATION = {"probable": 1., "questionable": .64, "doubtful": .04, "day-to-day": .5, "game time decision": .5}
 # When expected minutes fall short of 240, conditional minutes rise by at most
 # these fractions (protected rotation, bench) and never past 48. Chosen on the
 # last 250 games of 2025-26: larger caps over-projected starters' minutes, no

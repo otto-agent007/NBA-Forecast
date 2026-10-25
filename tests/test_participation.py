@@ -103,7 +103,7 @@ class ParticipationForecastTests(unittest.TestCase):
         by_id = {p['player_id']: p for p in forecast(snap, data)['predictions']}
         self.assertEqual(by_id['q']['status'], 'projected')
         self.assertIn('availability_questionable', by_id['q']['flags'])
-        self.assertAlmostEqual(by_id['q']['participation_probability'], .55 * by_id['p']['participation_probability'])
+        self.assertAlmostEqual(by_id['q']['participation_probability'], STATUS_PARTICIPATION['questionable'] * by_id['p']['participation_probability'])
         self.assertGreater(by_id['p']['participation_probability'], .9)
         self.assertLess(by_id['bench']['participation_probability'], .5)
         self.assertIn('participation_uncertain', by_id['bench']['flags'])
@@ -159,7 +159,7 @@ class ActiveListTests(unittest.TestCase):
         for pid in [p['player_id'] for p in players]:
             data += rows([0], [1], pid=pid, minutes=20)
         by_id = {p['player_id']: p for p in forecast(snapshot(players), data)['predictions'] if p['status'] == 'projected'}
-        self.assertAlmostEqual(by_id['q']['participation_probability'], .55 * by_id['q']['components']['participation']['role_rate'],
+        self.assertAlmostEqual(by_id['q']['participation_probability'], STATUS_PARTICIPATION['questionable'] * by_id['q']['components']['participation']['role_rate'],
                                msg='questionable: status times the role rate, not raised')
         self.assertAlmostEqual(sum(p['participation_probability'] for p in by_id.values()), ACTIVE_LIST_MIN_EXPECTED)
         self.assertTrue(all(p['participation_probability'] < 1 for p in by_id.values()))

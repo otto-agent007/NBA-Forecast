@@ -17,13 +17,15 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-25-reported-out
+  --reference datasets/backtest-2026-10-25-status-rates
 ```
 
 It replays the 2024-25 and 2025-26 seasons, each with the official injury
 report every game's final forecast would have read, in about seven minutes,
 and pairs the same player-games against the reference. The verdict pools both
-seasons; each season's own verdict is shown beside it. `worse` on points, minutes, team points or margin
+seasons; each season's own verdict is shown beside it. A change to availability,
+participation or reported statuses must also pass the preliminary replay
+(`docs/backtest.md`, "Preliminary replay"). `worse` on points, minutes, team points or margin
 error, the 80% interval score, participation or winner Brier, or on points,
 team-point or margin bias, means the change is not merged. `within_noise` is acceptable only for a change whose
 purpose is not accuracy (a simplification, a bug fix, an operational fix); say

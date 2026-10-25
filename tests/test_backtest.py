@@ -8,6 +8,7 @@ import unittest
 import unittest.mock
 
 from nba_forecast import backtest
+from nba_forecast.model import STATUS_PARTICIPATION
 
 TEAMS = ('A', 'B', 'C', 'D')
 AS_OF = '2026-03-01T00:00:00Z'
@@ -180,7 +181,7 @@ class BacktestTests(unittest.TestCase):
         questionable = [p for p in players if p['player_id'] == home[p['game_id']] + '0'
                         and int(p['game_id'][1:3]) % 5 == 0]
         self.assertTrue(questionable)
-        self.assertTrue(all(p['participation_probability'] < .6 for p in questionable))
+        self.assertTrue(all(p['participation_probability'] <= STATUS_PARTICIPATION['questionable'] for p in questionable))
         counts = board['games']['availability']['by_status']
         self.assertEqual(counts['out']['played'], 0)
         self.assertEqual(set(counts), {'out', 'questionable', 'not listed', 'no complete report'})

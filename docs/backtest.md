@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-25-reported-out
+  --reference datasets/backtest-2026-10-25-status-rates
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -94,10 +94,9 @@ on average at the checkpoint, 2024-25 10.
 At the checkpoint almost every tag is resolved: of 21,682 players listed out
 over both seasons two played, and only 382 (2024-25) and 110 (2025-26) are
 still probable, questionable or doubtful. Over both seasons those played 91%
-(probable, 142), 56% (questionable, 311) and 3% (doubtful, 39), against the
-model's 90%, 55% and 15%: the first two hold, doubtful is too high. The rates
-matter more for earlier forecasts, which see more tags; measuring them there
-needs the earlier reports of each day.
+(probable, 142), 56% (questionable, 311) and 3% (doubtful, 39). The status
+factors are fitted where most tags are, the midday reports (see "Preliminary
+replay" and the status-rates reference).
 
 What the reports change, same model, 2025-26, against the minute-buckets
 reference (`datasets/backtest-2026-10-25-two-seasons/scoreboard.json`,
@@ -117,6 +116,31 @@ model's own `game_totals` (schema 4: the weighted player sum plus unallocated
 minutes at the replacement rate), as production does; it used to re-sum player
 points. Without injury reports that changes nothing (team points +0.0007 ±
 0.0208); with them it is 1.6 points of the old team-points bias.
+
+## Preliminary replay
+
+The same command with the midday reports replays the preliminary forecasts,
+made hours before tip while most tags are open. A change to availability,
+participation or reported statuses must also pass it:
+
+```bash
+python -m nba_forecast backtest \
+  --history datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
+  --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
+  --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
+  --reference datasets/backtest-2026-10-25-midday
+```
+
+Each game takes the newest report by 12:30 PM Eastern on game day
+(`injury_history --anchor 12:30`; `datasets/injury-reports-*-midday/`). At midday
+2,852 (2024-25) and 2,684 (2025-26) players are probable, questionable or
+doubtful, against 382 and 110 at the T-minus-30 checkpoint. Over both seasons
+they played 89.4% (probable, 1,199), 48.6% (questionable, 3,687) and 3.2%
+(doubtful, 650); 0.4% of the 15,112 listed out played. Midday metrics, model
+0.4.8: points MAE 4.59, minutes 5.03, participation Brier 0.119, projected
+players who did not play 21.9%, margin 11.53.
 
 ## Two seasons
 
@@ -138,6 +162,25 @@ the code before and after each 2026-10-24 change, without injury reports:
 On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
 (ESPN BET for every game) and the naive point-differential rating's 11.50; winner
 Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-25 (status rates)
+
+`datasets/backtest-2026-10-25-status-rates/` (T-minus-30) and
+`datasets/backtest-2026-10-25-midday/` (preliminary): model
+`regular-season-baseline-0.4.8`. The reported-status factors on the role rate
+(`model.STATUS_PARTICIPATION`) are fitted on each season's midday replay rows
+(a tagged player's probability is role rate × factor, so the least-squares
+factor is Σ role·played / Σ role²) and checked on the other season: probable
+1.11 / 1.13, questionable .63 / .65, doubtful .040 / .048 for 2024-25 / 2025-26.
+Rounded to 1.0 (probable plays like an untagged player), .64 and .04 from .9,
+.55 and .15, every status's Brier improves on both held-out seasons (2025-26:
+probable 0.146 → 0.125, questionable 0.258 → 0.253, doubtful 0.032 → 0.028).
+
+Midday, against model 0.4.7: points −0.011 ± 0.002, minutes −0.017 ± 0.004,
+participation Brier −0.0008 ± 0.0004, points bias +0.21 → +0.14: improved; the
+rest within noise; both seasons improve. T-minus-30, against the reported-out
+reference: points −0.0011 ± 0.0007 and participation −0.0001 ± 0.0001 improved,
+the rest within noise (few tags remain at the checkpoint).
 
 ## Reference: 2026-10-25 (reported-out games)
 
@@ -373,8 +416,8 @@ error hint (home on a back-to-back −1.8 ± 1.6), so no rest term was added.
 
 ## What it cannot measure
 
-The replay uses only the T-minus-30 report, so preliminary forecasts, which read
-earlier reports with more questionable tags, are not replayed. No prior-season
+The replay reads one report per game (T-minus-30, or 12:30 PM for the
+preliminary replay), not every edition a live run sees. No prior-season
 aggregate priors or archive-bound enhancements (pace, defense, rest, shot
 location, injury exits) are applied, so changes to those still need the live
 `performance.json` benchmarks. Each season replays without the previous one's

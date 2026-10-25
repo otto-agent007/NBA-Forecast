@@ -176,8 +176,8 @@ earlier game's final-stage checkpoint, `injuries/games/<id>/final.json`, parsed
 again against the current roster; a game without one counts as before), shrunk
 by three pseudo-games toward the 2025-26 rate for his role
 (18% under 10 minutes a game, 70% for 10–20, 79% for 20–28, 82% above), then
-scaled by a reported status (probable 0.9, questionable 0.55, doubtful 0.15,
-day-to-day 0.5). A team's probabilities are scaled into the range the rules
+scaled by a reported status (probable 1.0, questionable 0.64, doubtful 0.04,
+day-to-day 0.5; fitted on the midday reports of 2024-25 and 2025-26). A team's probabilities are scaled into the range the rules
 and the data allow: down if they sum past the 13-player active list, up to at
 least ten when ten or more players are projected (teams used at least ten
 players in three quarters of 2025-26 games; the priors were measured on
