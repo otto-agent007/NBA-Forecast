@@ -97,7 +97,7 @@ test("schedule cross-check and active correction remain visible after a later fa
   await expect(page.getByText("Partial cross-check")).toHaveClass(/warn/);
   delete data.schedule_crosscheck;
   await page.reload();
-  await expect(page.getByText("Cross-check expired",{exact:true})).toHaveClass(/warn/);
+  await expect(page.getByText("Cross-check unavailable",{exact:true})).toHaveClass(/warn/);
   data.runner.schedule_source="unverified_cached_nba";
   await page.reload();
   await expect(page.getByText("Unverified",{exact:true})).toHaveClass(/warn/);

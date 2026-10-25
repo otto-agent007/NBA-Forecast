@@ -264,7 +264,7 @@ test("team and game point totals follow the forecast stage and ignore player fil
   await page.goto('/');
   const totals=page.getByLabel('Forecast point totals');
   await expect(totals.getByLabel('Golden State Warriors point total').getByTestId('point-total')).toHaveText('110.1');
-  await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('1 roster player without playing history');
+  await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('1 roster player without playing or scoring evidence');
   await expect(totals.getByLabel('Golden State Warriors point total')).not.toContainText('Partial');
   await expect(totals.getByLabel('Golden State Warriors point total')).not.toContainText('1 withheld');
   await expect(totals.getByLabel('Los Angeles Lakers point total').getByTestId('point-total')).toHaveText('95.1');
