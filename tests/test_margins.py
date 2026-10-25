@@ -5,6 +5,7 @@ import importlib
 import json
 import math
 import unittest
+from unittest import mock
 
 try:
     margins = importlib.import_module('nba_forecast.margins')
@@ -266,6 +267,36 @@ class TeamRatingTests(unittest.TestCase):
         self.assertEqual(rating, 6.)
         self.assertEqual(location, (1 - margins.RATING_WEIGHT) * 6. + margins.RATING_WEIGHT * 6.)
         self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'NEW'), (6., None))
+
+    def test_roster_continuity_is_the_share_of_minutes_from_last_seasons_players(self):
+        full = margins.CONTINUITY_FULL_MINUTES
+        self.assertAlmostEqual(margins.roster_continuity({'a': 30., 'b': 10.}, {'a': full * 2}), .75)
+        # A player who sat out last season (no minutes) or barely played earns little credit.
+        self.assertAlmostEqual(margins.roster_continuity({'a': 30., 'b': 10.}, {'a': full / 2, 'b': 0.}), .375)
+        self.assertIsNone(margins.roster_continuity({'a': 30.}, {}))
+        self.assertIsNone(margins.roster_continuity({}, {'a': full}))
+
+    def test_continuity_discounts_only_last_seasons_part(self):
+        k = margins.RATING_PRIOR_GAMES
+        entry = dict(rating=(30. + k * 1.5) / (2 + k), games=2, prior=1.5)
+        self.assertEqual(margins.continuity_rating(entry, .5, 'off'), entry['rating'])
+        self.assertEqual(margins.continuity_rating(entry, None, 'prior'), entry['rating'])
+        self.assertAlmostEqual(margins.continuity_rating(entry, .5, 'prior'), (30. + k * .75) / (2 + k))
+        self.assertAlmostEqual(margins.continuity_rating(entry, .5, 'games'), (30. + k * .75) / (2 + k * .5))
+        self.assertAlmostEqual(margins.continuity_rating(entry, 1., 'games'), entry['rating'])
+        self.assertEqual(margins.continuity_rating(dict(rating=2., games=3, prior=0.), .2, 'prior'), 2.)
+        self.assertEqual(margins.continuity_rating(dict(rating=0., games=0, prior=1.), 0., 'games'), 0.)
+        with self.assertRaises(ValueError):
+            margins.continuity_rating(entry, .5, 'other')
+
+    def test_blend_applies_continuity_only_when_switched_on(self):
+        ratings = dict(H=dict(rating=3., games=0, prior=3.), A=dict(rating=-1., games=0, prior=-1.))
+        continuity = dict(H=.5, A=1.)
+        self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'A', continuity),
+                         margins.blended_location(6., 2., ratings, 'H', 'A'))
+        with mock.patch.object(margins, 'CONTINUITY_MODE', 'prior'):
+            _, rating = margins.blended_location(6., 2., ratings, 'H', 'A', continuity)
+        self.assertAlmostEqual(rating, 2. + 1.5 + 1.)
 
 
 class MarginEventTests(unittest.TestCase):

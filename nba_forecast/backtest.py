@@ -26,7 +26,8 @@ from zoneinfo import ZoneInfo
 
 from .calibration import minute_bucket, two_tailed_quantiles
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
-from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, team_ratings
+from .injury_parser import person_key
+from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, roster_continuity, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
 from .runner_release import package_digest
 from .schedule import atomic_json, canonical
@@ -152,11 +153,35 @@ def _availability(counts, roster, rows):
         counts[key][1] += p['player_id'] in played
 
 
-def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None):
+def _previous_season(label):
+    start = int(label[:4]) - 1
+    return f'{start}-{str(start + 1)[2:]}'
+
+
+def _final_sample(game):
+    return dict(game_time=game['game_time'], home_team_id=game['home_team_id'], away_team_id=game['away_team_id'],
+                home_points=game['team_stats'][game['home_team_id']]['pts'],
+                away_points=game['team_stats'][game['away_team_id']]['pts'])
+
+
+def season_minutes(history):
+    """Minutes by season, team and name key, for roster continuity across the seasons' ID schemes."""
+    minutes = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    for r in history:
+        if (r.get('minutes') or 0) > 0:
+            minutes[r['season']][r['team_id']][person_key(r['name'])] += r['minutes']
+    return minutes
+
+
+def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None,
+           earlier_finals=(), earlier_minutes=None):
     """Forecast each evaluation game from earlier game days only.
 
     ``injuries`` maps game IDs to their anchor report (``injury_history``); a
-    game without one keeps every box-score player available.
+    game without one keeps every box-score player available. ``earlier_finals``
+    are earlier seasons' games, which seed the team ratings' last-season prior
+    as production's window does; ``earlier_minutes`` (``season_minutes``) gives
+    each team's previous-season minutes for roster continuity.
     """
     home_of = {r['game_id']: r['home_team_id'] for r in records}
     by_game = defaultdict(list)
@@ -172,7 +197,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     players, teams, games, skipped, prior = [], [], [], defaultdict(int), []
     prior_days = []  # (day, rows) in order, so the history before a game is a prefix.
     margin_days = []  # (day, final home margins), the same way.
-    finals = []  # (day, final sample) for the team ratings, at most the production window.
+    finals = [(_day(g['game_time']), _final_sample(g)) for g in earlier_finals]  # (day, final sample) for the team ratings.
     rating_cache = {}
     residual_days = []  # (day, signed standardized residuals, game IDs) of earlier played forecasts.
     interval_cache = {}
@@ -219,6 +244,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 calibrated = interval_cache[day]
                 actual = {r['player_id']: r for r in scored}
                 totals = defaultdict(lambda: dict(projected=0., count=0, covered=0.))
+                expected = defaultdict(lambda: defaultdict(float))  # team -> name key -> weighted expected minutes
                 residuals = []
                 for p in result['predictions']:
                     a = actual[p['player_id']]
@@ -240,6 +266,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                         t = totals[p['team_id']]
                         weight = 1.0 if probability is None else probability
                         t['projected'] += weight * p['points_mean']; t['count'] += 1; t['covered'] += a['pts']
+                        expected[p['team_id']][person_key(p['name'])] += weight * p['expected_minutes']
                 if residual_days and residual_days[-1][0] == day:
                     residual_days[-1][1].extend(residuals); residual_days[-1][2].add(game['game_id'])
                 else:
@@ -262,9 +289,12 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                         edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
                         rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
                     edge, ratings = rating_cache[day]
+                    previous = (earlier_minutes or {}).get(_previous_season(game['season']), {})
+                    continuity = {t: roster_continuity(expected[t], previous.get(t, {}))
+                                  for t in (g['home_team_id'], g['away_team_id'])}
                     location, _ = blended_location(
                         totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected'],
-                        edge, ratings, g['home_team_id'], g['away_team_id'])
+                        edge, ratings, g['home_team_id'], g['away_team_id'], continuity)
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
                     games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
                                   _home_win_probability(location, sd) if sd else None])
@@ -274,9 +304,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 if listed[0] == 'out':
                     reported_out[pid].append((day, game['game_id']))
         final_margin = game['team_stats'][game['home_team_id']]['pts'] - game['team_stats'][game['away_team_id']]['pts']
-        finals.append((day, dict(game_time=game['game_time'], home_team_id=game['home_team_id'],
-                                 away_team_id=game['away_team_id'], home_points=game['team_stats'][game['home_team_id']]['pts'],
-                                 away_points=game['team_stats'][game['away_team_id']]['pts'])))
+        finals.append((day, _final_sample(game)))
         if margin_days and margin_days[-1][0] == day:
             margin_days[-1][1].append(final_margin)
         else:
@@ -670,9 +698,13 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
     rows = dict(version=VERSION, player_fields=list(PLAYER_FIELDS), team_fields=list(TEAM_FIELDS), game_fields=list(GAME_FIELDS),
                 players=[], teams=[], games=[])
     parts, dates, totals, skipped = [], {}, dict(total=0, evaluated=0), defaultdict(int)
-    for season in seasons:
+    minutes = season_minutes([r for season in seasons for r in season['history']])
+    for i, season in enumerate(seasons):
+        # Earlier seasons seed the ratings' prior; only a game's previous season is used, all of it in the past.
+        earlier = sorted((g for s in seasons[:i] for g in s['records']), key=lambda g: g['game_time'])
         replayed = replay(season['history'], season['records'], as_of, warmup_fraction=warmup_fraction, limit=limit,
-                          progress=progress, injuries=season.get('injuries'))
+                          progress=progress, injuries=season.get('injuries'), earlier_finals=earlier,
+                          earlier_minutes=minutes)
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})

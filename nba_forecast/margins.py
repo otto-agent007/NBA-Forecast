@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
+import os
 from statistics import covariance, fmean, variance
 
 from .totals import game_totals
@@ -50,6 +51,11 @@ CALIBRATED_LIMITATION = ('Location and scale were fitted on genuinely saved preg
 RATING_WEIGHT = PARAMETERS['rating_weight']
 RATING_PRIOR_GAMES = PARAMETERS['rating_prior_games']
 RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
+# Experiment only (branch exp/roster-continuity): how a team's roster continuity
+# discounts last season's results. 'off' ignores it, 'prior' shrinks last season's
+# average toward zero, 'games' spends fewer pseudo-games on it so this season's
+# results count sooner. Production passes no continuity, so it is unaffected.
+CONTINUITY_MODE = os.environ.get('NBA_FORECAST_RATING_CONTINUITY', 'off')
 
 
 def _season(time):
@@ -84,11 +90,48 @@ def team_ratings(samples, as_of):
     return ratings
 
 
-def blended_location(player_sum, home_edge, ratings, home, away):
-    """The margin location and its team-rating part, or the player sum alone without both ratings."""
+CONTINUITY_FULL_MINUTES = 1000.  # a third of a rotation season; a round value, not fitted
+
+
+def roster_continuity(projected, previous):
+    """The share of a team's projected minutes that go to players who played for it last season.
+
+    ``projected`` maps players to this game's expected minutes, ``previous`` to
+    their minutes for the same team last season. A player earns full credit at
+    CONTINUITY_FULL_MINUTES, so arrivals and players who missed last season
+    (Haliburton in 2025-26) both lower it; 1.0 is last season's rotation. None
+    without minutes on either side.
+    """
+    now = math.fsum(projected.values())
+    if now <= 0 or not previous:
+        return None
+    return math.fsum(m / now * min(1., previous.get(p, 0.) / CONTINUITY_FULL_MINUTES) for p, m in projected.items())
+
+
+def continuity_rating(entry, continuity, mode=None):
+    """A team rating whose last-season part is discounted by roster continuity (see CONTINUITY_MODE)."""
+    mode = CONTINUITY_MODE if mode is None else mode
+    if continuity is None or mode == 'off' or not entry['prior']:
+        return entry['rating']
+    n, k = entry['games'], RATING_PRIOR_GAMES
+    current = entry['rating'] * (n + k) - k * entry['prior']
+    if mode == 'prior':
+        return (current + k * continuity * entry['prior']) / (n + k)
+    if mode == 'games':
+        return (current + k * continuity * entry['prior']) / (n + k * continuity) if n + k * continuity > 0 else 0.
+    raise ValueError(f'Unknown continuity mode {mode!r}')
+
+
+def blended_location(player_sum, home_edge, ratings, home, away, continuity=None):
+    """The margin location and its team-rating part, or the player sum alone without both ratings.
+
+    ``continuity`` optionally maps team IDs to ``roster_continuity``.
+    """
     if home not in ratings or away not in ratings or not _finite(home_edge):
         return player_sum, None
-    rating = home_edge + ratings[home]['rating'] - ratings[away]['rating']
+    continuity = continuity or {}
+    rating = (home_edge + continuity_rating(ratings[home], continuity.get(home))
+              - continuity_rating(ratings[away], continuity.get(away)))
     return (1 - RATING_WEIGHT) * player_sum + RATING_WEIGHT * rating, rating
 
 
