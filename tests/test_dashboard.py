@@ -128,7 +128,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(len(result['players']),30)
             self.assertEqual(len(result['games'][0]['forecast']['predictions']),2)
             total=result['games'][0]['forecast']['totals']
-            self.assertEqual(total['schema_version'],4)
+            self.assertEqual(total['schema_version'],5)
             self.assertEqual(result['games'][0]['forecast']['saved_totals'],f['game_totals'][0])
             self.assertEqual(len(total['teams']),2)
             self.assertAlmostEqual(total['points_mean'],30)

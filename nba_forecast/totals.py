@@ -13,12 +13,16 @@ RESIDUAL_MIN_PROJECTED = 8
 # Withheld players whose only reasons are missing evidence are covered by the
 # residual: whatever minutes they get are among the unallocated ones.
 RESIDUAL_COVERED_FLAGS = {'cold_start', 'no_scoring_opportunity_evidence', 'team_minutes_unresolved'}
+# Schema 5: a reported tag (probable through doubtful) only lowers the chance that
+# such a bench player takes any of those minutes, so it no longer blocks the total.
+TAGGED_COVERED_FLAGS = RESIDUAL_COVERED_FLAGS | {'availability_questionable'}
 
 
-def game_totals(game, predictions, *, schema_version=4, lineups=None):
+def game_totals(game, predictions, *, schema_version=5, lineups=None):
     """Team and game point sums. Schema 3 weights each projection by its participation
-    probability; schema 4 also scores unallocated minutes at the replacement rate."""
-    if type(schema_version) is not int or schema_version not in (1,2,3,4):
+    probability; schema 4 also scores unallocated minutes at the replacement rate;
+    schema 5 also covers tagged bench players without evidence."""
+    if type(schema_version) is not int or schema_version not in (1,2,3,4,5):
         raise ValueError('Unsupported game totals schema version')
     def weight(p):
         if schema_version<3:return 1.
@@ -45,10 +49,12 @@ def game_totals(game, predictions, *, schema_version=4, lineups=None):
         withheld=sorted(p['player_id'] for p in rows if p['status'] not in ('projected','out'))
         def bench(p):
             return (p['player_id'] not in starters and p.get('projected_starter') is not True
-                    and p.get('components',{}).get('availability',{}).get('status')=='available')
+                    and p.get('components',{}).get('availability',{}).get('status')
+                    in (('available','questionable') if schema_version>=5 else ('available',)))
         if schema_version>=4:
+            covered=TAGGED_COVERED_FLAGS if schema_version>=5 else RESIDUAL_COVERED_FLAGS
             cold=sorted(p['player_id'] for p in rows if p['player_id'] in withheld and bench(p)
-                and p.get('flags') and set(p['flags'])<=RESIDUAL_COVERED_FLAGS)
+                and set(p.get('flags',[]))-{'availability_questionable'} and set(p['flags'])<=covered)
         else:
             cold=sorted(p['player_id'] for p in rows if p['player_id'] in withheld and bench(p)
                 and set(p.get('flags',[]))=={'cold_start'}

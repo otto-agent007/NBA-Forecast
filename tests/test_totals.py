@@ -63,10 +63,31 @@ class TotalsTests(unittest.TestCase):
             if edit in ('questionable','unknown'):candidate['components']['availability']['status']=edit
             elif edit=='played':candidate['components']['history']['played_games']=1
             else:candidate['flags'].append('new_team_role_unobserved')
-            if edit!='played':
+            if edit not in ('played','questionable'):
                 self.assertEqual(game_totals(GAME,predictions()+[candidate])['status'],'partial',edit)
             # Schema 3 also required zero played games; schema 4 covers evidence-only withholding regardless.
             self.assertEqual(game_totals(GAME,predictions()+[candidate],schema_version=3)['status'],'partial',edit)
+            if edit=='questionable':
+                self.assertEqual(game_totals(GAME,predictions()+[candidate],schema_version=4)['status'],'partial',edit)
+                self.assertEqual(game_totals(GAME,predictions()+[candidate])['status'],'complete',edit)
+
+    def test_tagged_bench_players_without_evidence_are_covered_from_schema_5(self):
+        # Indiana and Brooklyn, 2026-10-25: two questionable rookies withheld the whole margin under schema 4.
+        tagged=dict(player_id='rookie',name='Rookie',game_id='g',team_id='A',status='needs_review',
+            points_mean=None,expected_minutes=None,flags=['availability_questionable','cold_start'],
+            components={'history':{'played_games':0},'availability':{'status':'questionable'}})
+        team=game_totals(GAME,predictions()+[tagged])['teams'][0]
+        self.assertEqual((team['status'],team['cold_start_player_ids'],team['unresolved_player_ids']),('complete',['rookie'],[]))
+        self.assertAlmostEqual(team['points_mean'],100.05)
+        self.assertEqual(game_totals(GAME,predictions()+[tagged],schema_version=4)['status'],'partial')
+        for edit in ('starter','lineup','unknown','role','tag_only'):
+            candidate=deepcopy(tagged);lineups=None
+            if edit=='starter':candidate['projected_starter']=True
+            elif edit=='lineup':lineups={'A':{'player_ids':['rookie']}}
+            elif edit=='unknown':candidate['components']['availability']['status']='unknown'
+            elif edit=='role':candidate['flags'].append('new_team_role_unobserved')
+            else:candidate['flags']=['availability_questionable']
+            self.assertEqual(game_totals(GAME,predictions()+[candidate],lineups=lineups)['status'],'partial',edit)
 
     def test_out_player_is_known_zero_and_missing_minutes_are_disclosed(self):
         rows=predictions()+[dict(player_id='out',name='Out',game_id='g',team_id='A',
@@ -107,7 +128,10 @@ class TotalsTests(unittest.TestCase):
             if edit=='questionable':candidate['components']['availability']['status']='questionable'
             elif edit=='starter':candidate['projected_starter']=True
             else:candidate['flags'].append('new_team_role_unobserved')
-            self.assertEqual(game_totals(GAME,rows+[candidate])['teams'][0]['status'],'partial',edit)
+            # Schema 5 covers the questionable case (test_tagged_bench_players_without_evidence_are_covered_from_schema_5).
+            self.assertEqual(game_totals(GAME,rows+[candidate],schema_version=4)['teams'][0]['status'],'partial',edit)
+            if edit!='questionable':
+                self.assertEqual(game_totals(GAME,rows+[candidate])['teams'][0]['status'],'partial',edit)
 
     def test_missing_team_is_unavailable_and_combined_total_stays_null(self):
         total=game_totals(GAME,[p for p in predictions() if p['team_id']=='A'])

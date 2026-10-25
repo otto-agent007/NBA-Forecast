@@ -44,8 +44,11 @@ when at least eight players are projected; with fewer the deficit stays a
 disclosed partial. A withheld roster player outside the projected starting five
 whose only reasons are missing evidence (`cold_start`,
 `no_scoring_opportunity_evidence`) and whose sourced status is available is
-covered by that residual and does not make the total partial. Player
-projections are never raised for the residual. Earlier schemas (1–3) keep their
+covered by that residual and does not make the total partial. Schema 5 covers
+such a player when they carry a reported tag (probable through doubtful) too:
+the tag only lowers the chance they take any of those minutes. Under schema 4,
+two questionable Indiana and Brooklyn rookies withheld the 2026-10-25 margin. Player
+projections are never raised for the residual. Earlier schemas (1–4) keep their
 saved semantics. Projected minutes, residual minutes and review counts accompany
 each team. A team with no supported projections and a game missing either team
 estimate stay blank. Player searches, filters and sorting never change totals,

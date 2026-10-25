@@ -120,7 +120,8 @@ week-one forecast.
 - Unallocated minutes enter team totals at the replacement rate when at
   least eight players are projected (totals schema 4). Player projections are
   never raised for it. Withheld players whose only reasons are missing
-  evidence are covered by the residual, not blocking.
+  evidence are covered by the residual, not blocking; from schema 5 that
+  includes bench players with a reported tag (questionable rookies).
 - Team possession budget, bounds .85–1.10, raising only with eight projected.
   The replay's own factor distribution was centred at .992 with 0.2% clipping
   either side; the small negative bias it introduced is real and accepted.
