@@ -17,7 +17,7 @@ from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
 from .store import save_run,evaluate_run,performance_report
 from .benchmarks import benchmark_report
-from .injury_capture import capture_daily,record_check
+from .injury_capture import capture_daily,record_check,reported_unavailable
 from .preflight import run_preflight,PREFLIGHT_VERSION
 from .validation import parse_time,validate_history,validate_inputs,_source
 from .enhancements import load_active,prepare
@@ -378,6 +378,7 @@ def _tick(folder,history,report):
     report['deferred_jobs']=[dict(game_id=j['game_id'],stage=j['stage'],failed_at=failed[j['key']]['at'])
                              for j in jobs if j['key'] not in state['jobs'] and deferred(j)]
     needed=[j for j in jobs if j['key'] not in state['jobs'] and not deferred(j)]
+    parsed_reports={}  # earlier games' anchor reports, parsed once per tick
     for job in needed:
         try:
             game=by_id[job['game_id']]
@@ -406,6 +407,7 @@ def _tick(folder,history,report):
                 snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
                 report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
             usable=eligible_history(snapshot,history)
+            snapshot['reported_unavailable']=reported_unavailable(folder,schedule,roster,usable,game,parsed_reports)
             prior_path=folder/'historical-priors.json'
             if prior_path.exists():
                 book=json.loads(prior_path.read_text());teams={game['home_team_id'],game['away_team_id']}

@@ -101,3 +101,38 @@ class DailyCaptureTests(unittest.TestCase):
             self.assertEqual(json.loads((root/'final.json').read_text())['checked_at'],check['checked_at'])
             self.assertEqual(json.loads((root/'latest.json').read_text())['checked_at'],later['checked_at'])
             self.assertEqual(len(list((root/'records').glob('*.json'))),2)
+
+
+class ReportedUnavailableTests(unittest.TestCase):
+    def test_earlier_final_checkpoints_give_each_player_his_reported_out_games(self):
+        from nba_forecast.data import archive_payload
+        from nba_forecast.injury_capture import record_check, reported_unavailable
+        url='https://ak-static.cms.nba.com/referee/injury/Injury-Report_2026-10-21_06_30PM.pdf'
+        schedule={'season':'2026-27','games':[
+            dict(game_id='g1',start_time='2026-10-21T23:00:00Z',home_team_id='H',away_team_id='A',home_name='Home Team',
+                 away_name='Away Team',home_tricode='HOM',away_tricode='AWY'),
+            dict(game_id='g2',start_time='2026-10-23T23:00:00Z',home_team_id='H',away_team_id='A',home_name='Home Team',
+                 away_name='Away Team',home_tricode='HOM',away_tricode='AWY')]}
+        roster={'players':[dict(player_id='p1',name='First Player',team_id='H'),dict(player_id='p2',name='Second Player',team_id='A')]}
+        text='''Injury Report: 10/21/26 06:30 PM
+Game Date    Game Time    Matchup   Team         Player Name       Current Status   Reason
+10/21/2026   07:00 (ET)   AWY@HOM   Away Team    Player, Second    Out              Injury/Illness - Knee
+                                    Home Team    Player, First     Questionable     Injury/Illness - Ankle
+Page 1 of 1
+'''
+        with tempfile.TemporaryDirectory() as d:
+            meta=archive_payload(b'%PDF-1.4 g1',url,'2026-10-21T22:31:00+00:00',Path(d)/'raw')
+            check={'checked_at':'2026-10-21T22:31:00+00:00','games':[dict(
+                game_id='g1',start_time='2026-10-21T23:00:00Z',phase='final_review',report_status='captured_pending_review',
+                anchor_report=dict(source_url=url,published_at='2026-10-21T22:30:00+00:00',
+                                   retrieved_at='2026-10-21T22:31:00+00:00',sha256=meta['sha256']))]}
+            record_check(d,check,'final')
+            history=[dict(game_id='g1',team_id='H',season='2026-27'),dict(game_id='g1',team_id='A',season='2026-27'),
+                     dict(game_id='g0',team_id='H',season='2026-27')]  # g0 has no checkpoint
+            parsed={}
+            with patch('nba_forecast.injury_parser.pdf_text',return_value=text) as read:
+                result=reported_unavailable(d,schedule,roster,history,schedule['games'][1],parsed)
+                again=reported_unavailable(d,schedule,roster,history,schedule['games'][1],parsed)
+        self.assertEqual(result,{'p2':['g1']})  # out counts; questionable does not
+        self.assertEqual(again,result)
+        self.assertEqual(read.call_count,1)  # parsed once per tick

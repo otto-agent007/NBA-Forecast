@@ -80,7 +80,8 @@ percentages to established attempts so a bad shooting night alone cannot erase
 the baseline. No unobserved rookie production and no automatic teammate-usage
 redistribution. Each projected player carries a participation probability:
 his rate of appearing with positive minutes over the team's last ten games
-since he joined, shrunk toward a 2025-26 role prior, and scaled by a reported
+since he joined, leaving out games his official injury report listed him out
+of, shrunk toward a 2025-26 role prior, and scaled by a reported
 questionable-type status. Player projections stay conditional on playing;
 the 240-minute budget and team totals weight them by that probability; minutes
 the rotation leaves unallocated enter the team total at a replacement scoring rate.

@@ -49,7 +49,7 @@ from .totals import RESIDUAL_MIN_PROJECTED, game_totals
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
-MODEL_VERSION = "regular-season-baseline-0.4.6"
+MODEL_VERSION = "regular-season-baseline-0.4.7"
 NUMERIC_FIELDS = (
     "expected_minutes", "expected_fga", "expected_fta", "expected_tov",
     "expected_reb", "expected_ast", "expected_fg3m", "expected_stl", "expected_blk",
@@ -365,21 +365,27 @@ def _opponent_proxy(team_id, complete):
             "caution": "Not possession-adjusted defense; sensitive to schedule and pace."}
 
 
-def _participation(player, rows, team_games, role_minutes):
+def _participation(player, rows, team_games, role_minutes, unavailable=frozenset()):
     """Probability the player appears with positive minutes, from the team's last ten games.
 
     Team games before the player's first appearance with the team do not count
-    against him; absence from a box score does. A reported questionable-type
-    status scales the role rate. The result weights team totals and the
-    240-minute budget; player projections stay conditional on playing.
+    against him; absence from a box score does. Games his official injury report
+    listed him out of (``unavailable``) do not count either way: the current
+    report already says whether he is out, so the rate is his chance of playing
+    when available, not a second count of the same injury. A reported
+    questionable-type status scales the role rate. The result weights team
+    totals and the 240-minute budget; player projections stay conditional on
+    playing.
     """
     team = player["team_id"]
     appearances = {r["game_id"]: r for r in rows if r["team_id"] == team}
     if len(team_games) < PARTICIPATION_MIN_TEAM_GAMES:
         team_games = []
     first = next((i for i, (_, gid) in enumerate(team_games) if gid in appearances), None)
-    start = max(len(team_games) - PARTICIPATION_WINDOW, first) if first is not None else len(team_games)
-    window = [gid for _, gid in team_games[start:]]
+    since = [gid for _, gid in team_games[first:]] if first is not None else []
+    window = [gid for gid in since if gid not in unavailable][-PARTICIPATION_WINDOW:]
+    # Reported-out games inside the span the window reaches back over.
+    excluded = [gid for gid in (since[since.index(window[0]):] if window else since) if gid in unavailable]
     played = sum(1 for gid in window if gid in appearances and appearances[gid]["status"] == "played" and appearances[gid]["minutes"] > 0)
     prior = next(rate for limit, rate in PARTICIPATION_PRIORS if role_minutes < limit)
     role_rate = (played + PARTICIPATION_PSEUDO_GAMES * prior) / (len(window) + PARTICIPATION_PSEUDO_GAMES)
@@ -387,7 +393,8 @@ def _participation(player, rows, team_games, role_minutes):
     factor = STATUS_PARTICIPATION.get(label, .5) if player["status"] == "questionable" else 1.0
     return {"probability": min(1.0, max(0.0, role_rate * factor)), "role_rate": role_rate, "status_factor": factor,
             "reported_status": player.get("reported_status"), "played": played, "games": len(window),
-            "window_game_ids": window, "prior": prior, "pseudo_games": PARTICIPATION_PSEUDO_GAMES,
+            "window_game_ids": window, "reported_out_game_ids": excluded,
+            "prior": prior, "pseudo_games": PARTICIPATION_PSEUDO_GAMES,
             "role_minutes": role_minutes, "method": "shrunk_recent_participation_rate",
             "basis": "played with positive minutes in the team's last ten current-season games since joining "
                      "(role prior alone before three team games); 2025-26 role priors; reported status scales the rate"}
@@ -641,7 +648,8 @@ def _baseline_forecast(snapshot, history):
             p['reason']=('Conditional on playing: listed by the new team without a positive-minute appearance yet, '
                          'so the role comes from earlier evidence and the participation probability from the listings.')
             p['flags'].append('new_team_role_unobserved')
-        participation = _participation(player, rows, team_games.get(team, []), minutes)
+        participation = _participation(player, rows, team_games.get(team, []), minutes,
+                                       frozenset((snapshot.get("reported_unavailable") or {}).get(pid, ())))
         p["participation_probability"] = participation["probability"]
         p["components"]["participation"] = participation
         if participation["probability"] < .5:

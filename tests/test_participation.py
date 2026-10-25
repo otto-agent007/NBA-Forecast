@@ -50,6 +50,25 @@ class ParticipationEstimateTests(unittest.TestCase):
         self.assertEqual((early['games'], early['played']), (2, 1), 'early listings count from the first one')
         self.assertAlmostEqual(early['probability'], (1 + PARTICIPATION_PSEUDO_GAMES * .82) / (2 + PARTICIPATION_PSEUDO_GAMES))
 
+    def test_games_he_was_reported_out_of_do_not_count_either_way(self):
+        games = team_games(12)
+        injured = rows([0, 1, 2, 3, 4, 5, 9, 10, 11], dnp_games=[6, 7, 8])
+        before = _participation(player(), injured, games, 30)
+        self.assertEqual((before['played'], before['games']), (7, 10))  # the injury counts against him
+        after = _participation(player(), injured, games, 30, frozenset({'g6', 'g7', 'g8'}))
+        self.assertEqual((after['played'], after['games']), (9, 9))
+        self.assertEqual(after['reported_out_game_ids'], ['g6', 'g7', 'g8'])
+        self.assertEqual(after['window_game_ids'], ['g0', 'g1', 'g2', 'g3', 'g4', 'g5', 'g9', 'g10', 'g11'])
+        # An absent player (no box-score row) reported out is excluded the same way.
+        absent = _participation(player(), rows([0, 1, 2, 3, 4, 5, 9, 10, 11]), games, 30, frozenset({'g6', 'g7', 'g8'}))
+        self.assertEqual((absent['played'], absent['games']), (9, 9))
+        # With nothing reported the window is the old one.
+        self.assertEqual(_participation(player(), injured, games, 30, frozenset()), before)
+        snap = dict(snapshot([player()]), reported_unavailable={'p': ['g6', 'g7', 'g8']})
+        data = rows([0, 1, 2, 3, 4, 5, 9, 10, 11], dnp_games=[6, 7, 8])
+        p = forecast(snap, data)['predictions'][0]
+        self.assertEqual(p['components']['participation']['reported_out_game_ids'], ['g6', 'g7', 'g8'])
+
     def test_last_season_does_not_count_against_a_player(self):
         snap = snapshot([player(), player('q')])
         data = rows(range(10), pid='p', season='2024-25') + rows([0, 1, 2], pid='p') + rows(range(10), pid='q', season='2024-25') + rows([0, 1, 2], pid='q')

@@ -171,7 +171,10 @@ model status's outcome summary current.
 
 Every projected player has a `participation_probability`: the share of the
 team's last ten games (since he joined it) in which he appeared with positive
-minutes, shrunk by three pseudo-games toward the 2025-26 rate for his role
+minutes, leaving out games his official injury report listed him out of (each
+earlier game's final-stage checkpoint, `injuries/games/<id>/final.json`, parsed
+again against the current roster; a game without one counts as before), shrunk
+by three pseudo-games toward the 2025-26 rate for his role
 (18% under 10 minutes a game, 70% for 10–20, 79% for 20–28, 82% above), then
 scaled by a reported status (probable 0.9, questionable 0.55, doubtful 0.15,
 day-to-day 0.5). A team's probabilities are scaled into the range the rules

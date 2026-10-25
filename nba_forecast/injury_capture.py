@@ -50,3 +50,36 @@ def record_check(directory,check,stage):
             # A rescheduled game gets its own checkpoint; old records remain archived.
             if old is None or old['games'][0]['start_time']!=game['start_time']:
                 atomic_json(final,payload)
+
+
+def reported_unavailable(directory,schedule,roster,history,game,parsed=None):
+    """Earlier games each of a game's players was reported out of, for the participation window.
+
+    Each earlier current-season game in ``history`` contributes its final-stage
+    checkpoint (``final.json``, the T-minus-30 anchor report), parsed with the
+    production parser against the current roster. A game without one, a report
+    that fails to parse and a name that does not join contribute nothing, which
+    leaves that game counted as before. ``parsed`` caches reports by hash.
+    """
+    from .injury_parser import parse_report,pdf_text
+    folder=Path(directory);teams={game['home_team_id'],game['away_team_id']}
+    parsed={} if parsed is None else parsed
+    earlier=sorted({r['game_id'] for r in history if r['team_id'] in teams and r['season']==schedule['season']})
+    result={}
+    for gid in earlier:
+        path=folder/'injuries/games'/gid/'final.json'
+        if not path.exists():continue
+        check=json.loads(path.read_text())
+        evidence=next((g.get('anchor_report') for g in check.get('games',[]) if g.get('game_id')==gid),None)
+        if not evidence:continue
+        if evidence['sha256'] not in parsed:
+            try:
+                text=pdf_text(folder/'raw'/(evidence['sha256']+'.pdf'),evidence['sha256'])
+                parsed[evidence['sha256']]=parse_report(text,schedule,roster,evidence)
+            except (ValueError,OSError):
+                parsed[evidence['sha256']]=None
+        report=parsed[evidence['sha256']]
+        for row in (report or {}).get('rows',[]):
+            if row['game_id']==gid and row['status']=='out' and row['team_id'] in teams:
+                result.setdefault(row['player_id'],[]).append(gid)
+    return dict(sorted(result.items()))

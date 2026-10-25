@@ -17,7 +17,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-25-two-seasons
+  --reference datasets/backtest-2026-10-25-reported-out
 ```
 
 It replays the 2024-25 and 2025-26 seasons, each with the official injury

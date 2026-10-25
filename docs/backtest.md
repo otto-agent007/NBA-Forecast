@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-25-two-seasons
+  --reference datasets/backtest-2026-10-25-reported-out
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -109,9 +109,8 @@ reference (`datasets/backtest-2026-10-25-two-seasons/scoreboard.json`,
 - Player points bias −0.39 → +0.57 and team points bias −0.92 → −1.91: worse.
   Once outs are known, players who play are over-projected while teams come
   out low: mean P(plays) 0.78 against 0.84 who played. The participation rate
-  still counts a player's injury absences against him, so a player back from
-  injury, or one with no report row, is down-weighted twice. Live forecasts read
-  the same reports, so this bias is live too; it is the next model item.
+  still counted a player's injury absences against him, so a player back from
+  injury was down-weighted twice; the reported-out reference fixes that.
 
 The replay also now takes team points and the margin's player sum from the
 model's own `game_totals` (schema 4: the weighted player sum plus unallocated
@@ -139,6 +138,23 @@ the code before and after each 2026-10-24 change, without injury reports:
 On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
 (ESPN BET for every game) and the naive point-differential rating's 11.50; winner
 Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-25 (reported-out games)
+
+`datasets/backtest-2026-10-25-reported-out/`: model `regular-season-baseline-0.4.7`.
+The participation rate no longer counts games a player's official report listed
+him out of (`model._participation`, `unavailable`): the current report already
+says whether he is out, so the rate is his chance of playing when available.
+The replay passes each player's earlier reported-out games in
+`snapshot['reported_unavailable']`; live ticks build the same map from each
+earlier game's final-stage checkpoint (`injury_capture.reported_unavailable`).
+
+Against the two-season reference, pooled: points −0.074 ± 0.010, minutes −0.130
+± 0.021, participation Brier −0.0174 ± 0.0018 (0.103 → 0.086), interval score
+−0.054 ± 0.044, points bias +0.50 → +0.03: improved; team points, margin and
+winner within noise (team points bias −1.66 → −1.54). Both seasons improve on
+their own. Points MAE 4.58 → 4.51, minutes 4.97 → 4.84; mean P(plays) 0.82
+against 0.84 who played.
 
 ## Reference: 2026-10-25 (two seasons, injury reports)
 

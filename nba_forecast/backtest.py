@@ -177,6 +177,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     residual_days = []  # (day, signed standardized residuals, game IDs) of earlier played forecasts.
     interval_cache = {}
     availability = defaultdict(lambda: [0, 0])  # status -> [players, played]
+    reported_out = defaultdict(list)  # player -> [(day, game ID)] his anchor reports listed him out of
     reported_games = 0
     for index, game in enumerate(ordered):
         rows = by_game.get(game['game_id'], [])
@@ -194,8 +195,11 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 if injuries is not None:
                     reported_games += bool(report and report.get('report'))
                     _availability(availability, roster, scored)
+                unavailable = {p['player_id']: [gid for d, gid in reported_out[p['player_id']] if d < day]
+                               for p in roster if reported_out.get(p['player_id'])}
                 snapshot = dict(schema_version=1, as_of=as_of, season=game['season'], forecast_stage='preliminary',
                                 research_reconstruction=True, games=[g],
+                                reported_unavailable={k: v for k, v in unavailable.items() if v},
                                 roster=dict(players=roster, observed_at=as_of, source_url=rows[0]['source_url'],
                                             complete=False, team_ids=[g['home_team_id'], g['away_team_id']]))
                 result = _baseline_forecast(snapshot, history_before)
@@ -264,6 +268,11 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
                     games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
                                   _home_win_probability(location, sd) if sd else None])
+        anchor = (injuries or {}).get(game['game_id'])
+        if anchor and anchor.get('report'):
+            for pid, listed in anchor['statuses'].items():
+                if listed[0] == 'out':
+                    reported_out[pid].append((day, game['game_id']))
         final_margin = game['team_stats'][game['home_team_id']]['pts'] - game['team_stats'][game['away_team_id']]['pts']
         finals.append((day, dict(game_time=game['game_time'], home_team_id=game['home_team_id'],
                                  away_team_id=game['away_team_id'], home_points=game['team_stats'][game['home_team_id']]['pts'],
