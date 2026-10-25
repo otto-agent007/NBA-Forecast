@@ -411,6 +411,17 @@ h3 {
   border-radius: 5px;
   background: white;
 }
+/* Wide stat tables keep a visible horizontal bar: desktop overlay scrollbars
+   hide until hovered, which made the columns past the viewport look missing. */
+.boxscore-scroll {
+  overflow-x: scroll;
+  scrollbar-width: auto;
+  scrollbar-color: #8fa3bf #e9eef5;
+  scrollbar-gutter: stable;
+}
+.boxscore-scroll::-webkit-scrollbar { height: 14px; background: #e9eef5; }
+.boxscore-scroll::-webkit-scrollbar-thumb { background: #8fa3bf; border-radius: 7px; border: 3px solid #e9eef5; }
+.boxscore-scroll::-webkit-scrollbar-thumb:hover { background: #6d84a6; }
 table {
   width: 100%;
   border-collapse: collapse;

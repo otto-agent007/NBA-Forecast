@@ -73,7 +73,7 @@ export default function PlayerTable({
           />
         </label>
       </div>
-      <p className="boxscore-hint">Projected boxscore · Scroll for shooting splits and all stats. MIN:SS is an estimate.</p>
+      <p className="boxscore-hint">Projected boxscore · Drag the bar below the table (or shift-scroll) for shooting splits and all stats; the player column stays put. MIN:SS is an estimate.</p>
       <div className="table-scroll boxscore-scroll" role="region" aria-label={`${title} scroll area`} tabIndex={0}>
         <table className="boxscore-table" aria-label={`${title} full boxscore`}>
           <thead>
