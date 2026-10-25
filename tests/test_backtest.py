@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import unittest.mock
 
-from nba_forecast import backtest
+from nba_forecast import backtest, margins
 from nba_forecast.model import STATUS_PARTICIPATION
 
 TEAMS = ('A', 'B', 'C', 'D')
@@ -234,6 +234,26 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual([s['label'] for s in board['seasons']], ['2024-25', '2025-26'])
         self.assertIn('season 2024-25:', text)
         self.assertIn('(pooled over seasons)', text)
+
+    def test_later_seasons_rate_teams_with_the_earlier_seasons_prior_and_continuity(self):
+        def earlier(value):
+            return value.replace('2026-', '2025-', 1)
+        before = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
+                       known_at=earlier(r['known_at'])) for r in self.records]
+        minutes = backtest.season_minutes([dict(r, season='2024-25') for r in self.history])
+        alone = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5)
+        seeded = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5,
+                                 earlier_finals=before, earlier_minutes=minutes)
+        with unittest.mock.patch.object(margins, 'CONTINUITY_MODE', 'prior'):
+            discounted = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5,
+                                         earlier_finals=before, earlier_minutes=minutes)
+        self.assertEqual(alone['players'], seeded['players'])  # only the margin location moves
+        self.assertEqual(seeded['players'], discounted['players'])
+        location = lambda run: [g[3] for g in run['games']]
+        self.assertNotEqual(location(alone), location(seeded))
+        self.assertNotEqual(location(seeded), location(discounted))
+        self.assertEqual(backtest._previous_season('2025-26'), '2024-25')
+        self.assertEqual(backtest._previous_season('2009-10'), '2008-09')
 
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
