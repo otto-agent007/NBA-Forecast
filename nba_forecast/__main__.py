@@ -111,13 +111,14 @@ def _parser():
     dedupe.add_argument('--directory', required=True, help='Operations directory holding forecast.sqlite')
     dedupe.add_argument('--output')
     backtest = sub.add_parser('backtest', help='Replay a season with the current model code and score it (docs/backtest.md)')
-    backtest.add_argument('--history', required=True, help='Normalized box-score history (.json or .json.gz)')
-    backtest.add_argument('--team-games', required=True, help='Reconciled team games (datasets/model-upgrade-*/team-games.json.gz)')
+    backtest.add_argument('--history', required=True, nargs='+', help='Normalized box-score history (.json or .json.gz), one per season')
+    backtest.add_argument('--team-games', required=True, nargs='+', help='Reconciled team games (datasets/model-upgrade-*/team-games.json.gz), one per season')
     backtest.add_argument('--output', required=True, help='New directory for scoreboard.json and rows.json.gz')
     backtest.add_argument('--reference', help='Directory of an earlier backtest to compare against')
     backtest.add_argument('--warmup-fraction', type=float, default=.3, help='Share of game dates used only as history')
     backtest.add_argument('--limit', type=int, help='Only the last N evaluation games (smoke runs)')
-    backtest.add_argument('--market', help='Closing lines for the replayed games (datasets/market-closing-*/closing-lines.json.gz)')
+    backtest.add_argument('--market', nargs='+', help='Closing lines for the replayed games (datasets/market-closing-*/closing-lines.json.gz), one per season')
+    backtest.add_argument('--injuries', nargs='+', help='Anchor injury reports for the replayed games (datasets/injury-reports-*/statuses.json.gz), one per season')
     backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
@@ -224,15 +225,24 @@ def main(argv=None):
             from .benchmarks import benchmark_report
             value=benchmark_report(args.db)
         elif args.command == 'backtest':
-            from .backtest import run_backtest, read_json as read_source, sha256_of, format_scoreboard
+            from .backtest import run_seasons, read_json as read_source, sha256_of, format_scoreboard
             from .market_history import read_lines
-            sources = {name: dict(path=str(path), sha256=sha256_of(path))
-                       for name, path in (('history', args.history), ('team_games', args.team_games), ('market', args.market))
-                       if path}
-            board = run_backtest(read_source(args.history), read_source(args.team_games), args.output,
-                                 reference=args.reference, warmup_fraction=args.warmup_fraction, limit=args.limit,
-                                 sources=sources, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True),
-                                 market=read_lines(args.market) if args.market else None)
+            from .injury_history import read_statuses
+            count = len(args.history)
+            for name in ('team_games', 'market', 'injuries'):
+                if getattr(args, name) is not None and len(getattr(args, name)) != count:
+                    raise ValueError(f'--{name.replace("_", "-")} needs one file per --history season')
+            seasons = []
+            for i in range(count):
+                paths = dict(history=args.history[i], team_games=args.team_games[i],
+                             market=args.market[i] if args.market else None,
+                             injuries=args.injuries[i] if args.injuries else None)
+                seasons.append(dict(history=read_source(paths['history']), records=read_source(paths['team_games']),
+                                    market=read_lines(paths['market']) if paths['market'] else None,
+                                    injuries=read_statuses(paths['injuries']) if paths['injuries'] else None,
+                                    sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
+            board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction,
+                                limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
             print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
             return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
         elif args.command == 'dedupe-histories':

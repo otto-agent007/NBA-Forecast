@@ -154,6 +154,85 @@ class BacktestTests(unittest.TestCase):
                                           market=echo)
         self.assertIn('closing line', backtest.format_scoreboard(board))
 
+    def test_injury_reports_set_each_games_statuses(self):
+        # Each rest day's report lists the resting bench player out and a starter questionable.
+        injuries = {}
+        for r in self.records:
+            day = int(r['game_id'][1:3])
+            evidence = dict(source_url=f'https://example.test/report-{day}', published_at=r['game_time'],
+                            retrieved_at='2026-02-01T00:00:00Z', sha256='0' * 64)
+            if day % 5 == 0:
+                statuses = {f'{t}8': ['out', 'Out'] for t in (r['home_team_id'], r['away_team_id'])}
+                statuses[r['home_team_id'] + '0'] = ['questionable', 'Questionable']
+                injuries[r['game_id']] = dict(report=evidence, statuses=statuses,
+                                              complete_team_ids=[r['home_team_id'], r['away_team_id']])
+            elif day % 5 == 1:
+                injuries[r['game_id']] = dict(report=evidence, statuses={}, complete_team_ids=[r['away_team_id']])
+        with tempfile.TemporaryDirectory() as d:
+            board = backtest.run_backtest(self.history, self.records, Path(d) / 'i', warmup_fraction=.5, as_of=AS_OF,
+                                          injuries=injuries)
+            rows = backtest.read_json(Path(d) / 'i' / 'rows.json.gz')
+        players = [dict(zip(backtest.PLAYER_FIELDS, p)) for p in rows['players']]
+        rested = [p for p in players if p['player_id'].endswith('8') and int(p['game_id'][1:3]) % 5 == 0]
+        self.assertTrue(rested)
+        self.assertTrue(all(p['expected_minutes'] is None for p in rested))  # out: no minutes drawn
+        home = {r['game_id']: r['home_team_id'] for r in self.records}
+        questionable = [p for p in players if p['player_id'] == home[p['game_id']] + '0'
+                        and int(p['game_id'][1:3]) % 5 == 0]
+        self.assertTrue(questionable)
+        self.assertTrue(all(p['participation_probability'] < .6 for p in questionable))
+        counts = board['games']['availability']['by_status']
+        self.assertEqual(counts['out']['played'], 0)
+        self.assertEqual(set(counts), {'out', 'questionable', 'not listed', 'no complete report'})
+        self.assertEqual(board['games']['availability']['games_with_report'],
+                         sum(1 for r in self.records[24:] if int(r['game_id'][1:3]) % 5 in (0, 1)))
+        self.assertIn('injury report', board['limitations'])
+        self.assertIn('injury reports:', backtest.format_scoreboard(board))
+        # Without a report every player stays available, as before.
+        self.assertEqual(backtest._roster([self.history[0]], None)[0]['status'], 'available')
+
+    def test_a_listed_player_missing_from_the_box_score_is_forecast_and_scored_as_sitting(self):
+        game = self.records[-1]
+        team = game['home_team_id']
+        history = [r for r in self.history if not (r['game_id'] == game['game_id'] and r['player_id'] == team + '1')]
+        evidence = dict(source_url='https://example.test/report', published_at=game['game_time'],
+                        retrieved_at='2026-02-01T00:00:00Z', sha256='0' * 64)
+        injuries = {game['game_id']: dict(report=evidence, complete_team_ids=[team],
+                                          statuses={team + '1': ['questionable', 'Doubtful', team]})}
+        with tempfile.TemporaryDirectory() as d:
+            board = backtest.run_backtest(history, self.records, Path(d) / 'a', warmup_fraction=.5, as_of=AS_OF,
+                                          injuries=injuries, limit=1)
+            rows = backtest.read_json(Path(d) / 'a' / 'rows.json.gz')
+        players = {p[1]: dict(zip(backtest.PLAYER_FIELDS, p)) for p in rows['players']}
+        sat = players[team + '1']
+        self.assertEqual((sat['actual_status'], sat['actual_minutes']), ('dnp', 0.))
+        self.assertLess(sat['participation_probability'], .3)  # doubtful
+        self.assertEqual(board['games']['availability']['by_status']['doubtful'], dict(players=1, played=0, play_rate=0.))
+
+    def test_seasons_replay_separately_and_pool_into_one_verdict(self):
+        def earlier(value):
+            return value.replace('2026-', '2025-', 1)
+        history = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
+                        known_at=earlier(r['known_at'])) for r in self.history]
+        records = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
+                        known_at=earlier(r['known_at'])) for r in self.records]
+        seasons = [dict(history=history, records=records, sources=dict(team_games='datasets/earlier/team-games.json.gz')),
+                   dict(history=self.history, records=self.records, sources=dict(team_games='datasets/later/team-games.json.gz'))]
+        with tempfile.TemporaryDirectory() as d:
+            board = backtest.run_seasons(seasons, Path(d) / 'both', warmup_fraction=.5, as_of=AS_OF)
+            again = backtest.run_seasons(seasons, Path(d) / 'again', warmup_fraction=.5, as_of=AS_OF,
+                                         reference=Path(d) / 'both')
+        one = self.board['metrics']['players']['all']
+        self.assertEqual(board['metrics']['players']['all']['n'], 2 * one['n'])  # the same season twice
+        self.assertEqual(board['games']['evaluated'], 48)
+        self.assertEqual([s['metrics']['players']['all']['n'] for s in board['seasons']], [one['n'], one['n']])
+        self.assertAlmostEqual(board['seasons'][1]['metrics']['players']['all']['points_mae'], one['points_mae'])
+        self.assertEqual(again['comparison']['verdict'], 'within_noise')
+        self.assertEqual([s['comparison']['points']['n'] for s in again['seasons']], [one['n'], one['n']])
+        text = backtest.format_scoreboard(again)
+        self.assertIn('season earlier:', text)
+        self.assertIn('(pooled over seasons)', text)
+
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
             backtest.run_backtest(self.history, self.records, self.folder.name + '/x', as_of='2026-01-10T00:00:00Z')

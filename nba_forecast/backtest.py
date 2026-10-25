@@ -61,6 +61,11 @@ LIMITATIONS = ('Rosters are the box score itself, all players available: no inju
                'is not forecast and DNP players still draw minutes. No prior-season aggregate priors, no '
                'archive-bound enhancements. Player metrics condition on positive participation. Team points '
                'use regulation-equivalent scores; margins and winners use final scores.')
+INJURY_LIMITATIONS = ('Rosters are the box score itself (active and inactive players); each game takes the statuses of '
+                      'the newest official injury report published by its T-minus-30 checkpoint, players it omits '
+                      'being available. No prior-season aggregate priors, no archive-bound enhancements. Player metrics '
+                      'condition on positive participation. Team points use regulation-equivalent scores; margins and '
+                      'winners use final scores.')
 
 
 def read_json(path):
@@ -102,10 +107,60 @@ def evaluation_games(records, warmup_fraction=.3):
     return ordered, [r for r in ordered if first is not None and _day(r['game_time']) >= first]
 
 
-def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None):
-    """Forecast each evaluation game from earlier game days only."""
+def _listed_absentees(rows, report, names):
+    """Did-not-play rows for players the report lists but the box score omits (some sources drop inactives)."""
+    if not report or not report.get('report'):
+        return []
+    present = {r['player_id'] for r in rows}
+    first = rows[0]
+    return [dict(player_id=pid, name=names.get(pid, pid), team_id=listed[2], game_id=first['game_id'], status='dnp',
+                 minutes=0., pts=0, source_url=report['report']['source_url'], known_at=report['report']['retrieved_at'])
+            for pid, listed in sorted(report['statuses'].items()) if pid not in present and len(listed) > 2]
+
+
+def _roster(rows, report):
+    """The box score's players, with the statuses the game's anchor report gave them when there is one.
+
+    A listed player keeps the report's status; a player the report omits is
+    available, marked not listed when the report fully covers the team. Without
+    a report every player is available, as before injury reports were replayed.
+    """
+    roster = []
+    for r in rows:
+        player = dict(player_id=r['player_id'], name=r['name'], team_id=r['team_id'], status='available',
+                      status_source_url=r['source_url'], status_observed_at=r['known_at'])
+        if report and report.get('report'):
+            evidence = dict(status_source_url=report['report']['source_url'],
+                            status_observed_at=report['report']['retrieved_at'],
+                            status_published_at=report['report']['published_at'], status_game_id=r['game_id'])
+            listed = report['statuses'].get(r['player_id'])
+            if listed:
+                player.update(evidence, status=listed[0], reported_status=listed[1], status_basis='explicit_report_status')
+            elif r['team_id'] in report['complete_team_ids']:
+                player.update(evidence, reported_status='Not listed', status_basis='not_listed_complete_report')
+        roster.append(player)
+    return roster
+
+
+def _availability(counts, roster, rows):
+    """Tally what the replayed reports said against who actually played."""
+    played = {r['player_id'] for r in rows if r['status'] == 'played' and r['minutes'] > 0}
+    for p in roster:
+        basis = p.get('status_basis')
+        key = (p.get('reported_status') or 'Not listed').lower() if basis else 'no complete report'
+        counts[key][0] += 1
+        counts[key][1] += p['player_id'] in played
+
+
+def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None):
+    """Forecast each evaluation game from earlier game days only.
+
+    ``injuries`` maps game IDs to their anchor report (``injury_history``); a
+    game without one keeps every box-score player available.
+    """
     home_of = {r['game_id']: r['home_team_id'] for r in records}
     by_game = defaultdict(list)
+    names = {r['player_id']: r['name'] for r in history}
     for r in history:
         if r['game_id'] in home_of and 'home' not in r:
             r = dict(r, home=r['team_id'] == home_of[r['game_id']])
@@ -121,6 +176,8 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     rating_cache = {}
     residual_days = []  # (day, signed standardized residuals, game IDs) of earlier played forecasts.
     interval_cache = {}
+    availability = defaultdict(lambda: [0, 0])  # status -> [players, played]
+    reported_games = 0
     for index, game in enumerate(ordered):
         rows = by_game.get(game['game_id'], [])
         day = _day(game['game_time'])
@@ -131,8 +188,12 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 history_before = [r for d, batch in prior_days if d < day for r in batch]
                 g = dict(game_id=game['game_id'], season_type='Regular Season', start_time=game['game_time'],
                          home_team_id=game['home_team_id'], away_team_id=game['away_team_id'])
-                roster = [dict(player_id=r['player_id'], name=r['name'], team_id=r['team_id'], status='available',
-                               status_source_url=r['source_url'], status_observed_at=r['known_at']) for r in rows]
+                report = (injuries or {}).get(game['game_id'])
+                scored = rows + _listed_absentees(rows, report, names)
+                roster = _roster(scored, report)
+                if injuries is not None:
+                    reported_games += bool(report and report.get('report'))
+                    _availability(availability, roster, scored)
                 snapshot = dict(schema_version=1, as_of=as_of, season=game['season'], forecast_stage='preliminary',
                                 research_reconstruction=True, games=[g],
                                 roster=dict(players=roster, observed_at=as_of, source_url=rows[0]['source_url'],
@@ -152,7 +213,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                          if len(values) >= CALIBRATION_MIN_SAMPLES},
                         pooled=two_tailed_quantiles([v for v, _ in signed], CALIBRATION_ALPHA))}
                 calibrated = interval_cache[day]
-                actual = {r['player_id']: r for r in rows}
+                actual = {r['player_id']: r for r in scored}
                 totals = defaultdict(lambda: dict(projected=0., count=0, covered=0.))
                 residuals = []
                 for p in result['predictions']:
@@ -212,8 +273,13 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                 prior_days.append((day, list(rows)))
         if progress and index % 100 == 0:
             progress(dict(games_seen=index, player_rows=len(players)))
-    return dict(players=players, teams=teams, games=games, skipped=dict(skipped),
-                evaluated_games=len(evaluated), total_games=len(ordered))
+    result = dict(players=players, teams=teams, games=games, skipped=dict(skipped),
+                  evaluated_games=len(evaluated), total_games=len(ordered))
+    if injuries is not None:
+        result['availability'] = dict(games_with_report=reported_games, by_status={
+            k: dict(players=n, played=played, play_rate=played / n if n else None)
+            for k, (n, played) in sorted(availability.items())})
+    return result
 
 
 def _records(rows, fields):
@@ -556,35 +622,85 @@ def market_metrics(game_rows, team_rows, records, lines):
 
 
 def run_backtest(history, records, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None,
-                 sources=None, progress=None, market=None):
+                 sources=None, progress=None, market=None, injuries=None):
     """Write ``scoreboard.json`` and ``rows.json.gz`` under ``output``; return the scoreboard."""
+    return run_seasons([dict(history=history, records=records, sources=sources, market=market, injuries=injuries)],
+                       output, reference=reference, warmup_fraction=warmup_fraction, limit=limit, as_of=as_of,
+                       progress=progress)
+
+
+def _subset(rows, game_ids):
+    return dict(rows, players=[r for r in rows['players'] if r[0] in game_ids],
+                teams=[r for r in rows['teams'] if r[0] in game_ids], games=[r for r in rows['games'] if r[0] in game_ids])
+
+
+def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None):
+    """Replay each season on its own and score them together; write and return the scoreboard.
+
+    Each season is a dict of ``history``, ``records`` and optional ``sources``,
+    ``market`` and ``injuries``. Metrics and the comparison pool every season's
+    rows: game dates never overlap, so the date clusters stay independent. With
+    more than one season each also reports its own metrics, market comparison and
+    verdict under ``seasons``; the gate is the pooled verdict.
+    """
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     cutoff = parse_time(as_of)
-    if any(parse_time(r['known_at']) > cutoff for r in history) or any(parse_time(r['known_at']) > cutoff for r in records):
-        raise ValueError('backtest cutoff cannot precede future-known sources')
+    for season in seasons:
+        if (any(parse_time(r['known_at']) > cutoff for r in season['history'])
+                or any(parse_time(r['known_at']) > cutoff for r in season['records'])):
+            raise ValueError('backtest cutoff cannot precede future-known sources')
     out = Path(output)
     if out.exists() and any(out.iterdir()):
         raise ValueError('output directory exists and is not empty')
-    replayed = replay(history, records, as_of, warmup_fraction=warmup_fraction, limit=limit, progress=progress)
     rows = dict(version=VERSION, player_fields=list(PLAYER_FIELDS), team_fields=list(TEAM_FIELDS), game_fields=list(GAME_FIELDS),
-                players=replayed['players'], teams=replayed['teams'], games=replayed['games'])
+                players=[], teams=[], games=[])
+    parts, dates, totals, skipped = [], {}, dict(total=0, evaluated=0), defaultdict(int)
+    for season in seasons:
+        replayed = replay(season['history'], season['records'], as_of, warmup_fraction=warmup_fraction, limit=limit,
+                          progress=progress, injuries=season.get('injuries'))
+        for key in ('players', 'teams', 'games'):
+            rows[key].extend(replayed[key])
+        dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})
+        totals['total'] += replayed['total_games']; totals['evaluated'] += replayed['evaluated_games']
+        for k, v in replayed['skipped'].items():
+            skipped[k] += v
+        part = dict(sources=season.get('sources') or {}, games=dict(total=replayed['total_games'],
+                    evaluated=replayed['evaluated_games'], skipped=replayed['skipped']),
+                    metrics=summarize(replayed['players'], replayed['teams'], replayed['games']),
+                    game_ids={g[0] for g in replayed['games']} | {t[0] for t in replayed['teams']})
+        if season.get('injuries') is not None:
+            part['games']['availability'] = replayed['availability']
+        if season.get('market') is not None:
+            part['metrics']['market'] = market_metrics(replayed['games'], replayed['teams'], season['records'],
+                                                       season['market'])
+        parts.append(part)
+    with_injuries = all(season.get('injuries') is not None for season in seasons)
     scoreboard = dict(
         schema_version=1, version=VERSION, created_at=as_of, model_version=MODEL_VERSION,
         code_sha256=package_digest(Path(__file__).parent),
-        sources=sources or {}, parameters=dict(warmup_fraction=warmup_fraction, limit=limit,
-                                                 interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80),
-        games=dict(total=replayed['total_games'], evaluated=replayed['evaluated_games'], skipped=replayed['skipped']),
-        metrics=summarize(replayed['players'], replayed['teams'], replayed['games']), limitations=LIMITATIONS)
-    if market is not None:
-        scoreboard['metrics']['market'] = market_metrics(replayed['games'], replayed['teams'], records, market)
+        sources=parts[0]['sources'] if len(parts) == 1 else [p['sources'] for p in parts],
+        parameters=dict(warmup_fraction=warmup_fraction, limit=limit,
+                        interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80),
+        games=dict(totals, skipped=dict(skipped)),
+        metrics=summarize(rows['players'], rows['teams'], rows['games']),
+        limitations=INJURY_LIMITATIONS if with_injuries else LIMITATIONS)
+    if len(parts) == 1:
+        scoreboard['games'] = parts[0]['games']
+        if 'market' in parts[0]['metrics']:
+            scoreboard['metrics']['market'] = parts[0]['metrics']['market']
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
         ref_board = read_json(Path(reference) / 'scoreboard.json')
         scoreboard['comparison'] = dict(reference=str(reference), reference_created_at=ref_board.get('created_at'),
                                         reference_code_sha256=ref_board.get('code_sha256'),
                                         reference_model_version=ref_board.get('model_version'),
-                                        **compare(rows, ref_rows, {r['game_id']: _day(r['game_time']).isoformat()
-                                                                   for r in records}))
+                                        **compare(rows, ref_rows, dates))
+        if len(parts) > 1:
+            for part in parts:
+                ids = part['game_ids']
+                part['comparison'] = compare(_subset(rows, ids), _subset(ref_rows, ids), dates)
+    if len(parts) > 1:
+        scoreboard['seasons'] = [{k: v for k, v in p.items() if k != 'game_ids'} for p in parts]
     out.mkdir(parents=True, exist_ok=True)
     (out / 'rows.json.gz').write_bytes(gzip.compress(canonical(rows), mtime=0))
     atomic_json(out / 'scoreboard.json', scoreboard)
@@ -609,6 +725,10 @@ def format_scoreboard(board):
     pm = m['players'].get('participation') or {}
     if pm.get('n'):
         lines.append(f"participation: Brier {pm['brier']:.3f} (constant rate {pm['constant_rate_brier']:.3f}, assume all play {pm['assume_all_play_brier']:.3f}); mean P(plays) {pm['mean_probability']:.2f}, played {pm['played_share']:.2f}")
+    a = board['games'].get('availability')
+    if a:
+        lines.append(f"injury reports: {a['games_with_report']} of {board['games']['evaluated']} games; played by status: "
+                     + ', '.join(f"{k} {v['played']}/{v['players']}" for k, v in a['by_status'].items()))
     t, g = m['teams'], m['games']
     if t['n']:
         lines.append(f"teams n={t['n']} points MAE {t['points_mae']:.2f} bias {t['points_bias']:+.2f} (projected players cover {t['covered_share']:.0%} of team points)")
@@ -637,9 +757,25 @@ def format_scoreboard(board):
         if mk.get('team_points'):
             tp = mk['team_points']
             lines.append(f"  team points (n={tp['n']}): model MAE {tp['model_mae']:.2f}, implied by the close {tp['market_mae']:.2f} (bias {tp['market_bias']:+.2f})")
+    for part in board.get('seasons') or []:
+        pm, label = part['metrics'], Path(str(part['sources'].get('team_games', '?'))).parent.name
+        a, g = pm['players']['all'], pm['games']
+        line = (f"season {label}: {part['games']['evaluated']} games, pts MAE {a['points_mae']:.2f}, min MAE "
+                f"{a['minutes_mae']:.2f}, margin MAE {g['margin_mae']:.2f}, winners {g['winner_accuracy']:.1%}")
+        mk = pm.get('market') or {}
+        if mk.get('n', 0) > 1:
+            line += f"; closing line {mk['market']['margin_mae']:.2f} vs model {mk['model']['margin_mae']:.2f} on {mk['n']}"
+        if part.get('comparison'):
+            line += f"; vs reference {part['comparison']['verdict']}"
+        lines.append(line)
+        av = part['games'].get('availability')
+        if av:
+            lines.append(f"  injury reports: {av['games_with_report']} games; played by status: "
+                         + ', '.join(f"{k} {v['played']}/{v['players']}" for k, v in av['by_status'].items()))
     c = board.get('comparison')
     if c:
-        lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}")
+        lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}"
+                     + (' (pooled over seasons)' if board.get('seasons') else ''))
         for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner', 'interval_score'):
             item = c.get(name, {})
             if item.get('mean') is not None:

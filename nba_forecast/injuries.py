@@ -13,6 +13,24 @@ from .data import _fetch
 from .validation import parse_time
 
 REPORT_PATTERN = r'https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_(\d{4}-\d{2}-\d{2})_(\d{2}_\d{2}[AP]M)\.pdf'
+# Until 2025-12-21 the league published hourly and named each file by its hour
+# alone (Injury-Report_2025-01-15_07PM.pdf); the file itself is stamped half
+# past (07:30 PM). Only historical backfills meet these names.
+LEGACY_REPORT_PATTERN = r'https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_(\d{4}-\d{2}-\d{2})_(\d{2}[AP]M)\.pdf'
+LEGACY_LAST_DAY = '2025-12-21'
+EASTERN = ZoneInfo('America/New_York')
+
+
+def report_time(url):
+    """Publication time (UTC) of an official report URL in either naming, or None."""
+    match=re.fullmatch(REPORT_PATTERN,url)
+    if match:
+        local=datetime.strptime(match[1]+' '+match[2],'%Y-%m-%d %I_%M%p')
+    else:
+        match=re.fullmatch(LEGACY_REPORT_PATTERN,url)
+        if not match or match[1]>LEGACY_LAST_DAY:return None
+        local=datetime.strptime(match[1]+' '+match[2],'%Y-%m-%d %I%p')+timedelta(minutes=30)
+    return local.replace(tzinfo=EASTERN).astimezone(timezone.utc)
 
 
 def report_links(html, as_of):

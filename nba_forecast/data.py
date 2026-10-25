@@ -56,6 +56,9 @@ def _allowed_url(url, allow_roster=False):
         return
     if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}_\d{2}[AP]M\.pdf", url):
         return
+    # Hourly reports before 2025-12-22 are named by the hour alone (injuries.LEGACY_REPORT_PATTERN).
+    if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}[AP]M\.pdf", url):
+        return
     if url.startswith("https://stats.nba.com/stats/leaguedashplayerclutch?"):
         from .clutch import clutch_url
         match = re.search(r"(?:[?&])Season=(20\d{2}-\d{2})(?:&|$)", url)
@@ -116,13 +119,13 @@ def _record_fetch_failure(cache_dir, url, category, exc, attempt=None, status=No
         pass
 
 
-def _fetch(url, cache_dir, allow_roster=False):
+def _fetch(url, cache_dir, allow_roster=False, timeout=15):
     _allowed_url(url, allow_roster=allow_roster)
     opener = urllib.request.build_opener(_NoRedirects())
     for attempt in range(3):
         try:
             headers = CDN_HEADERS if urlsplit(url).netloc == "cdn.nba.com" else HEADERS
-            with opener.open(urllib.request.Request(url, headers=headers), timeout=15) as response:
+            with opener.open(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
                 raw = response.read(MAX_BYTES + 1)
             if len(raw) > MAX_BYTES:
                 raise ValueError("NBA response exceeds the 12 MiB limit")
