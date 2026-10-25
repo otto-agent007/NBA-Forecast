@@ -9,6 +9,7 @@ import {
   initialDay,
   safeSource,
   groupPlayers,
+  finalResult,
 } from "../src/data.js";
 test("unknown projections are not zero", () => {
   assert.equal(number(null), "—");
@@ -132,4 +133,13 @@ test('starter selection compares instants across mixed timestamp offsets', () =>
     rotation_role:{label:'starter',observations:2,last_game_started:true,
       last_game_time:i<5 ? (i===0 ? '2026-10-22T03:00:00Z' : '2026-10-21T20:00:00-07:00') : '2026-10-22T02:00:00Z'} }));
   assert.deepEqual(groupPlayers(rows)[0].groups.find(g=>g.key==='starter').players.map(p=>p.player_id).sort(), ['0','1','2','3','4']);
+});
+
+test("final results label overtime and the winner, and need both scores", () => {
+  assert.deepEqual(finalResult({ home: 120, away: 128, periods: 4 }), { label: "Final", winner: "away" });
+  assert.deepEqual(finalResult({ home: 131, away: 126, periods: 5 }), { label: "Final/OT", winner: "home" });
+  assert.equal(finalResult({ home: 140, away: 138, periods: 7 }).label, "Final/3OT");
+  assert.equal(finalResult({ home: 100, away: 99 }).label, "Final");
+  assert.equal(finalResult(null), null);
+  assert.equal(finalResult({ home: 100, away: null }), null);
 });

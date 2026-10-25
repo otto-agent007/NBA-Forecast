@@ -194,6 +194,32 @@ p {
   font-size: 11px;
   font-weight: 600;
 }
+.tile-team,
+.matchup-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.final-score {
+  font-family: "Barlow Condensed";
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+  color: #8d97a7;
+  font-variant-numeric: tabular-nums;
+}
+.final-score.won {
+  color: #172235;
+  font-weight: 700;
+}
+.matchup .final-score {
+  font-size: 30px;
+  color: #8293ac;
+}
+.matchup .final-score.won {
+  color: #ffffff;
+}
 .team-logo {
   width: 35px;
   height: 35px;

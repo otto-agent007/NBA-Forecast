@@ -16,7 +16,23 @@ import {
   longDate,
   timeLabel,
   stamp,
+  finalResult,
 } from "./data";
+
+// A game-rail logo with the final score under it once the game is over.
+function TileTeam({ game, side }) {
+  const result = game.status === "final" ? finalResult(game.final_score) : null;
+  return (
+    <div className="tile-team">
+      <TeamMark id={game[side + "_team_id"]} code={game[side + "_tricode"]} />
+      {result && (
+        <b className={`final-score ${result.winner === side ? "won" : ""}`}>
+          {game.final_score[side]}
+        </b>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [data, setData] = useState(null),
@@ -182,7 +198,11 @@ export default function App() {
                 className={`game-tile ${game?.game_id === g.game_id ? "selected" : ""}`}
                 key={g.game_id}
                 aria-pressed={game?.game_id === g.game_id}
-                aria-label={`${g.away_tricode || "TBD"} at ${g.home_tricode || "TBD"}`}
+                aria-label={`${g.away_tricode || "TBD"} at ${g.home_tricode || "TBD"}${
+                  g.status === "final" && finalResult(g.final_score)
+                    ? `, final ${g.final_score.away}–${g.final_score.home}`
+                    : ""
+                }`}
                 onClick={() => {
                   setSelected(g.game_id);
                   setForecastStage("latest");
@@ -190,13 +210,13 @@ export default function App() {
                 }}
               >
                 <div>
-                  <TeamMark id={g.away_team_id} code={g.away_tricode} />
+                  <TileTeam game={g} side="away" />
                   <span>at</span>
-                  <TeamMark id={g.home_team_id} code={g.home_tricode} />
+                  <TileTeam game={g} side="home" />
                 </div>
                 <small>
                   {g.status === "final"
-                    ? "Final"
+                    ? finalResult(g.final_score)?.label || "Final"
                     : g.status === "live"
                       ? "In progress"
                       : g.status === "postponed"
@@ -381,10 +401,21 @@ function Matchup({ game }) {
   };
   const away = splitName(game.away_name, game.away_tricode),
     home = splitName(game.home_name, game.home_tricode);
+  const result = game.status === "final" ? finalResult(game.final_score) : null;
+  const logo = (side) => (
+    <div className="matchup-logo">
+      <TeamMark id={game[side + "_team_id"]} code={game[side + "_tricode"]} large />
+      {result && (
+        <b className={`final-score ${result.winner === side ? "won" : ""}`}>
+          {game.final_score[side]}
+        </b>
+      )}
+    </div>
+  );
   return (
     <section className="matchup" aria-label="Selected matchup">
       <div className="matchup-team away">
-        <TeamMark id={game.away_team_id} code={game.away_tricode} large />
+        {logo("away")}
         <div>
           <span className="city">{away[0]}</span>
           <strong>{away[1]}</strong>
@@ -392,7 +423,7 @@ function Matchup({ game }) {
       </div>
       <span className="versus">AT</span>
       <div className="matchup-team home">
-        <TeamMark id={game.home_team_id} code={game.home_tricode} large />
+        {logo("home")}
         <div>
           <span className="city">{home[0]}</span>
           <strong>{home[1]}</strong>
@@ -403,7 +434,7 @@ function Matchup({ game }) {
           {game.status === "postponed"
             ? "Postponed"
             : game.status === "final"
-              ? "Final"
+              ? result?.label || "Final"
               : timeLabel(game.start_time)}
         </strong>
         <span>

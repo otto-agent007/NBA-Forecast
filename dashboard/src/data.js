@@ -185,3 +185,12 @@ export const safeSource = (url) => {
     return null;
   }
 };
+// "Final", "Final/OT", "Final/2OT"…, and which side won, from the captured box score.
+export function finalResult(score) {
+  if (!score || score.home == null || score.away == null) return null;
+  const overtimes = Math.max(0, (score.periods || 4) - 4);
+  return {
+    label: overtimes ? `Final/${overtimes > 1 ? overtimes : ""}OT` : "Final",
+    winner: score.home > score.away ? "home" : score.away > score.home ? "away" : null,
+  };
+}

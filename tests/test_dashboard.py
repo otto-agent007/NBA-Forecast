@@ -91,6 +91,23 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result['forecast']['run_id'],final)
             self.assertEqual(result['forecasts']['preliminary']['run_id'],refreshed)
 
+    def test_final_games_carry_the_captured_score_and_overtime_periods(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);(folder/'schedule').mkdir();(folder/'finals').mkdir()
+            games=[dict(game_id='0022600109',status='scheduled',start_time='2026-10-25T00:30:00Z',home_team_id='H',away_team_id='A'),
+                   dict(game_id='0022600110',status='scheduled',start_time='2026-10-25T01:00:00Z',home_team_id='H2',away_team_id='A2')]
+            (folder/'schedule/latest.json').write_text(json.dumps(dict(season='2026-27',games=games)))
+            rows=[dict(team_id='H',pts=60,game_period=5,team_boxscore=dict(pts=131)),dict(team_id='H',pts=71,game_period=5),
+                  dict(team_id='A',pts=126,game_period=5)]
+            (folder/'finals/0022600109.json').write_text(json.dumps(rows))
+            by_id={g['game_id']:g for g in dashboard_data(d)['games']}
+            # Official team total when present, else the player sum; unfinished games carry none.
+            self.assertEqual(by_id['0022600109']['status'],'final')
+            self.assertEqual(by_id['0022600109']['final_score'],dict(home=131,away=126,periods=5))
+            self.assertIsNone(by_id['0022600110']['final_score'])
+            (folder/'finals/0022600109.json').write_text(json.dumps(rows[:2]))
+            self.assertIsNone(dashboard_data(d)['games'][0]['final_score'],'one side alone is not a final score')
+
     def test_empty_directory_does_not_create_database(self):
         with tempfile.TemporaryDirectory() as d:
             value=dashboard_data(d)

@@ -376,3 +376,16 @@ test('player details disclose historical scoring seasons and samples used by the
   await expect(prior).toContainText('26 PPG · 74 games');
   await expect(prior.getByRole('link',{name:'Historical statistics source'})).toBeVisible();
 });
+
+test("final games show each team's score under its logo with the winner emphasized", async ({ page }) => {
+  const response = structuredClone(dashboard);
+  response.games[0].final_score = { home: 131, away: 126, periods: 5 };
+  await page.route("**/api/dashboard", (route) => route.fulfill({ json: response }));
+  await page.goto("/");
+  const tile = page.getByRole("button", { name: "GSW at LAL, final 126–131" });
+  await expect(tile.locator(".final-score")).toHaveText(["126", "131"]);
+  await expect(tile).toContainText("Final/OT");
+  const matchup = page.getByRole("region", { name: "Selected matchup" });
+  await expect(matchup.locator(".final-score.won")).toHaveText("131");
+  await expect(matchup).toContainText("Final/OT");
+});

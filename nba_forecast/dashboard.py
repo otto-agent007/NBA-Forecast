@@ -115,6 +115,21 @@ def _build_forecast_views(folder,db,schedule):
     return views,players,roster_observed
 
 
+def _final_score(folder,game):
+    """Team points from the captured final box score (official team total, else player sum), or None."""
+    rows=read_optional(folder/'finals'/(game['game_id']+'.json'),None)
+    if not isinstance(rows,list):return None
+    sides={game.get('home_team_id'):'home',game.get('away_team_id'):'away'};official,summed={},{};periods=0
+    for r in rows:
+        side=sides.get(r.get('team_id'))
+        if not side:continue
+        summed[side]=summed.get(side,0)+(r.get('pts') or 0);periods=max(periods,r.get('game_period') or 0)
+        pts=(r.get('team_boxscore') or {}).get('pts')
+        if isinstance(pts,int):official.setdefault(side,pts)
+    if set(summed)!={'home','away'}:return None
+    return dict(home=official.get('home',summed['home']),away=official.get('away',summed['away']),periods=periods or None)
+
+
 def dashboard_data(directory):
     folder=Path(directory)
     schedule=_current_schedule(folder)
@@ -124,6 +139,7 @@ def dashboard_data(directory):
         g['forecasts']={}
         # The calendar is checked once a day; a captured final box score shows the game is over.
         if g.get('status') in ('scheduled','live') and (folder/'finals'/(g['game_id']+'.json')).exists():g['status']='final'
+        g['final_score']=_final_score(folder,g) if g.get('status')=='final' else None
         capture=read_optional(folder/'injuries/games'/g['game_id']/'latest.json',None)
         item=next((i for i in (capture or {}).get('games',[]) if i['game_id']==g['game_id']),None)
         g['injury_capture']=capture if item and g.get('start_time') and parse_time(item['start_time'])==parse_time(g['start_time']) else None
