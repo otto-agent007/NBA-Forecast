@@ -395,8 +395,102 @@ def compare(current, reference, dates=None):
     return result
 
 
+def _point_differential_margins(records, game_ids, min_games=10):
+    """Walk-forward naive margins: home edge plus the season-to-date average margin difference.
+
+    Only games on earlier Eastern dates count; the home edge is the average home
+    margin of those games. A team with fewer than ``min_games`` earlier games has no
+    rating, so its games are left out.
+    """
+    by_day = defaultdict(list)
+    for r in records:
+        stats = r.get('team_stats') or {}
+        home, away = r['home_team_id'], r['away_team_id']
+        if home in stats and away in stats:
+            by_day[(r['season'], _day(r['game_time']))].append((r['game_id'], home, away,
+                                                               stats[home]['pts'] - stats[away]['pts']))
+    margins, totals, home_margins = {}, defaultdict(lambda: [0., 0]), defaultdict(list)
+    for season, day in sorted(by_day):
+        games = by_day[(season, day)]
+        for gid, home, away, _ in games:
+            h, a = totals[(season, home)], totals[(season, away)]
+            if gid in game_ids and h[1] >= min_games and a[1] >= min_games and home_margins[season]:
+                margins[gid] = fmean(home_margins[season]) + h[0] / h[1] - a[0] / a[1]
+        for gid, home, away, margin in games:
+            totals[(season, home)][0] += margin; totals[(season, home)][1] += 1
+            totals[(season, away)][0] -= margin; totals[(season, away)][1] += 1
+            home_margins[season].append(margin)
+    return margins
+
+
+def _no_vig_home(line):
+    home, away = line.get('home_moneyline'), line.get('away_moneyline')
+    if not home or not away:
+        return None
+    implied = [100 / (o + 100) if o > 0 else -o / (-o + 100) for o in (home, away)]
+    return implied[0] / sum(implied)
+
+
+def market_metrics(game_rows, team_rows, records, lines):
+    """The closing line and a naive rating beside the model, on the same replayed games.
+
+    The encompassing slope regresses the market's miss (actual minus closing margin)
+    on the model's disagreement with the close (Fair and Shiller): a slope clearly
+    above zero means the model knows something the close did not.
+    """
+    games = {r['game_id']: r for r in _records(game_rows, GAME_FIELDS)}
+    lined = {gid: lines[gid] for gid in games if gid in lines and lines[gid].get('home_spread') is not None}
+    if len(lined) < 2:
+        return dict(n=len(lined))
+    naive = _point_differential_margins(records, set(lined))
+    rows = []
+    for gid, line in lined.items():
+        g = games[gid]
+        rows.append(dict(model=g['projected_margin'], market=-line['home_spread'], naive=naive.get(gid),
+                         actual=g['actual_margin'], sd=g['prior_sd'], p_model=g['home_win_probability'],
+                         p_market=_no_vig_home(line)))
+    won = lambda r: float(r['actual'] > 0)
+    def summary(subset, key, probability):
+        scored = [r for r in subset if probability(r) is not None]
+        return dict(margin_mae=fmean(abs(r[key] - r['actual']) for r in subset),
+                    winner_accuracy=fmean(float((r[key] > 0) == (r['actual'] > 0)) for r in subset),
+                    winner_brier=fmean((probability(r) - won(r)) ** 2 for r in scored) if scored else None)
+    naive_rows = [r for r in rows if r['naive'] is not None]
+    result = dict(n=len(rows), source='ESPN core odds closing line (market_history)',
+                  model=summary(rows, 'model', lambda r: r['p_model'] if r['sd'] else None),
+                  market=summary(rows, 'market', lambda r: r['p_market']))
+    if naive_rows:
+        result['naive_point_differential'] = dict(
+            n=len(naive_rows), model_margin_mae=fmean(abs(r['model'] - r['actual']) for r in naive_rows),
+            **summary(naive_rows, 'naive', lambda r: _normal_cdf(r['naive'] / r['sd']) if r['sd'] else None))
+    x = [r['model'] - r['market'] for r in rows]
+    y = [r['actual'] - r['market'] for r in rows]
+    mx, my = fmean(x), fmean(y)
+    sxx = sum((v - mx) ** 2 for v in x)
+    if sxx > 0:
+        slope = sum((a - mx) * (b - my) for a, b in zip(x, y)) / sxx
+        residuals = [b - my - slope * (a - mx) for a, b in zip(x, y)]
+        se = math.sqrt(sum(e * e for e in residuals) / (len(rows) - 2) / sxx)
+        result['encompassing'] = dict(slope=slope, se=se, intercept=my - slope * mx,
+                                      rule='slope of (actual - close) on (model - close); above zero by two standard '
+                                           'errors means the model adds information beyond the closing line')
+    teams = [t for t in _records(team_rows, TEAM_FIELDS)
+             if t['game_id'] in lined and lines[t['game_id']].get('total') is not None
+             and t['actual_points_regulation'] is not None and t['projected_players'] > 0]
+    if teams:
+        def implied(t):
+            line = lines[t['game_id']]
+            return (line['total'] - line['home_spread']) / 2 if t['home'] else (line['total'] + line['home_spread']) / 2
+        result['team_points'] = dict(
+            n=len(teams), target='regulation-equivalent points, as the model is scored (the close prices overtime too)',
+            model_mae=fmean(abs(t['projected_points'] - t['actual_points_regulation']) for t in teams),
+            market_mae=fmean(abs(implied(t) - t['actual_points_regulation']) for t in teams),
+            market_bias=fmean(implied(t) - t['actual_points_regulation'] for t in teams))
+    return result
+
+
 def run_backtest(history, records, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None,
-                 sources=None, progress=None):
+                 sources=None, progress=None, market=None):
     """Write ``scoreboard.json`` and ``rows.json.gz`` under ``output``; return the scoreboard."""
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     cutoff = parse_time(as_of)
@@ -415,6 +509,8 @@ def run_backtest(history, records, output, *, reference=None, warmup_fraction=.3
                                                  interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80),
         games=dict(total=replayed['total_games'], evaluated=replayed['evaluated_games'], skipped=replayed['skipped']),
         metrics=summarize(replayed['players'], replayed['teams'], replayed['games']), limitations=LIMITATIONS)
+    if market is not None:
+        scoreboard['metrics']['market'] = market_metrics(replayed['games'], replayed['teams'], records, market)
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
         ref_board = read_json(Path(reference) / 'scoreboard.json')
@@ -458,6 +554,22 @@ def format_scoreboard(board):
         lines.append(f"  best correction location {f['location_bias']:+.2f} scale {f['scale_factor']:.2f}: log loss {f['log_loss_prior']:.4f} -> {f['log_loss']:.4f}, Brier {pr['winner_brier']:.4f} -> {f['winner_brier_fitted']:.4f}"
                      + (f"; holdout ({h['scored']} games) log loss {h['log_loss_prior']:.4f} -> {h['log_loss_fitted']:.4f}" if h else ''))
         lines.append('  reliability ' + ' | '.join(f"{b['bin']:.1f}: n={b['n']} P {b['mean_probability']:.2f} won {b['home_win_share']:.2f}" for b in pr['reliability']))
+    mk = m.get('market') or {}
+    if mk.get('n', 0) > 1:
+        def row(name, item):
+            brier = f"{item['winner_brier']:.4f}" if item.get('winner_brier') is not None else '  -   '
+            return f"  {name:24s} margin MAE {item['margin_mae']:6.2f}  winners {item['winner_accuracy']:.1%}  Brier {brier}"
+        lines.append(f"market (same {mk['n']} games, closing line):")
+        lines.append(row('model', mk['model']));lines.append(row('closing line', mk['market']))
+        nv = mk.get('naive_point_differential')
+        if nv:
+            lines.append(row(f"point differential (n={nv['n']})", nv) + f"  (model on those {nv['model_margin_mae']:.2f})")
+        if mk.get('encompassing'):
+            e = mk['encompassing']
+            lines.append(f"  encompassing slope {e['slope']:+.3f} ± {2 * e['se']:.3f} (above zero: the model adds to the close)")
+        if mk.get('team_points'):
+            tp = mk['team_points']
+            lines.append(f"  team points (n={tp['n']}): model MAE {tp['model_mae']:.2f}, implied by the close {tp['market_mae']:.2f} (bias {tp['market_bias']:+.2f})")
     c = board.get('comparison')
     if c:
         lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}")

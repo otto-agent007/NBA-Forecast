@@ -117,6 +117,7 @@ def _parser():
     backtest.add_argument('--reference', help='Directory of an earlier backtest to compare against')
     backtest.add_argument('--warmup-fraction', type=float, default=.3, help='Share of game dates used only as history')
     backtest.add_argument('--limit', type=int, help='Only the last N evaluation games (smoke runs)')
+    backtest.add_argument('--market', help='Closing lines for the replayed games (datasets/market-closing-*/closing-lines.json.gz)')
     backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
@@ -224,11 +225,14 @@ def main(argv=None):
             value=benchmark_report(args.db)
         elif args.command == 'backtest':
             from .backtest import run_backtest, read_json as read_source, sha256_of, format_scoreboard
+            from .market_history import read_lines
             sources = {name: dict(path=str(path), sha256=sha256_of(path))
-                       for name, path in (('history', args.history), ('team_games', args.team_games))}
+                       for name, path in (('history', args.history), ('team_games', args.team_games), ('market', args.market))
+                       if path}
             board = run_backtest(read_source(args.history), read_source(args.team_games), args.output,
                                  reference=args.reference, warmup_fraction=args.warmup_fraction, limit=args.limit,
-                                 sources=sources, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
+                                 sources=sources, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True),
+                                 market=read_lines(args.market) if args.market else None)
             print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
             return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
         elif args.command == 'dedupe-histories':

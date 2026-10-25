@@ -129,6 +129,28 @@ class BacktestTests(unittest.TestCase):
                          'a reference without margin rows is scored with the current prior scale')
         self.assertEqual(backtest.compare(legacy, rows)['winner'].get('n'), 0)
 
+    def test_market_metrics_score_the_close_and_a_naive_rating_on_the_same_games(self):
+        rows = backtest.read_json(self.output / 'rows.json.gz')
+        games = [dict(zip(backtest.GAME_FIELDS, g)) for g in rows['games']]
+        perfect = {g['game_id']: dict(home_spread=-g['actual_margin'], total=None, home_moneyline=None,
+                                      away_moneyline=None) for g in games}
+        m = backtest.market_metrics(rows['games'], rows['teams'], self.records, perfect)
+        self.assertEqual(m['n'], len(games))
+        self.assertEqual(m['market']['margin_mae'], 0)
+        self.assertAlmostEqual(m['encompassing']['slope'], 0)  # nothing can add to a perfect close
+        self.assertGreater(m['naive_point_differential']['n'], 0)
+        echo = {g['game_id']: dict(home_spread=-g['projected_margin'], total=230., home_moneyline=-150,
+                                   away_moneyline=130) for g in games}
+        m = backtest.market_metrics(rows['games'], rows['teams'], self.records, echo)
+        self.assertAlmostEqual(m['market']['margin_mae'], m['model']['margin_mae'])
+        self.assertNotIn('encompassing', m)  # the model never disagrees with this close
+        self.assertAlmostEqual(backtest._no_vig_home(echo[games[0]['game_id']]), .6 / (.6 + 100 / 230))
+        self.assertEqual(m['team_points']['n'], 2 * len(games))
+        with tempfile.TemporaryDirectory() as d:
+            board = backtest.run_backtest(self.history, self.records, Path(d) / 'm', warmup_fraction=.5, as_of=AS_OF,
+                                          market=echo)
+        self.assertIn('closing line', backtest.format_scoreboard(board))
+
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
             backtest.run_backtest(self.history, self.records, self.folder.name + '/x', as_of='2026-01-10T00:00:00Z')

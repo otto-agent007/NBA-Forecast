@@ -27,7 +27,8 @@ def decode_reference(raw,url):
 
 def fetch_reference(url,directory,max_age=300):
     if not (re.fullmatch(re.escape(BASE)+r'(scoreboard\?dates=\d{8}|teams/\d{1,3}/roster|summary\?event=\d{6,12}|injuries|teams/\d{1,3}/depthcharts)',url) or
-            re.fullmatch(r'https://www\.nba\.com/team/16106127(?:3[7-9]|[45]\d|6[0-6])/roster',url)):
+            re.fullmatch(r'https://www\.nba\.com/team/16106127(?:3[7-9]|[45]\d|6[0-6])/roster',url) or
+            re.fullmatch(r'https://sports\.core\.api\.espn\.com/v2/sports/basketball/leagues/nba/events/(\d{6,12})/competitions/\1/odds',url)):
         raise ValueError('reference URL is not an allowlisted public ESPN endpoint')
     folder=Path(directory);key=hashlib.sha256(url.encode()).hexdigest();pointer=folder/(key+'.json')
     now=datetime.now(timezone.utc)

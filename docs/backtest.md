@@ -53,6 +53,19 @@ its own for pricing, and a bias fix barely moves absolute error when game
 noise is fifteen points. The overall verdict is `worse` if any metric is
 worse, else `improved` if any is improved.
 
+`--market datasets/market-closing-2025-26/closing-lines.json.gz` adds
+`metrics.market`: on exactly the replayed games that have a closing line, the
+model, the closing line and a walk-forward point-differential rating (home edge
+plus the season-to-date average margin difference, earlier dates only, ten games
+per team) side by side — margin MAE, winner accuracy and Brier (the close's
+moneylines de-vigged proportionally) — plus the team points the close implies,
+scored on the same regulation-equivalent target as the model. The encompassing
+slope regresses the close's miss on the model's disagreement with it (Fair and
+Shiller); a slope two standard errors above zero means the model knows something
+the close did not. These are reported, not gated. The lines come from ESPN's core
+odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
+with hashes; ESPN's game summary drops its pickcenter once a game is final.
+
 ## Reference: 2026-10-24 (newcomers)
 
 `datasets/backtest-2026-10-24-newcomers/`: model `regular-season-baseline-0.4.6`
