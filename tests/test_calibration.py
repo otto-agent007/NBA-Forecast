@@ -58,6 +58,26 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(calibrated_interval(20, 2, tampered, model_key=MODEL, as_of=CUTOFF)["status"], "fallback")
         json.dumps(artifact, allow_nan=False)
 
+    def test_minute_buckets_get_their_own_tails_once_they_have_enough_outcomes(self):
+        # Bench rows miss high, starters miss low; a sparse bucket falls back to the pool.
+        rows = [residual(i, error=e, expected_minutes=6) for i, e in enumerate([0, 1, 2, 3, 4, 5, 6, 7, 8])]
+        rows += [residual(100 + i, error=-e, expected_minutes=34) for i, e in enumerate([0, 1, 2, 3, 4, 5, 6, 7, 8])]
+        rows += [residual(200, error=0, expected_minutes=24)]
+        artifact = fit_calibration(rows, model_key=MODEL, as_of=CUTOFF, minimum_samples=5)
+        self.assertEqual(sorted(artifact["minute_buckets"]), ["0-10", "30+"])
+        self.assertEqual((artifact["minute_buckets"]["0-10"]["lower_quantile"],
+                          artifact["minute_buckets"]["0-10"]["upper_quantile"]), (0, 8))
+        bench = calibrated_interval(10, 2, artifact, model_key=MODEL, as_of=CUTOFF, expected_minutes=6)
+        starter = calibrated_interval(30, 2, artifact, model_key=MODEL, as_of=CUTOFF, expected_minutes=34)
+        pooled = calibrated_interval(20, 2, artifact, model_key=MODEL, as_of=CUTOFF, expected_minutes=24)
+        self.assertEqual(bench["interval"], [10, 26])
+        self.assertEqual(starter["interval"], [14, 30])
+        self.assertEqual((bench["audit"]["minute_bucket"], pooled["audit"]["minute_bucket"]), ("0-10", None))
+        self.assertEqual(pooled["interval"], [20 + 2 * artifact["lower_quantile"], 20 + 2 * artifact["upper_quantile"]])
+        broken = json.loads(json.dumps(artifact))
+        broken["minute_buckets"]["0-10"]["lower_rank"] = 2
+        self.assertEqual(calibrated_interval(10, 2, broken, model_key=MODEL, as_of=CUTOFF)["status"], "fallback")
+
     def test_abs_residuals_and_nonnegative_bounds(self):
         artifact = self.fit([residual(0, -4), residual(1, 2), residual(2, 1), residual(3, 3)])
         self.assertEqual(artifact["quantile"], 4)

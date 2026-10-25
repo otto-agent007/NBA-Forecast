@@ -48,6 +48,11 @@ def _number(value, *, positive=False):
         return False
 
 
+def _finite(value):
+    """A finite real of either sign (signed residual quantiles are usually negative below)."""
+    return not isinstance(value, bool) and isinstance(value, Real) and math.isfinite(value)
+
+
 def _key(row):
     return json.dumps([row["game_id"], row.get("player_id")], separators=(",", ":"))
 
@@ -131,6 +136,17 @@ def _eligible(samples, model_key, cutoff, interval_family=None):
 
 def _label(kind):
     return "empirical retrospective" if kind == RETROSPECTIVE else "empirical prospective residuals"
+
+
+# Expected-minutes buckets for group-conditional (Mondrian) tails: low-minute
+# players miss high (a floor at zero below), heavy-minute players miss low.
+MINUTE_BUCKETS = (('0-10', 0., 10.), ('10-20', 10., 20.), ('20-30', 20., 30.), ('30+', 30., math.inf))
+
+
+def minute_bucket(minutes):
+    if not _number(minutes) or minutes < 0:
+        return None
+    return next(name for name, low, high in MINUTE_BUCKETS if low <= minutes < high)
 
 
 def two_tailed_ranks(count, alpha):
@@ -233,6 +249,19 @@ def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100,
         artifact.update(lower_quantile=tails[0], upper_quantile=tails[1], lower_rank=low, upper_rank=high)
         artifact["fitting_metrics"]["two_tailed_coverage"] = sum(
             tails[0] <= row["signed_standardized_residual"] <= tails[1] for row in rows) / len(rows)
+        groups = {}
+        for row in rows:
+            name = minute_bucket(row.get("expected_minutes"))
+            if name:
+                groups.setdefault(name, []).append(row["signed_standardized_residual"])
+        buckets = {}
+        for name, signed in sorted(groups.items()):
+            bucket_tails = two_tailed_quantiles(signed, alpha) if len(signed) >= minimum_samples else None
+            if bucket_tails:
+                low, high = two_tailed_ranks(len(signed), alpha)
+                buckets[name] = dict(sample_count=len(signed), lower_quantile=bucket_tails[0],
+                                     upper_quantile=bucket_tails[1], lower_rank=low, upper_rank=high)
+        artifact["minute_buckets"] = buckets
     return artifact
 
 
@@ -262,19 +291,30 @@ def _artifact_error(artifact, model_key, as_of):
         if "lower_quantile" in artifact and (
                 (artifact["lower_rank"], artifact["upper_rank"]) != two_tailed_ranks(count, alpha)
                 or not artifact["lower_rank"] >= 1 or artifact["upper_rank"] > count
-                or not _number(artifact["lower_quantile"]) or not _number(artifact["upper_quantile"])
+                or not _finite(artifact["lower_quantile"]) or not _finite(artifact["upper_quantile"])
                 or artifact["lower_quantile"] > artifact["upper_quantile"]):
             return "invalid_artifact"
+        for name, bucket in (artifact.get("minute_buckets") or {}).items():
+            n = bucket["sample_count"]
+            if (name not in {b[0] for b in MINUTE_BUCKETS} or isinstance(n, bool) or not isinstance(n, int)
+                    or n < minimum or n > count
+                    or (bucket["lower_rank"], bucket["upper_rank"]) != two_tailed_ranks(n, alpha)
+                    or not bucket["lower_rank"] >= 1 or bucket["upper_rank"] > n
+                    or not _finite(bucket["lower_quantile"]) or not _finite(bucket["upper_quantile"])
+                    or bucket["lower_quantile"] > bucket["upper_quantile"]):
+                return "invalid_artifact"
     except (KeyError, ValueError, TypeError, OverflowError):
         return "invalid_artifact"
     return None
 
 
-def calibrated_interval(mean, sd, artifact, *, model_key, as_of, interval_family=None):
+def calibrated_interval(mean, sd, artifact, *, model_key, as_of, interval_family=None, expected_minutes=None):
     """Return an empirical interval and audit, or an explicit caller fallback.
 
     A pooled artifact applies only to an sd built the same way, so a caller
     that names its interval family is refused when the artifact's differs.
+    With ``expected_minutes`` the tails of that minutes bucket are used when the
+    artifact has enough of its outcomes, else the pooled ones.
     """
     error = _artifact_error(artifact, model_key, as_of)
     if (not error and interval_family is not None and artifact.get("interval_family") is not None
@@ -286,10 +326,12 @@ def calibrated_interval(mean, sd, artifact, *, model_key, as_of, interval_family
         return {"status": "fallback", "interval": None, "reason": error,
                 "audit": {"method": "caller_heuristic_required", "coverage_caveat": _CAVEAT}}
     two_tailed = "lower_quantile" in artifact
+    bucket_name = minute_bucket(expected_minutes) if two_tailed else None
+    tails = (artifact.get("minute_buckets") or {}).get(bucket_name) or artifact
     if two_tailed:
         # The mean always stays inside the interval, whatever the residual tails.
-        lower = min(mean, max(0.0, mean + sd * artifact["lower_quantile"]))
-        upper = max(mean, mean + sd * artifact["upper_quantile"])
+        lower = min(mean, max(0.0, mean + sd * tails["lower_quantile"]))
+        upper = max(mean, mean + sd * tails["upper_quantile"])
     else:
         width = sd * artifact["quantile"]
         lower, upper = max(0.0, mean - width), mean + width
@@ -304,7 +346,8 @@ def calibrated_interval(mean, sd, artifact, *, model_key, as_of, interval_family
              "sample_count": artifact["sample_count"], "alpha": artifact["alpha"],
              "quantile": artifact["quantile"], "coverage_caveat": _CAVEAT}
     if two_tailed:
-        audit.update(lower_quantile=artifact["lower_quantile"], upper_quantile=artifact["upper_quantile"])
+        audit.update(lower_quantile=tails["lower_quantile"], upper_quantile=tails["upper_quantile"],
+                     minute_bucket=bucket_name if tails is not artifact else None)
     return {"status": "calibrated", "interval": [lower, upper], "reason": None, "audit": audit}
 
 
@@ -348,7 +391,8 @@ def score_calibration(samples, artifact, *, model_key, as_of, interval_family=No
     covered, widths = [], []
     for row in holdout:
         interval = calibrated_interval(row["points_mean"], row["points_sd"], artifact,
-                                       model_key=model_key, as_of=as_of)["interval"]
+                                       model_key=model_key, as_of=as_of,
+                                       expected_minutes=row.get("expected_minutes"))["interval"]
         if interval is None:
             result.update(reason="nonfinite_interval", sample_count=0)
             return result

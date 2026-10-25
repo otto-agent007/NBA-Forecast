@@ -12,7 +12,7 @@ python -m nba_forecast backtest \
   --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
   --market datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-two-tailed
+  --reference datasets/backtest-2026-10-24-minute-buckets
 ```
 
 It takes about three minutes. `--limit N` replays only the last N
@@ -66,6 +66,19 @@ Shiller); a slope two standard errors above zero means the model knows something
 the close did not. These are reported, not gated. The lines come from ESPN's core
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
+
+## Reference: 2026-10-24 (minute buckets)
+
+`datasets/backtest-2026-10-24-minute-buckets/`: the two-tailed reference with
+group-conditional (Mondrian) tails: once an expected-minutes bucket (0-10,
+10-20, 20-30, 30+) has 200 earlier outcomes it gets its own two-tailed
+quantiles, else the pooled ones apply (`calibration.minute_bucket`). The live
+artifact records the same `minute_buckets`; on 2026-10-24 none had 200 outcomes,
+and the pooled live tails were −1.65 and +2.10 sd (absolute 1.73).
+
+Coverage 79.6% (above 11.0%, below 9.4%), width 14.4; under 10 minutes 12.5% /
+7.3%, 20-30 and 30+ about 10% each side. Interval score −0.20 ± 0.11 (design
+effect 3.13, improved); every other metric unchanged.
 
 ## Reference: 2026-10-24 (two-tailed intervals)
 

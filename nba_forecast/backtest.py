@@ -24,7 +24,7 @@ from pathlib import Path
 from statistics import fmean, pstdev, variance
 from zoneinfo import ZoneInfo
 
-from .calibration import two_tailed_quantiles
+from .calibration import minute_bucket, two_tailed_quantiles
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
 from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
@@ -50,8 +50,9 @@ MARGIN_PRIOR_MIN_GAMES = 100
 # prospective calibration, by likelihood of the actual margin.
 CALIBRATION_BIASES = [b / 2 for b in range(-16, 17)]
 # The 80% interval replaces the heuristic with two-tailed conformal quantiles of
-# earlier played forecasts once production's prospective calibration would be
-# ready (prospective_calibration.fit_prospective minimums).
+# earlier played forecasts, per expected-minutes bucket once a bucket has enough,
+# when production's prospective calibration would be ready
+# (prospective_calibration.fit_prospective minimums).
 CALIBRATION_ALPHA = .2
 CALIBRATION_MIN_SAMPLES = 200
 CALIBRATION_MIN_GAMES = 20
@@ -141,10 +142,16 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     earlier = [(z, gids) for d, z, gids in residual_days if d < day]
                     signed = [v for z, _ in earlier for v in z]
                     games_seen = len({gid for _, gids in earlier for gid in gids})
-                    interval_cache = {day: two_tailed_quantiles(signed, CALIBRATION_ALPHA)
-                                      if len(signed) >= CALIBRATION_MIN_SAMPLES and games_seen >= CALIBRATION_MIN_GAMES
-                                      else None}
-                tails = interval_cache[day]
+                    ready = len(signed) >= CALIBRATION_MIN_SAMPLES and games_seen >= CALIBRATION_MIN_GAMES
+                    by_bucket = defaultdict(list)
+                    for value, minutes in signed:
+                        by_bucket[minute_bucket(minutes)].append(value)
+                    # Pooled tails, and each minutes bucket's own once it has enough outcomes.
+                    interval_cache = {day: None if not ready else dict(
+                        {name: two_tailed_quantiles(values, CALIBRATION_ALPHA) for name, values in by_bucket.items()
+                         if len(values) >= CALIBRATION_MIN_SAMPLES},
+                        pooled=two_tailed_quantiles([v for v, _ in signed], CALIBRATION_ALPHA))}
+                calibrated = interval_cache[day]
                 actual = {r['player_id']: r for r in rows}
                 totals = defaultdict(lambda: dict(projected=0., count=0, covered=0.))
                 residuals = []
@@ -153,12 +160,13 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     projected = p['status'] == 'projected'
                     probability = p.get('participation_probability') if projected else None
                     lower, upper = (p['points_lower80'], p['points_upper80']) if projected else (None, None)
-                    if projected and tails:
+                    if projected and calibrated:
                         # Production replaces the heuristic once its calibration is ready.
                         mean, sd = p['points_mean'], p['points_sd']
+                        tails = calibrated.get(minute_bucket(p['expected_minutes'])) or calibrated['pooled']
                         lower, upper = min(mean, max(0., mean + sd * tails[0])), max(mean, mean + sd * tails[1])
                     if projected and a['status'] == 'played' and a['minutes'] > 0 and p['points_sd']:
-                        residuals.append((a['pts'] - p['points_mean']) / p['points_sd'])
+                        residuals.append(((a['pts'] - p['points_mean']) / p['points_sd'], p['expected_minutes']))
                     players.append([game['game_id'], p['player_id'], p['team_id'],
                                     p['expected_minutes'] if projected else None, a['minutes'],
                                     p['points_mean'] if projected else None, p['points_sd'] if projected else None,

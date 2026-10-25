@@ -110,7 +110,8 @@ def forecast_candidate(snapshot,history):
         minutes,rates,rows,variance,factor,side_factor=reprojection[p['player_id']]
         _project_numbers(p,minutes,{k:v*scale for k,v in rates.items()},p['components']['shooting'],rows,variance,factor,side_factor)
         interval=calibrated_interval(p['points_mean'],p['points_sd'],enhancement.get('calibration'),
-            model_key=enhancement['model_key'],as_of=snapshot['as_of'],interval_family=INTERVAL_FAMILY)
+            model_key=enhancement['model_key'],as_of=snapshot['as_of'],interval_family=INTERVAL_FAMILY,
+            expected_minutes=p['expected_minutes'])
         if interval['status']=='calibrated':p['points_lower80'],p['points_upper80']=interval['interval']
         p['components']['uncertainty']['calibration']=interval
     team_pace={}

@@ -16,7 +16,7 @@ python -m nba_forecast backtest \
   --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
   --market datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-two-tailed
+  --reference datasets/backtest-2026-10-24-minute-buckets
 ```
 
 It replays last season in about three minutes and pairs the same player-games
