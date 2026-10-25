@@ -12,7 +12,7 @@ python -m nba_forecast backtest \
   --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
   --market datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-team-rating
+  --reference datasets/backtest-2026-10-24-two-tailed
 ```
 
 It takes about three minutes. `--limit N` replays only the last N
@@ -66,6 +66,24 @@ Shiller); a slope two standard errors above zero means the model knows something
 the close did not. These are reported, not gated. The lines come from ESPN's core
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
+
+## Reference: 2026-10-24 (two-tailed intervals)
+
+`datasets/backtest-2026-10-24-two-tailed/`: the team-rating reference with the
+replay's 80% interval calibrated walk-forward the way production calibrates it.
+Once 200 played outcomes from 20 earlier games exist, the heuristic ±1.70 sd is
+replaced by conformal quantiles of the earlier signed standardized residuals,
+each tail at 10% (`calibration.two_tailed_quantiles`); production's prospective
+artifact now fits the same two tails. Points are right-skewed, so a symmetric
+width over-covered the low side (8.2% below) while missing high outcomes (15.0%
+above).
+
+Coverage 76.8% → 79.0% (above 11.3%, below 9.7%), mean width 13.0 → 14.1
+points; the 80% interval score (Winkler: width plus ten times any miss, a proper
+score that is now gated) improved −0.19 ± 0.13 (design effect 3.30); every other
+metric unchanged. By expected minutes the tails still differ (under 10 minutes:
+17.8% above, none below; 30+: 7.3% above, 13.8% below), which per-bucket
+calibration would address next.
 
 ## Reference: 2026-10-24 (team rating)
 

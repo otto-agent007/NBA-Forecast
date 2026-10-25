@@ -111,9 +111,10 @@ def _eligible(samples, model_key, cutoff, interval_family=None):
             excluded["invalid_numeric"] += 1
             continue
         try:
-            residual = abs(row["actual_points"] - row["points_mean"]) / row["points_sd"]
+            signed = (row["actual_points"] - row["points_mean"]) / row["points_sd"]
+            residual = abs(signed)
         except (OverflowError, ZeroDivisionError):
-            residual = float("inf")
+            signed = residual = float("inf")
         if not math.isfinite(residual):
             excluded["invalid_numeric"] += 1
             continue
@@ -122,7 +123,7 @@ def _eligible(samples, model_key, cutoff, interval_family=None):
             excluded["duplicate"] += 1
             continue
         seen.add(key)
-        accepted.append({**row, "standardized_residual": residual,
+        accepted.append({**row, "standardized_residual": residual, "signed_standardized_residual": signed,
                          "game_time": _iso(game_time), "actual_known_at": _iso(actual_known_at),
                          "sample_key": key})
     return accepted, dict(excluded)
@@ -130,6 +131,25 @@ def _eligible(samples, model_key, cutoff, interval_family=None):
 
 def _label(kind):
     return "empirical retrospective" if kind == RETROSPECTIVE else "empirical prospective residuals"
+
+
+def two_tailed_ranks(count, alpha):
+    """Finite-sample ranks of the lower and upper signed quantiles, each tail at alpha / 2."""
+    return math.floor((count + 1) * alpha / 2), math.ceil((count + 1) * (1 - alpha / 2))
+
+
+def two_tailed_quantiles(signed, alpha):
+    """Lower and upper standardized-residual quantiles, or None when the sample is too small.
+
+    Points are right-skewed: a symmetric width over-covers the low side while
+    missing high outcomes. Each tail is calibrated at alpha / 2, so coverage is
+    at least 1 - alpha by the union bound.
+    """
+    low, high = two_tailed_ranks(len(signed), alpha)
+    if low < 1 or high > len(signed):
+        return None
+    ordered = sorted(signed)
+    return ordered[low - 1], ordered[high - 1]
 
 
 def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100, interval_family=None):
@@ -207,6 +227,12 @@ def fit_calibration(samples, *, model_key, as_of, alpha=.2, minimum_samples=100,
                     fitting_metrics={"sample_count": len(rows),
                                      "coverage": sum(row["standardized_residual"] <= quantile for row in rows) / len(rows),
                                      "partition": "fitting; not holdout"})
+    tails = two_tailed_quantiles([row["signed_standardized_residual"] for row in rows], alpha)
+    if tails:
+        low, high = two_tailed_ranks(len(rows), alpha)
+        artifact.update(lower_quantile=tails[0], upper_quantile=tails[1], lower_rank=low, upper_rank=high)
+        artifact["fitting_metrics"]["two_tailed_coverage"] = sum(
+            tails[0] <= row["signed_standardized_residual"] <= tails[1] for row in rows) / len(rows)
     return artifact
 
 
@@ -233,6 +259,12 @@ def _artifact_error(artifact, model_key, as_of):
                 or not isinstance(artifact["label"], str)
                 or not _number(artifact["quantile"])):
             return "invalid_artifact"
+        if "lower_quantile" in artifact and (
+                (artifact["lower_rank"], artifact["upper_rank"]) != two_tailed_ranks(count, alpha)
+                or not artifact["lower_rank"] >= 1 or artifact["upper_rank"] > count
+                or not _number(artifact["lower_quantile"]) or not _number(artifact["upper_quantile"])
+                or artifact["lower_quantile"] > artifact["upper_quantile"]):
+            return "invalid_artifact"
     except (KeyError, ValueError, TypeError, OverflowError):
         return "invalid_artifact"
     return None
@@ -253,20 +285,27 @@ def calibrated_interval(mean, sd, artifact, *, model_key, as_of, interval_family
     if error:
         return {"status": "fallback", "interval": None, "reason": error,
                 "audit": {"method": "caller_heuristic_required", "coverage_caveat": _CAVEAT}}
-    width = sd * artifact["quantile"]
-    lower, upper = max(0.0, mean - width), mean + width
-    if not math.isfinite(width) or not math.isfinite(upper):
+    two_tailed = "lower_quantile" in artifact
+    if two_tailed:
+        # The mean always stays inside the interval, whatever the residual tails.
+        lower = min(mean, max(0.0, mean + sd * artifact["lower_quantile"]))
+        upper = max(mean, mean + sd * artifact["upper_quantile"])
+    else:
+        width = sd * artifact["quantile"]
+        lower, upper = max(0.0, mean - width), mean + width
+    if not math.isfinite(lower) or not math.isfinite(upper):
         return {"status": "fallback", "interval": None, "reason": "nonfinite_interval",
                 "audit": {"method": "caller_heuristic_required", "coverage_caveat": _CAVEAT}}
-    return {
-        "status": "calibrated", "interval": [lower, upper], "reason": None,
-        "audit": {"method": "absolute_standardized_residual_quantile",
-                  "label": artifact["label"], "evidence_kind": artifact["evidence_kind"],
-                  "model_key": model_key, "interval_family": artifact.get("interval_family"),
-                  "training_cutoff": artifact["training_cutoff"],
-                  "sample_count": artifact["sample_count"], "alpha": artifact["alpha"],
-                  "quantile": artifact["quantile"], "coverage_caveat": _CAVEAT},
-    }
+    audit = {"method": ("two_tailed_signed_standardized_residual_quantiles" if two_tailed
+                        else "absolute_standardized_residual_quantile"),
+             "label": artifact["label"], "evidence_kind": artifact["evidence_kind"],
+             "model_key": model_key, "interval_family": artifact.get("interval_family"),
+             "training_cutoff": artifact["training_cutoff"],
+             "sample_count": artifact["sample_count"], "alpha": artifact["alpha"],
+             "quantile": artifact["quantile"], "coverage_caveat": _CAVEAT}
+    if two_tailed:
+        audit.update(lower_quantile=artifact["lower_quantile"], upper_quantile=artifact["upper_quantile"])
+    return {"status": "calibrated", "interval": [lower, upper], "reason": None, "audit": audit}
 
 
 def score_calibration(samples, artifact, *, model_key, as_of, interval_family=None):

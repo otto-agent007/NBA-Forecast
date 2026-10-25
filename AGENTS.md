@@ -16,13 +16,13 @@ python -m nba_forecast backtest \
   --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
   --market datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-team-rating
+  --reference datasets/backtest-2026-10-24-two-tailed
 ```
 
 It replays last season in about three minutes and pairs the same player-games
 against the reference. `worse` on points, minutes, team points or margin
-error, or on points, team-point or margin bias, means the change is not
-merged. `within_noise` is acceptable only for a change whose
+error, the 80% interval score, participation or winner Brier, or on points,
+team-point or margin bias, means the change is not merged. `within_noise` is acceptable only for a change whose
 purpose is not accuracy (a simplification, a bug fix, an operational fix); say
 so. `improved` is the bar for a new model feature. A change that improves the
 backtest is then also expected to show up in the live `performance.json`

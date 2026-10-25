@@ -24,6 +24,7 @@ from pathlib import Path
 from statistics import fmean, pstdev, variance
 from zoneinfo import ZoneInfo
 
+from .calibration import two_tailed_quantiles
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
 from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
@@ -48,6 +49,12 @@ MARGIN_PRIOR_MIN_GAMES = 100
 # Location and scale corrections are fitted on the same bounds as the live
 # prospective calibration, by likelihood of the actual margin.
 CALIBRATION_BIASES = [b / 2 for b in range(-16, 17)]
+# The 80% interval replaces the heuristic with two-tailed conformal quantiles of
+# earlier played forecasts once production's prospective calibration would be
+# ready (prospective_calibration.fit_prospective minimums).
+CALIBRATION_ALPHA = .2
+CALIBRATION_MIN_SAMPLES = 200
+CALIBRATION_MIN_GAMES = 20
 CALIBRATION_SCALES = [s / 50 for s in range(35, 71)]
 LIMITATIONS = ('Rosters are the box score itself, all players available: no injury reports, so participation '
                'is not forecast and DNP players still draw minutes. No prior-season aggregate priors, no '
@@ -111,6 +118,8 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     margin_days = []  # (day, final home margins), the same way.
     finals = []  # (day, final sample) for the team ratings, at most the production window.
     rating_cache = {}
+    residual_days = []  # (day, signed standardized residuals, game IDs) of earlier played forecasts.
+    interval_cache = {}
     for index, game in enumerate(ordered):
         rows = by_game.get(game['game_id'], [])
         day = _day(game['game_time'])
@@ -128,21 +137,40 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                                 roster=dict(players=roster, observed_at=as_of, source_url=rows[0]['source_url'],
                                             complete=False, team_ids=[g['home_team_id'], g['away_team_id']]))
                 result = _baseline_forecast(snapshot, history_before)
+                if day not in interval_cache:
+                    earlier = [(z, gids) for d, z, gids in residual_days if d < day]
+                    signed = [v for z, _ in earlier for v in z]
+                    games_seen = len({gid for _, gids in earlier for gid in gids})
+                    interval_cache = {day: two_tailed_quantiles(signed, CALIBRATION_ALPHA)
+                                      if len(signed) >= CALIBRATION_MIN_SAMPLES and games_seen >= CALIBRATION_MIN_GAMES
+                                      else None}
+                tails = interval_cache[day]
                 actual = {r['player_id']: r for r in rows}
                 totals = defaultdict(lambda: dict(projected=0., count=0, covered=0.))
+                residuals = []
                 for p in result['predictions']:
                     a = actual[p['player_id']]
                     projected = p['status'] == 'projected'
                     probability = p.get('participation_probability') if projected else None
+                    lower, upper = (p['points_lower80'], p['points_upper80']) if projected else (None, None)
+                    if projected and tails:
+                        # Production replaces the heuristic once its calibration is ready.
+                        mean, sd = p['points_mean'], p['points_sd']
+                        lower, upper = min(mean, max(0., mean + sd * tails[0])), max(mean, mean + sd * tails[1])
+                    if projected and a['status'] == 'played' and a['minutes'] > 0 and p['points_sd']:
+                        residuals.append((a['pts'] - p['points_mean']) / p['points_sd'])
                     players.append([game['game_id'], p['player_id'], p['team_id'],
                                     p['expected_minutes'] if projected else None, a['minutes'],
                                     p['points_mean'] if projected else None, p['points_sd'] if projected else None,
-                                    p['points_lower80'] if projected else None, p['points_upper80'] if projected else None,
-                                    a['pts'], a['status'], probability])
+                                    lower, upper, a['pts'], a['status'], probability])
                     if projected:
                         t = totals[p['team_id']]
                         weight = 1.0 if probability is None else probability
                         t['projected'] += weight * p['points_mean']; t['count'] += 1; t['covered'] += a['pts']
+                if residual_days and residual_days[-1][0] == day:
+                    residual_days[-1][1].extend(residuals); residual_days[-1][2].add(game['game_id'])
+                else:
+                    residual_days.append((day, residuals, {game['game_id']}))
                 for tid in (g['home_team_id'], g['away_team_id']):
                     stats, minutes = game['team_stats'][tid], game['team_minutes'][tid]
                     teams.append([game['game_id'], tid, tid == g['home_team_id'], totals[tid]['projected'],
@@ -235,7 +263,16 @@ def _metrics(rows):
     return dict(n=len(rows), points_mae=fmean(abs(e) for e in errors),
                 points_rmse=math.sqrt(fmean(e * e for e in errors)), points_bias=fmean(errors),
                 minutes_mae=fmean(abs(m) for m in minutes), minutes_bias=fmean(minutes),
-                coverage80=fmean(covered), mean_width80=fmean(r['points_upper80'] - r['points_lower80'] for r in rows))
+                coverage80=fmean(covered), mean_width80=fmean(r['points_upper80'] - r['points_lower80'] for r in rows),
+                above80=fmean(r['actual_points'] > r['points_upper80'] for r in rows),
+                below80=fmean(r['actual_points'] < r['points_lower80'] for r in rows),
+                interval_score80=fmean(_interval_score(r) for r in rows))
+
+
+def _interval_score(r, alpha=.2):
+    """Winkler interval score: width plus 2/alpha times any miss (lower is better, proper)."""
+    lower, upper, y = r['points_lower80'], r['points_upper80'], r['actual_points']
+    return upper - lower + 2 / alpha * (max(0., lower - y) + max(0., y - upper))
 
 
 def _participation_metrics(projected):
@@ -357,7 +394,7 @@ def compare(current, reference, dates=None):
     is its own cluster.
     """
     def errors(rows):
-        points, minutes, point_bias, participation = {}, {}, {}, {}
+        points, minutes, point_bias, participation, interval = {}, {}, {}, {}, {}
         for r in _records(rows['players'], rows.get('player_fields', PLAYER_FIELDS)):
             if r['points_mean'] is None:
                 continue
@@ -371,6 +408,7 @@ def compare(current, reference, dates=None):
             points[key] = abs(r['points_mean'] - r['actual_points'])
             point_bias[key] = r['points_mean'] - r['actual_points']
             minutes[key] = abs(r['expected_minutes'] - r['actual_minutes'])
+            interval[key] = _interval_score(r)
         teams, team_bias, home, away = {}, {}, {}, {}
         for t in _records(rows['teams'], TEAM_FIELDS):
             if t['projected_players'] > 0 and t['actual_points_regulation'] is not None:
@@ -394,7 +432,8 @@ def compare(current, reference, dates=None):
                     location = home[gid]['projected_points'] - away[gid]['projected_points']
                     winner[gid] = (_home_win_probability(location, prior_sd[gid]) - (home[gid]['actual_points'] > away[gid]['actual_points'])) ** 2
         return dict(points=points, minutes=minutes, team_points=teams, margin=margins, participation=participation,
-                    winner=winner, points_bias=point_bias, team_points_bias=team_bias, margin_bias=margin_bias)
+                    winner=winner, interval_score=interval, points_bias=point_bias, team_points_bias=team_bias,
+                    margin_bias=margin_bias)
     prior_sd = {r['game_id']: r['prior_sd'] for r in _records(current.get('games', []), GAME_FIELDS)}
     cur, ref = errors(current), errors(reference)
     dates = dates or {}
@@ -404,9 +443,10 @@ def compare(current, reference, dates=None):
     def by_date(key):
         return (dates.get(key, key),)
     cluster = dict(points=by_date_and_unit, minutes=by_date_and_unit, participation=by_date_and_unit,
-                   points_bias=by_date_and_unit, team_points=by_date_and_unit, team_points_bias=by_date_and_unit,
-                   margin=by_date, winner=by_date, margin_bias=by_date)
-    result = {name: _paired(cur[name], ref[name], cluster[name]) for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner')}
+                   interval_score=by_date_and_unit, points_bias=by_date_and_unit, team_points=by_date_and_unit,
+                   team_points_bias=by_date_and_unit, margin=by_date, winner=by_date, margin_bias=by_date)
+    result = {name: _paired(cur[name], ref[name], cluster[name])
+              for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner', 'interval_score')}
     result.update({name: _bias(cur[name], ref[name], cluster[name]) for name in ('points_bias', 'team_points_bias', 'margin_bias')})
     verdicts = {v['verdict'] for v in result.values()}
     result['verdict'] = 'worse' if 'worse' in verdicts else 'improved' if 'improved' in verdicts else 'within_noise'
@@ -554,7 +594,8 @@ def format_scoreboard(board):
     lines.append(f"{'players (played)':18s} {'n':>6s} {'pts MAE':>8s} {'bias':>6s} {'min MAE':>8s} {'cov80':>6s} {'width':>6s}")
     for name, item in [('all', m['players']['all'])] + list(m['players']['by_expected_minutes'].items()):
         if item.get('n'):
-            lines.append(f"{name:18s} {item['n']:6d} {item['points_mae']:8.2f} {item['points_bias']:+6.2f} {item['minutes_mae']:8.2f} {item['coverage80']:6.1%} {item['mean_width80']:6.1f}")
+            lines.append(f"{name:18s} {item['n']:6d} {item['points_mae']:8.2f} {item['points_bias']:+6.2f} {item['minutes_mae']:8.2f} {item['coverage80']:6.1%} {item['mean_width80']:6.1f}"
+                         + (f"  above {item['above80']:.1%} below {item['below80']:.1%} score {item['interval_score80']:.2f}" if 'above80' in item else ''))
     d = m['players']['projected_dnp']
     lines.append(f"projected but did not play: {d['count']} ({d['share']:.1%} of projected), averaging {d['mean_expected_minutes']:.1f} min / {d['mean_points_mean']:.1f} pts" if d['count'] else 'projected but did not play: 0')
     pm = m['players'].get('participation') or {}
@@ -591,10 +632,11 @@ def format_scoreboard(board):
     c = board.get('comparison')
     if c:
         lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}")
-        for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner'):
+        for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner', 'interval_score'):
             item = c.get(name, {})
             if item.get('mean') is not None:
-                what = 'Brier change' if name in ('participation', 'winner') else 'mean abs-error change'
+                what = ('Brier change' if name in ('participation', 'winner') else
+                        'interval score change' if name == 'interval_score' else 'mean abs-error change')
                 lines.append(f"  {name:18s} n={item['n']:6d} {what} {item['mean']:+.4f} ± {2 * item['se']:.4f}"
                              f" (design effect {item.get('design_effect', 1.0):.2f})  {item['verdict']}")
         for name in ('points_bias', 'team_points_bias', 'margin_bias'):

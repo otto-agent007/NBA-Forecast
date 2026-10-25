@@ -43,10 +43,19 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(artifact["quantile_rank"], 8)
         self.assertEqual(artifact["sample_count"], 9)
         self.assertAlmostEqual(artifact["fitting_metrics"]["coverage"], 8 / 9)
+        # Each tail at alpha/2: signed residuals 1..9 give ranks 1 and 9, so the
+        # interval sits entirely above the mean, as the outcomes did.
+        self.assertEqual((artifact["lower_quantile"], artifact["upper_quantile"]), (1, 9))
+        self.assertEqual((artifact["lower_rank"], artifact["upper_rank"]), (1, 9))
         interval = calibrated_interval(20, 2, artifact, model_key=MODEL, as_of=CUTOFF)
         self.assertEqual(interval["status"], "calibrated")
-        self.assertEqual(interval["interval"], [4, 36])
+        self.assertEqual(interval["interval"], [20, 38])
+        self.assertEqual(interval["audit"]["method"], "two_tailed_signed_standardized_residual_quantiles")
         self.assertIn("time", interval["audit"]["coverage_caveat"])
+        legacy = {k: v for k, v in artifact.items() if k not in ("lower_quantile", "upper_quantile", "lower_rank", "upper_rank")}
+        self.assertEqual(calibrated_interval(20, 2, legacy, model_key=MODEL, as_of=CUTOFF)["interval"], [4, 36])
+        tampered = dict(artifact, lower_quantile=10)
+        self.assertEqual(calibrated_interval(20, 2, tampered, model_key=MODEL, as_of=CUTOFF)["status"], "fallback")
         json.dumps(artifact, allow_nan=False)
 
     def test_abs_residuals_and_nonnegative_bounds(self):
