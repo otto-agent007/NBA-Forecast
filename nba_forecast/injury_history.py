@@ -81,8 +81,8 @@ def _slot(url, raw, fetch, sleep, pause, retry_pause):
                 raise ValueError('official injury report response is not a PDF')
             sleep(pause)
             return dict(status='ok', sha256=hashlib.sha256(body).hexdigest(), retrieved_at=retrieved), None
-        except ValueError as exc:
-            code = _http_status(exc)
+        except (ValueError, OSError) as exc:  # OSError: a dropped connection escapes _fetch's retries
+            code = _http_status(exc) if isinstance(exc, ValueError) else None
             if code is None:
                 sleep(pause)
                 return None, f'{url}: {exc}'

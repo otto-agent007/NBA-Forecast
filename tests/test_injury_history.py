@@ -87,14 +87,17 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(m['slots'][url], dict(status='ok', sha256=meta['sha256'], retrieved_at='2026-10-25T00:00:00+00:00'))
 
     def test_a_network_failure_leaves_the_game_for_the_next_run(self):
-        def fetch(url, cache_dir, timeout):
-            raise ValueError(f'NBA source {url} unavailable after 3 bounded attempts (TimeoutError)')
+        import http.client
+        for error in (ValueError('NBA source unavailable after 3 bounded attempts (TimeoutError)'),
+                      http.client.RemoteDisconnected('Remote end closed connection without response')):
+            def fetch(url, cache_dir, timeout):
+                raise error
 
-        with tempfile.TemporaryDirectory() as d:
-            m = injury_history.fetch_reports([dict(game_id='g1', game_time='2025-01-16T00:00:00Z')], d, fetch=fetch,
-                                             sleep=lambda s: None)
-        self.assertEqual(m['anchors'], {})
-        self.assertIn('g1', m['failures'])
+            with tempfile.TemporaryDirectory() as d:
+                m = injury_history.fetch_reports([dict(game_id='g1', game_time='2025-01-16T00:00:00Z')], d,
+                                                 fetch=fetch, sleep=lambda s: None, workers=2)
+            self.assertEqual(m['anchors'], {})
+            self.assertIn('g1', m['failures'])
 
 
 class ExtractTests(unittest.TestCase):
