@@ -18,7 +18,7 @@ from .totals import game_totals
 from .validation import parse_time
 
 
-METHOD = 'paired_final_score_outcome_dispersion_discrete_normal_v1'
+METHOD = 'paired_final_score_outcome_dispersion_team_rating_blend_discrete_normal_v2'
 SETTLEMENT = 'final_score_including_overtime'
 EVIDENCE_KIND = 'historical_paired_final_score_outcomes'
 MINIMUM_GAMES = 100
@@ -27,7 +27,8 @@ SUPPORT = 120
 TAIL_FLOOR = 1e-6
 PARAMETERS = dict(minimum_games=MINIMUM_GAMES, maximum_games=MAXIMUM_GAMES,
                   support=SUPPORT, tail_floor_per_side=TAIL_FLOOR,
-                  minimum_scale=1., required_interior_standard_deviations=3.)
+                  minimum_scale=1., required_interior_standard_deviations=3.,
+                  rating_weight=.5, rating_prior_games=10, rating_prior_shrink=.6)
 LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
              'is an outcome prior, not this model\'s prediction-error calibration. '
              'The location uses regulation player means; final-score and overtime '
@@ -35,6 +36,60 @@ LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
 CALIBRATED_LIMITATION = ('Location and scale were fitted on genuinely saved pregame forecasts '
     'and passed a later-game validation gate. Future accuracy is not guaranteed; overtime '
     'and the regulation player-sum location remain approximations.')
+
+
+# The margin location blends the player-sum difference with a team rating:
+# each team's season-to-date average final margin, padded with pseudo-games of
+# last season's average regressed toward zero, plus the window's home edge.
+# A summed player projection carries no defence and misses late-season
+# lopsidedness; public systems blend player ratings with team results
+# (FiveThirtyEight weighted Elo about 35%). Round values, not fitted here: the
+# research measured current-season margin earning about 8-14% weight after 0-4
+# games and 80% after 20-39, which ten pseudo-games of a 0.6-regressed prior
+# reproduces.
+RATING_WEIGHT = PARAMETERS['rating_weight']
+RATING_PRIOR_GAMES = PARAMETERS['rating_prior_games']
+RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
+
+
+def _season(time):
+    moment = parse_time(time)
+    return moment.year if moment.month >= 8 else moment.year - 1
+
+
+def team_ratings(samples, as_of):
+    """Per-team rating in points per game from final samples known before ``as_of``.
+
+    ``samples`` carry home/away team IDs and points and a game time; the season
+    of ``as_of`` is current, the one before supplies the prior.
+    """
+    current = _season(as_of)
+    totals = {}
+    for s in samples:
+        season = _season(s['game_time'])
+        if season not in (current, current - 1):
+            continue
+        margin = s['home_points'] - s['away_points']
+        for team, signed in ((s['home_team_id'], margin), (s['away_team_id'], -margin)):
+            t = totals.setdefault(team, [0., 0, 0., 0])
+            if season == current:
+                t[0] += signed; t[1] += 1
+            else:
+                t[2] += signed; t[3] += 1
+    ratings = {}
+    for team, (now_sum, now_n, prior_sum, prior_n) in sorted(totals.items()):
+        prior = RATING_PRIOR_SHRINK * prior_sum / prior_n if prior_n else 0.
+        ratings[team] = dict(rating=(now_sum + RATING_PRIOR_GAMES * prior) / (now_n + RATING_PRIOR_GAMES),
+                             games=now_n, prior=prior)
+    return ratings
+
+
+def blended_location(player_sum, home_edge, ratings, home, away):
+    """The margin location and its team-rating part, or the player sum alone without both ratings."""
+    if home not in ratings or away not in ratings or not _finite(home_edge):
+        return player_sum, None
+    rating = home_edge + ratings[home]['rating'] - ratings[away]['rating']
+    return (1 - RATING_WEIGHT) * player_sum + RATING_WEIGHT * rating, rating
 
 
 def _canonical(value):
@@ -137,6 +192,7 @@ def prepare_margin_inputs(team_games, as_of, model_key):
         overtime_game_count=sum(r['overtime'] > 0 for r in accepted),
         home_score_variance=None, away_score_variance=None, paired_score_covariance=None,
         margin_variance=None, historical_mean_margin=None, standard_deviation=None,
+        team_ratings=team_ratings(accepted, as_of),
         parameters=dict(PARAMETERS), exclusions=dict(sorted(exclusions.items())), limitation=LIMITATION)
     if len(accepted) >= MINIMUM_GAMES:
         home = [r['home_points'] for r in accepted]
@@ -281,7 +337,11 @@ def build_margin_forecasts(snapshot, result):
             if totals['status'] != 'complete':
                 value['reason'] = 'incomplete_team_totals'; continue
             means = {t['team_id']: t['points_mean'] for t in totals['teams']}
-            raw_location = means[game['home_team_id']] - means[game['away_team_id']]
+            player_sum = means[game['home_team_id']] - means[game['away_team_id']]
+            raw_location, rating_margin = blended_location(player_sum, inputs['historical_mean_margin'],
+                inputs.get('team_ratings') or {}, game['home_team_id'], game['away_team_id'])
+            value.update(player_sum_margin=player_sum, team_rating_margin=rating_margin,
+                         rating_weight=RATING_WEIGHT if rating_margin is not None else 0.)
             raw_sd = inputs['standard_deviation']
             if not _finite(raw_location) or abs(raw_location)+PARAMETERS['required_interior_standard_deviations']*raw_sd>=SUPPORT:
                 value['reason']='margin_location_or_scale_outside_support';continue
@@ -306,8 +366,10 @@ def build_margin_forecasts(snapshot, result):
             value.update(status='estimated', reason=None, mean_margin=location, standard_deviation=sd,
                 pmf=pmf, pmf_sha256=_sha(pmf), sample_count=inputs['sample_count'],
                 distribution_mean_margin=distribution_mean, distribution_standard_deviation=distribution_sd,
-                mean_basis=('Unrounded regulation player-sum difference plus validated prospective location correction'
-                    if calibration else 'Unrounded regulation player-sum difference used as the final-margin location'),
+                mean_basis=(('Half the unrounded regulation player-sum difference, half the home edge plus the '
+                    'team-rating difference' if rating_margin is not None else
+                    'Unrounded regulation player-sum difference (a team rating was unavailable)')
+                    + (', plus validated prospective location correction' if calibration else '')),
                 scale_basis=('Historical paired-final prior times validated prospective residual scale correction'
                     if calibration else 'sqrt(sample variance of paired final margins + squared historical mean margin); not residual calibration'),
                 tail_policy='Outside-support mass is collected at endpoints; endpoint and farther lines are unsupported',

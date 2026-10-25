@@ -14,8 +14,9 @@ merged or activated:
 python -m nba_forecast backtest \
   --history datasets/regular-season-expanded-2026-10-22/history.json.gz \
   --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --market datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-newcomers
+  --reference datasets/backtest-2026-10-24-team-rating
 ```
 
 It replays last season in about three minutes and pairs the same player-games

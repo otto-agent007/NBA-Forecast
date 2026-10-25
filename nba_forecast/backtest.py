@@ -25,6 +25,7 @@ from statistics import fmean, pstdev, variance
 from zoneinfo import ZoneInfo
 
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
+from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
 from .runner_release import package_digest
 from .schedule import atomic_json, canonical
@@ -108,6 +109,8 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     players, teams, games, skipped, prior = [], [], [], defaultdict(int), []
     prior_days = []  # (day, rows) in order, so the history before a game is a prefix.
     margin_days = []  # (day, final home margins), the same way.
+    finals = []  # (day, final sample) for the team ratings, at most the production window.
+    rating_cache = {}
     for index, game in enumerate(ordered):
         rows = by_game.get(game['game_id'], [])
         day = _day(game['game_time'])
@@ -147,11 +150,21 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                                   totals[tid]['count'], totals[tid]['covered']])
                 if all(totals[t]['count'] for t in (g['home_team_id'], g['away_team_id'])):
                     sd = _margin_prior_sd([m for d, batch in margin_days if d < day for m in batch])
-                    location = totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected']
+                    if day not in rating_cache:
+                        window = [s for d, s in finals if d < day][-MARGIN_WINDOW:]
+                        edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
+                        rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
+                    edge, ratings = rating_cache[day]
+                    location, _ = blended_location(
+                        totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected'],
+                        edge, ratings, g['home_team_id'], g['away_team_id'])
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
                     games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
                                   _home_win_probability(location, sd) if sd else None])
         final_margin = game['team_stats'][game['home_team_id']]['pts'] - game['team_stats'][game['away_team_id']]['pts']
+        finals.append((day, dict(game_time=game['game_time'], home_team_id=game['home_team_id'],
+                                 away_team_id=game['away_team_id'], home_points=game['team_stats'][game['home_team_id']]['pts'],
+                                 away_points=game['team_stats'][game['away_team_id']]['pts'])))
         if margin_days and margin_days[-1][0] == day:
             margin_days[-1][1].append(final_margin)
         else:
@@ -250,7 +263,9 @@ def summarize(players, teams, game_rows=()):
     for t in team_rows:
         by_game[t['game_id']]['home' if t['home'] else 'away'] = t
     games = [g for g in by_game.values() if 'home' in g and 'away' in g]
-    margins = [(g['home']['projected_points'] - g['away']['projected_points'],
+    # The margin forecast's own location where a game row has it (it may blend more than team totals).
+    located = {r['game_id']: r['projected_margin'] for r in _records(game_rows, GAME_FIELDS)}
+    margins = [(located.get(g['home']['game_id'], g['home']['projected_points'] - g['away']['projected_points']),
                 g['home']['actual_points'] - g['away']['actual_points']) for g in games]
     return dict(
         players=dict(all=_metrics(played), by_expected_minutes=buckets,
@@ -364,11 +379,14 @@ def compare(current, reference, dates=None):
                 (home if t['home'] else away)[t['game_id']] = t
         margin_bias = {gid: (home[gid]['projected_points'] - away[gid]['projected_points'])
                        - (home[gid]['actual_points'] - away[gid]['actual_points']) for gid in home if gid in away}
-        margins = {gid: abs(v) for gid, v in margin_bias.items()}
         winner = {}
         for r in _records(rows.get('games', []), GAME_FIELDS):
+            # The margin forecast's own location, which may blend more than the team totals.
+            if r['game_id'] in margin_bias:
+                margin_bias[r['game_id']] = r['projected_margin'] - r['actual_margin']
             if r['prior_sd']:
                 winner[r['game_id']] = (r['home_win_probability'] - (r['actual_margin'] > 0)) ** 2
+        margins = {gid: abs(v) for gid, v in margin_bias.items()}
         if not winner and prior_sd:
             # A reference saved without margin rows is scored with the current run's prior scale.
             for gid in margin_bias:

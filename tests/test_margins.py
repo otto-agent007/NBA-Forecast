@@ -164,7 +164,9 @@ class MarginForecastTests(unittest.TestCase):
         original = deepcopy((snapshot, result))
         value = margins.build_margin_forecasts(snapshot, result)[0]
         self.assertEqual(value['status'], 'estimated')
-        self.assertEqual(value['mean_margin'], 5.)
+        # Evenly matched sources with no home edge: half the player sum, half a zero rating.
+        self.assertEqual((value['player_sum_margin'], value['team_rating_margin']), (5., 0.))
+        self.assertEqual(value['mean_margin'], 2.5)
         self.assertEqual(value['calibration_status'], 'uncalibrated')
         self.assertEqual(value['settlement'], 'final_score_including_overtime')
         self.assertEqual(value['sample_count'], 100)
@@ -242,6 +244,28 @@ class MarginForecastTests(unittest.TestCase):
         endpoints = value['supported_line_range']
         for line in (endpoints['minimum'], endpoints['maximum'], 1000):
             self.assertEqual(margins.probability_above(value, 'H', line)['status'], 'unavailable')
+
+
+class TeamRatingTests(unittest.TestCase):
+    def test_current_margin_is_padded_with_a_regressed_prior_season(self):
+        def game(time, home, away, hp, ap):
+            return dict(game_time=time, home_team_id=home, away_team_id=away, home_points=hp, away_points=ap)
+        samples = [game('2025-12-01T00:00:00Z', 'X', 'Y', 110, 100)] * 4  # last season: X +10, Y -10
+        samples += [game('2026-10-22T00:00:00Z', 'Y', 'X', 104, 100)]     # this season: Y +4, X -4
+        samples += [game('2023-12-01T00:00:00Z', 'X', 'Y', 150, 100)]     # two seasons ago: ignored
+        ratings = margins.team_ratings(samples, '2026-10-24T00:00:00Z')
+        prior = margins.RATING_PRIOR_SHRINK * 10
+        k = margins.RATING_PRIOR_GAMES
+        self.assertAlmostEqual(ratings['X']['rating'], (-4 + k * prior) / (1 + k))
+        self.assertAlmostEqual(ratings['Y']['rating'], (4 - k * prior) / (1 + k))
+        self.assertEqual((ratings['X']['games'], ratings['X']['prior']), (1, prior))
+
+    def test_location_blends_only_with_both_ratings(self):
+        ratings = dict(H=dict(rating=3.), A=dict(rating=-1.))
+        location, rating = margins.blended_location(6., 2., ratings, 'H', 'A')
+        self.assertEqual(rating, 6.)
+        self.assertEqual(location, (1 - margins.RATING_WEIGHT) * 6. + margins.RATING_WEIGHT * 6.)
+        self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'NEW'), (6., None))
 
 
 class MarginEventTests(unittest.TestCase):

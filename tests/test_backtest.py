@@ -125,8 +125,11 @@ class BacktestTests(unittest.TestCase):
         same = backtest.compare(rows, rows)
         self.assertEqual((same['winner']['n'], same['winner']['mean']), (24, 0))
         legacy = dict(rows); legacy.pop('games')
-        self.assertEqual((backtest.compare(rows, legacy)['winner']['n'], backtest.compare(rows, legacy)['winner']['mean']), (24, 0),
-                         'a reference without margin rows is scored with the current prior scale')
+        # Scored with the current prior scale on its team-total location, which the
+        # current run's team-rating blend moves.
+        legacy_winner = backtest.compare(rows, legacy)['winner']
+        self.assertEqual(legacy_winner['n'], 24, 'a reference without margin rows is scored with the current prior scale')
+        self.assertIsNotNone(legacy_winner['mean'])
         self.assertEqual(backtest.compare(legacy, rows)['winner'].get('n'), 0)
 
     def test_market_metrics_score_the_close_and_a_naive_rating_on_the_same_games(self):

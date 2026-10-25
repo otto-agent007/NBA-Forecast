@@ -10,8 +10,9 @@ activated.
 python -m nba_forecast backtest \
   --history datasets/regular-season-expanded-2026-10-22/history.json.gz \
   --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --market datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24
+  --reference datasets/backtest-2026-10-24-team-rating
 ```
 
 It takes about three minutes. `--limit N` replays only the last N
@@ -65,6 +66,26 @@ Shiller); a slope two standard errors above zero means the model knows something
 the close did not. These are reported, not gated. The lines come from ESPN's core
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
+
+## Reference: 2026-10-24 (team rating)
+
+`datasets/backtest-2026-10-24-team-rating/`: the newcomers baseline with the
+margin location blended half and half with a team rating (`margins.team_ratings`):
+each team's season-to-date average final margin padded with ten pseudo-games of
+0.6 times last season's average, plus the window's home edge. Team totals and
+player projections are unchanged; the margin forecast's location (and so its
+winner probability) moves, and the gate now scores margins from the game rows'
+own location. The weights are round values from the research, not fitted on
+this season.
+
+Margin MAE 11.87, winner accuracy 69.5%, winner Brier 0.2096; every other
+metric as the newcomers reference. Against it: margin −0.19 ± 0.12 and winner
+Brier −0.0048 ± 0.0027, both **improved**, every other metric within noise. The
+blend helps in every month (April 13.90 → 13.50). The closing line on the same
+games: 11.18 and 0.1928. Margins remain compressed (slope of actual on projected
+1.35); a scale fitted on this one season is not the next step — a second season is.
+On the six week-one 2026-27 games with captured lines, the blend would have cut
+the live margin error from 16.4 to 10.7 points (market 5.2).
 
 ## Reference: 2026-10-24 (newcomers)
 
