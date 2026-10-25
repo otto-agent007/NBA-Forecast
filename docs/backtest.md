@@ -34,8 +34,18 @@ Output: `scoreboard.json` (metrics, parameters, code and data hashes) and
 `--reference`, the same player-games, teams and games are paired. For points,
 minutes, team points and margin the mean change in absolute error is reported
 with its standard error; `improved` and `worse` mean the change exceeds two
-standard errors, otherwise `within_noise`. With 18,500 player-games that
-threshold is about 0.03 points. Signed bias is scored separately for points,
+standard errors, otherwise `within_noise`. The standard errors are clustered,
+because errors are not independent: player-games in one game share overtime,
+blowouts and the 240-minute budget, a role change follows a player all season,
+and a date shares its news. Player rows are two-way clustered by Eastern date
+and player, team rows by date and team, game rows by date (Cameron, Gelbach and
+Miller), and a standard error is never taken below the independent one. Each
+comparison reports `design_effect`, the variance ratio to independence. On the
+newcomers change it was 3.47 for minutes, 2.04 for team points and 1.07 for
+points; under independence a design effect of 3.47 makes the two-standard-error
+rule fire on pure noise about 28% of the time instead of 5%. Re-scoring every
+committed reference with clustering changed one verdict: the usage budget's
+points bias (`worse` → `within_noise`). Signed bias is scored separately for points,
 team points and margin: a bias more than two standard errors from zero that
 shrinks by at least one standard error is `improved`; one that appears or grows
 by at least one standard error is `worse`. Bias matters on

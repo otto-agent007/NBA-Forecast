@@ -136,5 +136,42 @@ class BacktestTests(unittest.TestCase):
             backtest.run_backtest(self.history, self.records, self.output, as_of=AS_OF)
 
 
+class ClusteredStandardErrorTests(unittest.TestCase):
+    def test_shared_shocks_inflate_the_standard_error_by_the_cluster_size(self):
+        rng = random.Random(3)
+        shocks = [rng.gauss(0, 1) for _ in range(200)]
+        values = [s for s in shocks for _ in range(10)]
+        labels = [(str(i // 10), str(i % 10)) for i in range(len(values))]
+        se, effect = backtest._mean_se(values, labels)
+        self.assertAlmostEqual(effect, 10, delta=.5)
+        self.assertGreater(se, backtest._mean_se(values, None)[0] * 3)
+
+    def test_independent_errors_and_negative_correlation_keep_the_independent_floor(self):
+        rng = random.Random(4)
+        values = [rng.gauss(0, 1) for _ in range(2000)]
+        labels = [(str(i // 20), str(i % 50)) for i in range(len(values))]
+        self.assertLess(backtest._mean_se(values, labels)[1], 1.3)
+        alternating = [1., -1.] * 500
+        se, effect = backtest._mean_se(alternating, [(str(i // 2),) for i in range(len(alternating))])
+        self.assertEqual(effect, 1.0)
+        self.assertAlmostEqual(se, backtest._mean_se(alternating, None)[0])
+
+    def test_a_correlated_player_shift_is_noise_once_clustered(self):
+        # Each player's whole season moves together: 40 independent draws, not 2,400.
+        rng = random.Random(5)
+        current, reference = {}, {}
+        for player in range(40):
+            shift = rng.gauss(0, 1)
+            for game in range(60):
+                key = f'G{game:03d}:{player}'
+                reference[key] = 0.
+                current[key] = .1 + shift + rng.gauss(0, .1)
+        independent = backtest._paired(current, reference)
+        clustered = backtest._paired(current, reference, lambda key: tuple(key.split(':')))
+        self.assertEqual(independent['verdict'], 'worse')
+        self.assertEqual(clustered['verdict'], 'within_noise')
+        self.assertGreater(clustered['design_effect'], 20)
+
+
 if __name__ == '__main__':
     unittest.main()

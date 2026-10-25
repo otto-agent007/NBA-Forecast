@@ -11,8 +11,8 @@ injury reports and a replay cannot. Prior-season aggregate priors and the
 archive-bound enhancements are not available historically either.
 
 A scoreboard is compared with a reference by pairing the same player-games, so
-the verdict reflects a change beyond sampling noise (two standard errors of the
-mean paired difference), not a difference in the games evaluated.
+the verdict reflects a change beyond sampling noise (two clustered standard errors
+of the mean paired difference), not a difference in the games evaluated.
 """
 import gzip
 import hashlib
@@ -270,25 +270,60 @@ def summarize(players, teams, game_rows=()):
                    probabilities=_margin_probability_metrics(_records(game_rows, GAME_FIELDS))))
 
 
-def _paired(current, reference):
-    """Mean paired difference (current minus reference) with its standard error and verdict."""
+def _cluster_variance(values, labels):
+    """Variance of the mean with residuals summed within each label (one-way cluster-robust), or None."""
+    mean, sums = fmean(values), defaultdict(float)
+    for value, label in zip(values, labels):
+        sums[label] += value - mean
+    groups = len(sums)
+    if groups < 2:
+        return None
+    return groups / (groups - 1) * sum(s * s for s in sums.values()) / len(values) ** 2
+
+
+def _mean_se(values, clusters):
+    """Standard error of the mean and its design effect (variance ratio to independence).
+
+    Player-games in one game share overtime, blowouts and the 240-minute budget, a
+    player's role change follows him all season, and a date shares its news, so
+    errors are not independent. ``clusters`` gives each value a (date, unit) pair;
+    the variance is two-way clustered on both (Cameron, Gelbach and Miller), or
+    one-way for a single label, and is never taken below the independent variance.
+    """
+    n = len(values)
+    independent = pstdev(values) ** 2 / n
+    if not clusters or independent == 0:
+        return math.sqrt(independent), 1.0
+    ways = [_cluster_variance(values, [c[i] for c in clusters]) for i in range(len(clusters[0]))]
+    ways = [v for v in ways if v is not None]
+    if not ways:
+        return math.sqrt(independent), 1.0
+    combined = max(sum(ways) - (len(ways) - 1) * independent, *ways, independent)
+    return math.sqrt(combined), combined / independent
+
+
+def _paired(current, reference, cluster=None):
+    """Mean paired difference (current minus reference) with its clustered standard error and verdict."""
     keys = sorted(set(current) & set(reference))
     if len(keys) < 2:
         return dict(n=len(keys), mean=None, se=None, verdict='insufficient')
     d = [current[k] - reference[k] for k in keys]
-    mean, se = fmean(d), pstdev(d) / math.sqrt(len(d))
+    mean = fmean(d)
+    se, effect = _mean_se(d, cluster and [cluster(k) for k in keys])
     verdict = 'improved' if mean + 2 * se < 0 else 'worse' if mean - 2 * se > 0 else 'within_noise'
-    return dict(n=len(d), mean=mean, se=se, verdict=verdict,
-                rule='improved/worse when the mean paired difference exceeds two standard errors')
+    return dict(n=len(d), mean=mean, se=se, se_independent=pstdev(d) / math.sqrt(len(d)), design_effect=effect,
+                verdict=verdict, rule='improved/worse when the mean paired difference exceeds two standard errors, '
+                                      'clustered by date and player (team for team rows) and never below independence')
 
 
-def _bias(current, reference):
+def _bias(current, reference, cluster=None):
     """Signed-error means: a clear bias that shrinks is an improvement; one that appears or grows is worse."""
     keys = sorted(set(current) & set(reference))
     if len(keys) < 2:
         return dict(n=len(keys), current=None, reference=None, se=None, verdict='insufficient')
     cur, ref = [current[k] for k in keys], [reference[k] for k in keys]
-    new, old, se = fmean(cur), fmean(ref), max(pstdev(cur), pstdev(ref)) / math.sqrt(len(keys))
+    labels = cluster and [cluster(k) for k in keys]
+    new, old, se = fmean(cur), fmean(ref), max(_mean_se(cur, labels)[0], _mean_se(ref, labels)[0])
     if abs(old) > 2 * se and abs(old) - abs(new) > se:
         verdict = 'improved'
     elif abs(new) > 2 * se and abs(new) - abs(old) > se:
@@ -300,8 +335,12 @@ def _bias(current, reference):
                      'improved; one that appears or grows by at least one standard error is worse')
 
 
-def compare(current, reference):
-    """Pair the same player-games, teams and games: absolute errors (lower is better) and signed biases."""
+def compare(current, reference, dates=None):
+    """Pair the same player-games, teams and games: absolute errors (lower is better) and signed biases.
+
+    ``dates`` maps game IDs to their Eastern date for clustering; a game without one
+    is its own cluster.
+    """
     def errors(rows):
         points, minutes, point_bias, participation = {}, {}, {}, {}
         for r in _records(rows['players'], rows.get('player_fields', PLAYER_FIELDS)):
@@ -340,8 +379,17 @@ def compare(current, reference):
                     winner=winner, points_bias=point_bias, team_points_bias=team_bias, margin_bias=margin_bias)
     prior_sd = {r['game_id']: r['prior_sd'] for r in _records(current.get('games', []), GAME_FIELDS)}
     cur, ref = errors(current), errors(reference)
-    result = {name: _paired(cur[name], ref[name]) for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner')}
-    result.update({name: _bias(cur[name], ref[name]) for name in ('points_bias', 'team_points_bias', 'margin_bias')})
+    dates = dates or {}
+    def by_date_and_unit(key):
+        gid, _, unit = key.partition(':')
+        return dates.get(gid, gid), unit
+    def by_date(key):
+        return (dates.get(key, key),)
+    cluster = dict(points=by_date_and_unit, minutes=by_date_and_unit, participation=by_date_and_unit,
+                   points_bias=by_date_and_unit, team_points=by_date_and_unit, team_points_bias=by_date_and_unit,
+                   margin=by_date, winner=by_date, margin_bias=by_date)
+    result = {name: _paired(cur[name], ref[name], cluster[name]) for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner')}
+    result.update({name: _bias(cur[name], ref[name], cluster[name]) for name in ('points_bias', 'team_points_bias', 'margin_bias')})
     verdicts = {v['verdict'] for v in result.values()}
     result['verdict'] = 'worse' if 'worse' in verdicts else 'improved' if 'improved' in verdicts else 'within_noise'
     return result
@@ -373,7 +421,8 @@ def run_backtest(history, records, output, *, reference=None, warmup_fraction=.3
         scoreboard['comparison'] = dict(reference=str(reference), reference_created_at=ref_board.get('created_at'),
                                         reference_code_sha256=ref_board.get('code_sha256'),
                                         reference_model_version=ref_board.get('model_version'),
-                                        **compare(rows, ref_rows))
+                                        **compare(rows, ref_rows, {r['game_id']: _day(r['game_time']).isoformat()
+                                                                   for r in records}))
     out.mkdir(parents=True, exist_ok=True)
     (out / 'rows.json.gz').write_bytes(gzip.compress(canonical(rows), mtime=0))
     atomic_json(out / 'scoreboard.json', scoreboard)
@@ -416,7 +465,8 @@ def format_scoreboard(board):
             item = c.get(name, {})
             if item.get('mean') is not None:
                 what = 'Brier change' if name in ('participation', 'winner') else 'mean abs-error change'
-                lines.append(f"  {name:18s} n={item['n']:6d} {what} {item['mean']:+.4f} ± {2 * item['se']:.4f}  {item['verdict']}")
+                lines.append(f"  {name:18s} n={item['n']:6d} {what} {item['mean']:+.4f} ± {2 * item['se']:.4f}"
+                             f" (design effect {item.get('design_effect', 1.0):.2f})  {item['verdict']}")
         for name in ('points_bias', 'team_points_bias', 'margin_bias'):
             item = c.get(name, {})
             if item.get('current') is not None:
