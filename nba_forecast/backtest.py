@@ -240,6 +240,12 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     residual_days[-1][1].extend(residuals); residual_days[-1][2].add(game['game_id'])
                 else:
                     residual_days.append((day, residuals, {game['game_id']}))
+                # Team points as production publishes them (totals.game_totals): the weighted player sum
+                # plus unallocated regulation minutes at the replacement rate.
+                for item in result.get('game_totals') or []:
+                    for team_total in item['teams']:
+                        if team_total['points_mean'] is not None and team_total['team_id'] in totals:
+                            totals[team_total['team_id']]['projected'] = team_total['points_mean']
                 for tid in (g['home_team_id'], g['away_team_id']):
                     stats, minutes = game['team_stats'][tid], game['team_minutes'][tid]
                     teams.append([game['game_id'], tid, tid == g['home_team_id'], totals[tid]['projected'],
