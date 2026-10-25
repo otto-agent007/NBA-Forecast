@@ -1,30 +1,39 @@
 # Backtest scoreboard
 
-`python -m nba_forecast backtest` replays one season with the current model
-code and scores it. It is the gate for model changes (see `AGENTS.md`): a
+`python -m nba_forecast backtest` replays two seasons with the current model
+code and scores them. It is the gate for model changes (see `AGENTS.md`): a
 change to how forecasts are computed is judged here first, on the same games
 and players as the committed reference, before anything is merged or
 activated.
 
 ```bash
 python -m nba_forecast backtest \
-  --history datasets/regular-season-expanded-2026-10-22/history.json.gz \
-  --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
-  --market datasets/market-closing-2025-26/closing-lines.json.gz \
+  --history datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
+  --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-minute-buckets
+  --reference datasets/backtest-2026-10-25-two-seasons
 ```
 
-It takes about three minutes. `--limit N` replays only the last N
-evaluation games (CI uses 400); `--json` prints the full scoreboard. The exit
-code is 3 when the comparison verdict is `worse`.
+Each `--history`/`--team-games` pair is one season, replayed on its own from its
+own box scores; `--injuries` and `--market` take one file per season in the same
+order. The seasons' rows are pooled into one set of metrics and one comparison
+(game dates never overlap, so the date clusters stay independent), and each
+season also reports its own metrics, market comparison and verdict under
+`seasons`. The gate is the pooled verdict; a season-level `worse` under a pooled
+pass must be explained. It takes about seven minutes. `--limit N` replays only
+the last N evaluation games of each season (CI uses 400); `--json` prints the
+full scoreboard. The exit code is 3 when the pooled verdict is `worse`.
 
 ## What it does
 
 Games are taken in order. The first 30% of game dates are history only; every
 game after that is forecast with the ordinary baseline model from the box
 scores of earlier Eastern dates, never the same day. The roster is the box
-score's own players, all treated as available. Player metrics use projected
+score's own players, active and inactive, each with the status the official
+injury report gave them (see "Injury reports" below); without `--injuries` every
+player is available, as before October 2026. Player metrics use projected
 players who actually played with positive minutes, the same population the
 prospective interval calibration uses. Team points compare the projected team
 sum with the regulation-equivalent final score; margins and winners use the
@@ -66,6 +75,89 @@ Shiller); a slope two standard errors above zero means the model knows something
 the close did not. These are reported, not gated. The lines come from ESPN's core
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
+
+## Injury reports
+
+`--injuries` gives each game the newest official injury report published by its
+T-minus-30 checkpoint, the report a live final-stage forecast reads
+(`nba_forecast/injury_history.py`; `datasets/injury-reports-*/`). Reports were
+hourly until 2025-12-21 (named `..._07PM.pdf`, published at half past) and every
+15 minutes from 2025-12-22; an absent slot falls back to the previous one, up to
+three hours. The production parser joins each row to the season's box-score
+players. A listed player keeps the report's status: out means no minutes;
+probable, questionable and doubtful scale the participation probability
+(`model.STATUS_PARTICIPATION`). A player the report omits is available. A player
+it lists but the box score omits (ESPN drops some inactives) is added and scored
+as not playing. Every game in both seasons has a report: 2025-26 3 minutes old
+on average at the checkpoint, 2024-25 10.
+
+At the checkpoint almost every tag is resolved: of 21,682 players listed out
+over both seasons two played, and only 382 (2024-25) and 110 (2025-26) are
+still probable, questionable or doubtful. Over both seasons those played 91%
+(probable, 142), 56% (questionable, 311) and 3% (doubtful, 39), against the
+model's 90%, 55% and 15%: the first two hold, doubtful is too high. The rates
+matter more for earlier forecasts, which see more tags; measuring them there
+needs the earlier reports of each day.
+
+What the reports change, same model, 2025-26, against the minute-buckets
+reference (`datasets/backtest-2026-10-25-two-seasons/scoreboard.json`,
+`comparison`):
+
+- Projected players who did not play: 35.7% → 15.8%, the live rate (about 14%).
+- Minutes −0.10 ± 0.07, participation Brier −0.016 ± 0.003 (0.153 → 0.104),
+  interval score −0.50 ± 0.14: improved. Points and margin within noise.
+- Player points bias −0.39 → +0.57 and team points bias −0.92 → −1.91: worse.
+  Once outs are known, players who play are over-projected while teams come
+  out low: mean P(plays) 0.78 against 0.84 who played. The participation rate
+  still counts a player's injury absences against him, so a player back from
+  injury, or one with no report row, is down-weighted twice. Live forecasts read
+  the same reports, so this bias is live too; it is the next model item.
+
+The replay also now takes team points and the margin's player sum from the
+model's own `game_totals` (schema 4: the weighted player sum plus unallocated
+minutes at the replacement rate), as production does; it used to re-sum player
+points. Without injury reports that changes nothing (team points +0.0007 ±
+0.0208); with them it is 1.6 points of the old team-points bias.
+
+## Two seasons
+
+The second season, 2024-25 (`datasets/espn-season-2024-25/`), comes from ESPN game
+summaries because the NBA edge took four to six minutes per request from this
+host in October 2026. Minutes are whole minutes and IDs are ESPN's; see that
+dataset's README. 1,229 of the 1,230 counted games are present (one ESPN box
+score's shot totals do not add up), 869 are evaluated.
+
+It is out of sample for every change made before it existed. Replaying it with
+the code before and after each 2026-10-24 change, without injury reports:
+
+| Change | 2025-26 (where it was chosen) | 2024-25 |
+|---|---|---|
+| Margin team-rating blend | margin −0.19 ± 0.12, winner Brier −0.0048 ± 0.0027: improved | margin −0.62 ± 0.39, winner Brier −0.0066 ± 0.0050: improved |
+| Two-tailed walk-forward interval | interval score −0.19 ± 0.13: improved | +0.015 ± 0.032: within noise |
+| Per-minutes-bucket tails | interval score −0.20 ± 0.11: improved | −0.08 ± 0.07: improved |
+
+On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
+(ESPN BET for every game) and the naive point-differential rating's 11.50; winner
+Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-25 (two seasons, injury reports)
+
+`datasets/backtest-2026-10-25-two-seasons/`: model `regular-season-baseline-0.4.6`
+(the minute-buckets model, unchanged) on 2024-25 and 2025-26 with injury reports
+and production team totals. 1,737 games, 36,923 played player-games. Pooled:
+points MAE 4.58 (bias +0.50), minutes 4.97, 80% coverage 80.0% (interval score
+19.84), participation Brier 0.103, team points 9.52 (bias −1.66), margin 11.51,
+winners 68.6%, winner Brier 0.2081.
+
+| Season | Points MAE | Minutes MAE | Margin MAE | Winners | Closing line margin MAE |
+|---|---|---|---|---|---|
+| 2024-25 (869 games) | 4.59 | 4.93 | 11.26 | 67.3% | 10.69 |
+| 2025-26 (868 games) | 4.58 | 5.01 | 11.75 | 69.8% | 11.18 |
+
+Its comparison with the minute-buckets reference covers 2025-26 only (the old
+reference has no 2024-25 rows) and reads `worse` on the two biases above: that
+is the replay seeing what live runs see, not a model change. The model was not
+changed, so it keeps its version and key.
 
 ## Reference: 2026-10-24 (minute buckets)
 
@@ -242,15 +334,12 @@ error hint (home on a back-to-back −1.8 ± 1.6), so no rest term was added.
 
 ## Reading the numbers
 
-- **Projected players who did not play: 35% of projections.** The replay
-  treats every listed player as available, so inactive and DNP players draw
-  minutes from the ones who play. That is why bias is negative for low-minute
-  players and the live model, which has injury reports, shows bias near zero.
-  A participation model would move this number and is the next model item.
+- **Projected players who did not play: 15.8% of projections** with injury
+  reports, the live rate; 35.7% without them, when out players drew minutes.
 - **Participation** is scored on every projected row, played or not: the Brier
   score of the participation probability against actually playing, beside two
-  references, a constant rate and "assume everyone plays". The replay has no
-  injury reports, so this measures the recent-participation model alone.
+  references, a constant rate and "assume everyone plays". With injury reports
+  it measures the recent-participation model and the reported statuses together.
 - **Coverage** is measured at the heuristic half-width (1.70 sd). The nominal
   80% interval covers 76% here and 78–79% for players projected at 10+ minutes.
 - **Home court** is a symmetric factor (home up, away down by the same
@@ -260,12 +349,14 @@ error hint (home on a back-to-back −1.8 ± 1.6), so no rest term was added.
 
 ## What it cannot measure
 
-No injury reports exist historically, so availability and participation are
-not forecast. No prior-season aggregate priors or archive-bound enhancements
-(pace, defense, rest, shot location, injury exits) are applied, so changes to
-those still need the live `performance.json` benchmarks. A result here is
-necessary, not sufficient: a change that improves the replay is expected to
-show up live after enough games, and both are reported.
+The replay uses only the T-minus-30 report, so preliminary forecasts, which read
+earlier reports with more questionable tags, are not replayed. No prior-season
+aggregate priors or archive-bound enhancements (pace, defense, rest, shot
+location, injury exits) are applied, so changes to those still need the live
+`performance.json` benchmarks. Each season replays without the previous one's
+box scores (2024-25 uses ESPN IDs), so the first weeks lack prior-season form.
+A result here is necessary, not sufficient: a change that improves the replay is
+expected to show up live after enough games, and both are reported.
 
 ## Updating the reference
 

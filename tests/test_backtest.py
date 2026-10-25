@@ -230,7 +230,8 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(again['comparison']['verdict'], 'within_noise')
         self.assertEqual([s['comparison']['points']['n'] for s in again['seasons']], [one['n'], one['n']])
         text = backtest.format_scoreboard(again)
-        self.assertIn('season earlier:', text)
+        self.assertEqual([s['label'] for s in board['seasons']], ['2024-25', '2025-26'])
+        self.assertIn('season 2024-25:', text)
         self.assertIn('(pooled over seasons)', text)
 
     def test_refuses_future_known_sources_and_a_used_output(self):

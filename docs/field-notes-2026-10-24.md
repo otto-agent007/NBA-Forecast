@@ -50,7 +50,8 @@ this holds the reasons, the numbers and the traps. Read `AGENTS.md` first.
   yet (ask the owner).
 - `datasets/regular-season-expanded-2026-10-24-home/history.json.gz` is the
   tick's `--history` (2025-26 with home flags). cdn.nba.com returns 403 from
-  this host, so 2024-25 cannot be backfilled that way.
+  this host, so 2024-25 cannot be backfilled that way. (2026-10-25: it is now
+  built from ESPN summaries, `datasets/espn-season-2024-25/`.)
 
 ## What the replay cannot see, and what to use instead
 
@@ -62,6 +63,10 @@ changes and useless for three things that dominate week one of a season:
    additive in the model; in the replay rosters barely change.
 2. Teams with several outs (expected minutes well under 240).
 3. Early-season participation (one listing per player).
+
+Since 2026-10-25 the replay covers 2024-25 as well and applies each game's
+T-minus-30 official injury report (`docs/backtest.md`, "Injury reports"), so
+item 2 is measured now; items 1 and 3 still are not.
 
 For those, compare with the market. On 2026-10-24 the model's margins ran
 about twice the market's on every game (mean absolute gap 11 points, totals

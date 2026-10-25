@@ -12,15 +12,18 @@ merged or activated:
 
 ```bash
 python -m nba_forecast backtest \
-  --history datasets/regular-season-expanded-2026-10-22/history.json.gz \
-  --team-games datasets/model-upgrade-2026-10-23/team-games.json.gz \
-  --market datasets/market-closing-2025-26/closing-lines.json.gz \
+  --history datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
+  --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-24-minute-buckets
+  --reference datasets/backtest-2026-10-25-two-seasons
 ```
 
-It replays last season in about three minutes and pairs the same player-games
-against the reference. `worse` on points, minutes, team points or margin
+It replays the 2024-25 and 2025-26 seasons, each with the official injury
+report every game's final forecast would have read, in about seven minutes,
+and pairs the same player-games against the reference. The verdict pools both
+seasons; each season's own verdict is shown beside it. `worse` on points, minutes, team points or margin
 error, the 80% interval score, participation or winner Brier, or on points,
 team-point or margin bias, means the change is not merged. `within_noise` is acceptable only for a change whose
 purpose is not accuracy (a simplification, a bug fix, an operational fix); say
@@ -35,7 +38,7 @@ When a change is merged, commit its scoreboard as the new reference
 ## Before changing the model
 
 Read `docs/field-notes-2026-10-24.md`: what the replay cannot see (week-one
-rosters, outs, early participation), the market comparison to run instead,
+rosters, early participation), the market comparison to run instead,
 the measured constants behind the budgets, and the traps.
 
 ## Other rules

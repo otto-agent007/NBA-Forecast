@@ -18,7 +18,7 @@ import gzip
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import fmean, pstdev, variance
@@ -670,7 +670,9 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         totals['total'] += replayed['total_games']; totals['evaluated'] += replayed['evaluated_games']
         for k, v in replayed['skipped'].items():
             skipped[k] += v
-        part = dict(sources=season.get('sources') or {}, games=dict(total=replayed['total_games'],
+        seasons_seen = Counter(r['season'] for r in season['records'])
+        part = dict(label=seasons_seen.most_common(1)[0][0] if seasons_seen else None,
+                    sources=season.get('sources') or {}, games=dict(total=replayed['total_games'],
                     evaluated=replayed['evaluated_games'], skipped=replayed['skipped']),
                     metrics=summarize(replayed['players'], replayed['teams'], replayed['games']),
                     game_ids={g[0] for g in replayed['games']} | {t[0] for t in replayed['teams']})
@@ -764,7 +766,7 @@ def format_scoreboard(board):
             tp = mk['team_points']
             lines.append(f"  team points (n={tp['n']}): model MAE {tp['model_mae']:.2f}, implied by the close {tp['market_mae']:.2f} (bias {tp['market_bias']:+.2f})")
     for part in board.get('seasons') or []:
-        pm, label = part['metrics'], Path(str(part['sources'].get('team_games', '?'))).parent.name
+        pm, label = part['metrics'], part.get('label')
         a, g = pm['players']['all'], pm['games']
         line = (f"season {label}: {part['games']['evaluated']} games, pts MAE {a['points_mae']:.2f}, min MAE "
                 f"{a['minutes_mae']:.2f}, margin MAE {g['margin_mae']:.2f}, winners {g['winner_accuracy']:.1%}")
@@ -772,7 +774,8 @@ def format_scoreboard(board):
         if mk.get('n', 0) > 1:
             line += f"; closing line {mk['market']['margin_mae']:.2f} vs model {mk['model']['margin_mae']:.2f} on {mk['n']}"
         if part.get('comparison'):
-            line += f"; vs reference {part['comparison']['verdict']}"
+            paired = part['comparison']['points']['n'] or part['comparison']['margin']['n']
+            line += f"; vs reference {part['comparison']['verdict']}" if paired else '; not in the reference'
         lines.append(line)
         av = part['games'].get('availability')
         if av:
