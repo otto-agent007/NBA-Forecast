@@ -10,6 +10,9 @@ from tests.test_model import player, row, snapshot
 from tests.test_store import inputs, actual, NOW, LATER
 
 
+BENCH, ROTATION, STARTER = PARTICIPATION_PRIORS[0][1], PARTICIPATION_PRIORS[1][1], PARTICIPATION_PRIORS[3][1]
+
+
 def team_games(count, team='A'):
     return [(datetime(2025, 3, i + 1, 20, tzinfo=timezone.utc), f'g{i}') for i in range(count)]
 
@@ -32,10 +35,10 @@ class ParticipationEstimateTests(unittest.TestCase):
         games = team_games(12)
         full = _participation(player(), rows(range(12)), games, 30)
         self.assertEqual((full['played'], full['games']), (10, 10))
-        self.assertAlmostEqual(full['probability'], (10 + PARTICIPATION_PSEUDO_GAMES * .82) / (10 + PARTICIPATION_PSEUDO_GAMES))
+        self.assertAlmostEqual(full['probability'], (10 + PARTICIPATION_PSEUDO_GAMES * STARTER) / (10 + PARTICIPATION_PSEUDO_GAMES))
         half = _participation(player(), rows(range(0, 12, 2), range(1, 12, 2), minutes=15), games, 15)
-        self.assertAlmostEqual(half['probability'], (5 + PARTICIPATION_PSEUDO_GAMES * .70) / (10 + PARTICIPATION_PSEUDO_GAMES))
-        self.assertEqual(half['prior'], .70)
+        self.assertAlmostEqual(half['probability'], (5 + PARTICIPATION_PSEUDO_GAMES * ROTATION) / (10 + PARTICIPATION_PSEUDO_GAMES))
+        self.assertEqual(half['prior'], ROTATION)
 
     def test_games_before_joining_the_team_do_not_count_and_absences_do(self):
         games = team_games(12)
@@ -43,12 +46,13 @@ class ParticipationEstimateTests(unittest.TestCase):
         self.assertEqual((newcomer['played'], newcomer['games']), (2, 2))
         absent = _participation(player(), rows([2, 3]), games, 8)
         self.assertEqual((absent['played'], absent['games']), (2, 10))
-        self.assertAlmostEqual(absent['probability'], (2 + PARTICIPATION_PSEUDO_GAMES * .18) / 13)
+        self.assertAlmostEqual(absent['probability'], (2 + PARTICIPATION_PSEUDO_GAMES * BENCH) / 13)
         nobody = _participation(player(), [], games, 30)
-        self.assertEqual((nobody['games'], nobody['probability']), (0, .82))
+        self.assertEqual(nobody['games'], 0)
+        self.assertAlmostEqual(nobody['probability'], STARTER)
         early = _participation(player(), rows([0]), team_games(2), 30)
         self.assertEqual((early['games'], early['played']), (2, 1), 'early listings count from the first one')
-        self.assertAlmostEqual(early['probability'], (1 + PARTICIPATION_PSEUDO_GAMES * .82) / (2 + PARTICIPATION_PSEUDO_GAMES))
+        self.assertAlmostEqual(early['probability'], (1 + PARTICIPATION_PSEUDO_GAMES * STARTER) / (2 + PARTICIPATION_PSEUDO_GAMES))
 
     def test_games_he_was_reported_out_of_do_not_count_either_way(self):
         games = team_games(12)
@@ -82,7 +86,7 @@ class ParticipationEstimateTests(unittest.TestCase):
         for label, factor in STATUS_PARTICIPATION.items():
             q = dict(player(status='questionable'), reported_status=label.title())
             self.assertAlmostEqual(_participation(q, rows(range(10)), games, 30)['probability'],
-                                   factor * (10 + 3 * .82) / 13, msg=label)
+                                   factor * (10 + 3 * STARTER) / 13, msg=label)
         self.assertEqual(_participation(dict(player(status='questionable'), reported_status='Odd'), rows(range(10)), games, 30)['status_factor'], .5)
 
 

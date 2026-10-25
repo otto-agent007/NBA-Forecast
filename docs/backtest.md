@@ -156,6 +156,14 @@ winner within noise (team points bias −1.66 → −1.54). Both seasons improve
 their own. Points MAE 4.58 → 4.51, minutes 4.97 → 4.84; mean P(plays) 0.82
 against 0.84 who played.
 
+Tried and not merged: role priors measured on available games only (under 10
+minutes .52, 10–20 .82, 20–28 .98, 28+ .99 in 2024-25; 2025-26 within .01 of
+those, against the current .18/.70/.79/.82). Mean P(plays) rose to 0.85, but the
+240-minute budget then cut every player's conditional minutes: minutes +0.045 ±
+0.015, interval score +0.059 ± 0.036 and points bias +0.03 → −0.24, all worse,
+while team points bias barely moved (−1.54 → −1.50). The remaining team-points
+shortfall is not in the participation probabilities.
+
 ## Reference: 2026-10-25 (two seasons, injury reports)
 
 `datasets/backtest-2026-10-25-two-seasons/`: model `regular-season-baseline-0.4.6`

@@ -35,6 +35,38 @@ class ReportNamingTests(unittest.TestCase):
         self.assertEqual(len(later), 13)
 
 
+    def test_a_midday_anchor_reads_the_game_day_report_unless_the_game_is_earlier(self):
+        # 7:00 PM ET tip, 12:30 anchor: the hourly file published at 12:30 (named 12PM).
+        self.assertEqual(injury_history.candidates('2025-01-16T00:00:00Z', '12:30')[0], BASE + '2025-01-15_12PM.pdf')
+        # A 1:00 PM tip keeps its T-30 checkpoint, 12:30.
+        self.assertEqual(injury_history.checkpoint_at('2026-01-15T18:00:00Z', '12:30').isoformat(), '2026-01-15T17:30:00+00:00')
+        self.assertEqual(injury_history.checkpoint_at('2026-01-16T00:00:00Z', '12:30').isoformat(), '2026-01-15T17:30:00+00:00')
+        self.assertEqual(injury_history.checkpoint_at('2026-01-16T00:00:00Z').isoformat(), '2026-01-15T23:30:00+00:00')
+
+    def test_every_game_resolves_against_the_run_anchor_and_a_failed_slot_is_tried_once(self):
+        calls = []
+
+        def fetch(url, cache_dir, timeout):
+            calls.append(url)
+            if url.endswith('2025-01-15_12PM.pdf'):
+                raise ValueError(f'NBA source {url} unavailable after 3 bounded attempts (TimeoutError)')
+            return b'%PDF-1.4 ' + url.encode(), '2026-10-25T00:00:00+00:00'
+
+        records = [dict(game_id='g1', game_time='2025-01-16T00:00:00Z'), dict(game_id='g2', game_time='2025-01-16T03:00:00Z'),
+                   dict(game_id='g3', game_time='2025-01-17T00:00:00Z')]
+        with tempfile.TemporaryDirectory() as d:
+            m = injury_history.fetch_reports(records, d, fetch=fetch, sleep=lambda s: None, anchor='12:30')
+        self.assertEqual(m['anchors'], dict(g3=BASE + '2025-01-16_12PM.pdf'))  # the midday file, not T-30
+        self.assertEqual(set(m['failures']), {'g1', 'g2'})
+        self.assertEqual(calls.count(BASE + '2025-01-15_12PM.pdf'), 1)
+
+    def test_a_manifest_keeps_one_anchor_policy(self):
+        with tempfile.TemporaryDirectory() as d:
+            injury_history.fetch_reports([], d, anchor='12:30')
+            with self.assertRaisesRegex(ValueError, 'anchors for 12:30'):
+                injury_history.fetch_reports([], d)
+
+
 class FetchTests(unittest.TestCase):
     def test_an_absent_slot_is_retried_once_then_the_previous_slot_is_used(self):
         calls = []

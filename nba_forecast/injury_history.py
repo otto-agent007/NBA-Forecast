@@ -47,9 +47,24 @@ def slot_url(local):
     return BASE + day + '_' + local.strftime('%I_%M%p') + '.pdf'
 
 
-def candidates(game_time):
+def checkpoint_at(game_time, anchor=None):
+    """The game's T-minus-30 checkpoint, or ``anchor`` (HH:MM Eastern on game day) when that is earlier.
+
+    An anchor replays an earlier, preliminary forecast: a midday anchor reads
+    the game-day report most tags are still open on.
+    """
+    tip = parse_time(game_time)
+    final = tip - CHECKPOINT
+    if anchor is None:
+        return final
+    hour, minute = (int(part) for part in anchor.split(':'))
+    local = tip.astimezone(EASTERN).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return min(final, local.astimezone(timezone.utc))
+
+
+def candidates(game_time, anchor=None):
     """Report URLs a game's checkpoint could anchor on, newest first, within MAX_AGE."""
-    checkpoint = parse_time(game_time) - CHECKPOINT
+    checkpoint = checkpoint_at(game_time, anchor)
     local = checkpoint.astimezone(EASTERN).replace(second=0, microsecond=0)
     found = []
     # Step back a quarter hour at a time; each date's naming keeps the slots it publishes.
@@ -102,7 +117,7 @@ def _recover(slots, raw):
 
 
 def fetch_reports(records, directory, *, pause=PAUSE, retry_pause=RETRY_PAUSE, fetch=_fetch, sleep=time.sleep,
-                  workers=1):
+                  workers=1, anchor=None):
     """Archive each game's anchor report; resumable through ``manifest.json``.
 
     A 403 or 404 slot is retried once after ``retry_pause`` (the CDN answers a
@@ -114,12 +129,14 @@ def fetch_reports(records, directory, *, pause=PAUSE, retry_pause=RETRY_PAUSE, f
     folder = Path(directory)
     raw = folder / 'raw'
     path = folder / 'manifest.json'
-    manifest = json.loads(path.read_text()) if path.exists() else dict(version=VERSION, slots={}, anchors={})
+    manifest = json.loads(path.read_text()) if path.exists() else dict(version=VERSION, slots={}, anchors={}, anchor=anchor)
+    if manifest.get('anchor') != anchor:
+        raise ValueError(f"{path} holds anchors for {manifest.get('anchor') or 'T-30'}, not {anchor or 'T-30'}")
     slots, anchors = manifest['slots'], manifest['anchors']
     _recover(slots, raw)
     ordered = sorted(records, key=lambda r: (r['game_time'], r['game_id']))
     if workers > 1:
-        first = sorted({candidates(r['game_time'])[0] for r in ordered if r['game_id'] not in anchors} - set(slots))
+        first = sorted({candidates(r['game_time'], anchor)[0] for r in ordered if r['game_id'] not in anchors} - set(slots))
         lock = threading.Lock()
 
         def work(url):
@@ -131,26 +148,26 @@ def fetch_reports(records, directory, *, pause=PAUSE, retry_pause=RETRY_PAUSE, f
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(work, first))
-    failures = {}
+    failures, failed = {}, {}  # failed: slots that failed this run; a day's other games do not retry them
     for record in ordered:
         if record['game_id'] in anchors:
             continue
-        anchor = None
-        for url in candidates(record['game_time']):
+        chosen = None
+        for url in candidates(record['game_time'], anchor):
             entry = slots.get(url)
             if entry is None:
-                entry, failure = _slot(url, raw, fetch, sleep, pause, retry_pause)
+                entry, failure = (None, failed[url]) if url in failed else _slot(url, raw, fetch, sleep, pause, retry_pause)
                 if entry is None:
-                    failures[record['game_id']] = failure
+                    failed[url] = failures[record['game_id']] = failure
                     break
                 slots[url] = entry
                 atomic_json(path, manifest)
             if entry['status'] == 'ok':
-                anchor = url
+                chosen = url
                 break
         if record['game_id'] in failures:
             continue
-        anchors[record['game_id']] = anchor
+        anchors[record['game_id']] = chosen
         atomic_json(path, manifest)
     manifest['failures'] = failures
     atomic_json(path, manifest)
@@ -167,7 +184,7 @@ def team_names(calendar):
     return teams
 
 
-def extract(records, history, manifest, directory, teams):
+def extract(records, history, manifest, directory, teams, anchor=None):
     """Each record's anchor report, parsed against the season's box-score rosters.
 
     Returns per game: the evidence, the report's age at the checkpoint, the team
@@ -205,7 +222,7 @@ def extract(records, history, manifest, directory, teams):
         report = parsed[url]
         sides = (record['home_team_id'], record['away_team_id'])
         day = parse_time(record['game_time']).astimezone(EASTERN).date().isoformat()
-        checkpoint = parse_time(record['game_time']) - CHECKPOINT
+        checkpoint = checkpoint_at(record['game_time'], anchor)
         games[gid] = dict(
             report=report['evidence'],
             age_minutes=(checkpoint - parse_time(report['evidence']['published_at'])).total_seconds() / 60,
@@ -254,26 +271,29 @@ def main():
     parser.add_argument('--directory', required=True, help='Raw archive and manifest (resumable)')
     parser.add_argument('--output', help='Write statuses.json.gz here once every game is resolved')
     parser.add_argument('--fetch', action='store_true', help='Fetch missing reports first')
+    parser.add_argument('--anchor', help='HH:MM Eastern on game day, for a preliminary replay (default T-30)')
+    parser.add_argument('--workers', type=int, default=1, help='Parallel first-choice fetches')
     args = parser.parse_args()
     records = [r for r in _read(args.team_games) if r['season'] in args.season]
     if args.fetch:
-        fetch_reports(records, args.directory)
+        fetch_reports(records, args.directory, anchor=args.anchor, workers=args.workers)
     manifest = json.loads((Path(args.directory) / 'manifest.json').read_text())
     pending = [r['game_id'] for r in records if r['game_id'] not in manifest['anchors']]
     result = dict(records=len(records), pending=len(pending), failures=len(manifest.get('failures') or {}),
                   slots=len(manifest['slots']), absent=sum(s['status'] == 'absent' for s in manifest['slots'].values()))
     if args.output and not pending:
         history = [r for r in _read(args.history) if r['season'] in args.season]
-        games = extract(records, history, manifest, args.directory, team_names(_read(args.calendar)))
-        data = dict(version=VERSION, parser_version=PARSER_VERSION, seasons=args.season, summary=summary(games),
-                    games=games)
+        games = extract(records, history, manifest, args.directory, team_names(_read(args.calendar)), args.anchor)
+        data = dict(version=VERSION, parser_version=PARSER_VERSION, seasons=args.season, anchor=args.anchor,
+                    summary=summary(games), games=games)
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(gzip.compress(canonical(data), mtime=0))
         result.update(summary=data['summary'], output=str(out),
                       sha256=hashlib.sha256(out.read_bytes()).hexdigest())
         atomic_json(out.parent / 'manifest.json', dict(
-            version=VERSION, parser_version=PARSER_VERSION, seasons=args.season, team_games=args.team_games,
+            version=VERSION, parser_version=PARSER_VERSION, seasons=args.season, anchor=args.anchor,
+            team_games=args.team_games,
             history=args.history, files={out.name: result['sha256']}, summary=data['summary'],
             slots=result['slots'], absent_slots=result['absent']))
     print(json.dumps(result, indent=2))
