@@ -8,6 +8,7 @@ import unittest
 import unittest.mock
 
 from nba_forecast import backtest, margins
+from nba_forecast.injury_parser import person_key
 from nba_forecast.model import STATUS_PARTICIPATION
 
 TEAMS = ('A', 'B', 'C', 'D')
@@ -254,6 +255,24 @@ class BacktestTests(unittest.TestCase):
         self.assertNotEqual(location(seeded), location(discounted))
         self.assertEqual(backtest._previous_season('2025-26'), '2024-25')
         self.assertEqual(backtest._previous_season('2009-10'), '2008-09')
+
+    def test_an_impact_prior_moves_only_the_margin_location(self):
+        def earlier(value):
+            return value.replace('2026-', '2025-', 1)
+        before = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
+                       known_at=earlier(r['known_at'])) for r in self.records]
+        impacts = {'2024-25': {person_key('Player A0'): 12., person_key('Player B0'): -12.}}
+        seeded = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, earlier_finals=before)
+        unused = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, earlier_finals=before,
+                                 earlier_impacts=impacts)  # the default prior mode ignores them
+        with unittest.mock.patch.object(margins, 'PRIOR_MODE', 'impact'):
+            rated = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, earlier_finals=before,
+                                    earlier_impacts=impacts)
+        self.assertEqual(seeded, unused)
+        self.assertEqual(seeded['players'], rated['players'])
+        moved = [(g[1], g[3] - s[3]) for g, s in zip(rated['games'], seeded['games']) if {g[1], g[2]} == {'A', 'B'}]
+        self.assertTrue(moved)
+        self.assertTrue(all((shift > 0) == (home == 'A') for home, shift in moved))  # toward the rated star's team
 
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
