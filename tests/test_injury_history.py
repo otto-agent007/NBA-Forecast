@@ -72,6 +72,20 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(sorted(calls[:3]), sorted([BASE + '2025-01-15_06PM.pdf'] * 2 + [BASE + '2025-01-15_09PM.pdf']))
         self.assertEqual(calls[3:], [BASE + '2025-01-15_05PM.pdf'])
 
+    def test_an_archived_report_missing_from_the_manifest_is_recovered_not_refetched(self):
+        from nba_forecast.data import archive_payload
+        url = BASE + '2025-01-15_06PM.pdf'
+        with tempfile.TemporaryDirectory() as d:
+            meta = archive_payload(b'%PDF-1.4 archived', url, '2026-10-25T00:00:00+00:00', Path(d) / 'raw')
+
+            def fetch(url, cache_dir, timeout):
+                raise AssertionError('refetched ' + url)
+
+            m = injury_history.fetch_reports([dict(game_id='g1', game_time='2025-01-16T00:00:00Z')], d, fetch=fetch,
+                                             sleep=lambda s: None, workers=2)
+        self.assertEqual(m['anchors'], dict(g1=url))
+        self.assertEqual(m['slots'][url], dict(status='ok', sha256=meta['sha256'], retrieved_at='2026-10-25T00:00:00+00:00'))
+
     def test_a_network_failure_leaves_the_game_for_the_next_run(self):
         def fetch(url, cache_dir, timeout):
             raise ValueError(f'NBA source {url} unavailable after 3 bounded attempts (TimeoutError)')

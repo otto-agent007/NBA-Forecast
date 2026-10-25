@@ -14,12 +14,13 @@ it lists keep their reported status; players it omits are recorded nowhere, and
 the replay treats them as available, as live runs do for a complete team.
 """
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
 import json
 from pathlib import Path
+import threading
 import time
 
 from .data import _fetch
@@ -91,6 +92,15 @@ def _slot(url, raw, fetch, sleep, pause, retry_pause):
     return dict(status='absent', http_status=code, checked_at=datetime.now(timezone.utc).isoformat()), None
 
 
+def _recover(slots, raw):
+    """Add reports an interrupted run archived but did not record: each PDF's provenance names its URL."""
+    for meta_path in sorted(Path(raw).glob('*.provenance.json')):
+        meta = json.loads(meta_path.read_text())
+        url = meta.get('source_url', '')
+        if url not in slots and report_time(url) and (Path(raw) / (meta['sha256'] + '.pdf')).exists():
+            slots[url] = dict(status='ok', sha256=meta['sha256'], retrieved_at=meta['retrieved_at'])
+
+
 def fetch_reports(records, directory, *, pause=PAUSE, retry_pause=RETRY_PAUSE, fetch=_fetch, sleep=time.sleep,
                   workers=1):
     """Archive each game's anchor report; resumable through ``manifest.json``.
@@ -106,16 +116,21 @@ def fetch_reports(records, directory, *, pause=PAUSE, retry_pause=RETRY_PAUSE, f
     path = folder / 'manifest.json'
     manifest = json.loads(path.read_text()) if path.exists() else dict(version=VERSION, slots={}, anchors={})
     slots, anchors = manifest['slots'], manifest['anchors']
+    _recover(slots, raw)
     ordered = sorted(records, key=lambda r: (r['game_time'], r['game_id']))
     if workers > 1:
         first = sorted({candidates(r['game_time'])[0] for r in ordered if r['game_id'] not in anchors} - set(slots))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            jobs = {pool.submit(_slot, url, raw, fetch, sleep, pause, retry_pause): url for url in first}
-            for job in as_completed(jobs):
-                entry, _ = job.result()
-                if entry is not None:
-                    slots[jobs[job]] = entry
+        lock = threading.Lock()
+
+        def work(url):
+            entry, _ = _slot(url, raw, fetch, sleep, pause, retry_pause)
+            if entry is not None:
+                with lock:  # each worker records its own result
+                    slots[url] = entry
                     atomic_json(path, manifest)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(work, first))
     failures = {}
     for record in ordered:
         if record['game_id'] in anchors:
@@ -235,12 +250,12 @@ def main():
     parser.add_argument('--team-games', required=True, help='Team-game records (json or json.gz)')
     parser.add_argument('--history', required=True, help='Box-score history whose rows give each team roster')
     parser.add_argument('--calendar', required=True, help='Schedule calendar naming the 30 teams and tricodes')
-    parser.add_argument('--season', required=True, help='Season to keep from the records, e.g. 2025-26')
+    parser.add_argument('--season', required=True, nargs='+', help='Seasons to keep from the records, e.g. 2025-26')
     parser.add_argument('--directory', required=True, help='Raw archive and manifest (resumable)')
     parser.add_argument('--output', help='Write statuses.json.gz here once every game is resolved')
     parser.add_argument('--fetch', action='store_true', help='Fetch missing reports first')
     args = parser.parse_args()
-    records = [r for r in _read(args.team_games) if r['season'] == args.season]
+    records = [r for r in _read(args.team_games) if r['season'] in args.season]
     if args.fetch:
         fetch_reports(records, args.directory)
     manifest = json.loads((Path(args.directory) / 'manifest.json').read_text())
@@ -248,9 +263,9 @@ def main():
     result = dict(records=len(records), pending=len(pending), failures=len(manifest.get('failures') or {}),
                   slots=len(manifest['slots']), absent=sum(s['status'] == 'absent' for s in manifest['slots'].values()))
     if args.output and not pending:
-        history = [r for r in _read(args.history) if r['season'] == args.season]
+        history = [r for r in _read(args.history) if r['season'] in args.season]
         games = extract(records, history, manifest, args.directory, team_names(_read(args.calendar)))
-        data = dict(version=VERSION, parser_version=PARSER_VERSION, season=args.season, summary=summary(games),
+        data = dict(version=VERSION, parser_version=PARSER_VERSION, seasons=args.season, summary=summary(games),
                     games=games)
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -258,7 +273,7 @@ def main():
         result.update(summary=data['summary'], output=str(out),
                       sha256=hashlib.sha256(out.read_bytes()).hexdigest())
         atomic_json(out.parent / 'manifest.json', dict(
-            version=VERSION, parser_version=PARSER_VERSION, season=args.season, team_games=args.team_games,
+            version=VERSION, parser_version=PARSER_VERSION, seasons=args.season, team_games=args.team_games,
             history=args.history, files={out.name: result['sha256']}, summary=data['summary'],
             slots=result['slots'], absent_slots=result['absent']))
     print(json.dumps(result, indent=2))
