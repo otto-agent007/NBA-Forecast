@@ -19,6 +19,14 @@ import urllib.request
 SCHEDULE_URL = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json"
 ROSTER_URL = "https://www.nba.com/players"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Origin": "https://www.nba.com"}
+# Since about 2026-10-22 cdn.nba.com answers bare or outdated browser user agents
+# with 403 Access Denied. A current Firefox user agent plus the nba.com Referer is
+# accepted (Firefox 140 was refused, 150+ passed); bump the version if 403s return.
+# www.nba.com pages still answer the bare HEADERS and time out on these, so only
+# the CDN gets them.
+CDN_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0",
+               "Referer": "https://www.nba.com/", "Accept": "application/json, text/plain, */*",
+               "Accept-Language": "en-US,en;q=0.5"}
 MAX_BYTES = 12 * 1024 * 1024
 DEFAULT_CACHE = Path(".nba_forecast/raw")
 STAT_FIELDS = {"fgm": "fieldGoalsMade", "fga": "fieldGoalsAttempted", "fg3m": "threePointersMade", "fg3a": "threePointersAttempted", "ftm": "freeThrowsMade", "fta": "freeThrowsAttempted", "tov": "turnovers", "pts": "points"}
@@ -113,7 +121,8 @@ def _fetch(url, cache_dir, allow_roster=False):
     opener = urllib.request.build_opener(_NoRedirects())
     for attempt in range(3):
         try:
-            with opener.open(urllib.request.Request(url, headers=HEADERS), timeout=15) as response:
+            headers = CDN_HEADERS if urlsplit(url).netloc == "cdn.nba.com" else HEADERS
+            with opener.open(urllib.request.Request(url, headers=headers), timeout=15) as response:
                 raw = response.read(MAX_BYTES + 1)
             if len(raw) > MAX_BYTES:
                 raise ValueError("NBA response exceeds the 12 MiB limit")
