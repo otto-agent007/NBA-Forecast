@@ -113,6 +113,7 @@ def _parser():
     backtest = sub.add_parser('backtest', help='Replay a season with the current model code and score it (docs/backtest.md)')
     backtest.add_argument('--history', required=True, nargs='+', help='Normalized box-score history (.json or .json.gz), one per season')
     backtest.add_argument('--team-games', required=True, nargs='+', help='Reconciled team games (datasets/model-upgrade-*/team-games.json.gz), one per season')
+    backtest.add_argument('--plus-minus', nargs='+', help='Player plus-minus (datasets/espn-plus-minus-*/plus-minus.json.gz); rates each covered season for the next one\'s rating prior')
     backtest.add_argument('--output', required=True, help='New directory for scoreboard.json and rows.json.gz')
     backtest.add_argument('--reference', help='Directory of an earlier backtest to compare against')
     backtest.add_argument('--warmup-fraction', type=float, default=.3, help='Share of game dates used only as history')
@@ -241,8 +242,15 @@ def main(argv=None):
                                     market=read_lines(paths['market']) if paths['market'] else None,
                                     injuries=read_statuses(paths['injuries']) if paths['injuries'] else None,
                                     sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
+            plus_minus = None
+            if args.plus_minus:
+                from .player_impact import read_plus_minus
+                plus_minus = read_plus_minus(args.plus_minus)
+                for season in seasons:
+                    season['sources']['plus_minus'] = [dict(path=str(v), sha256=sha256_of(v)) for v in args.plus_minus]
             board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction,
-                                limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
+                                limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True),
+                                plus_minus=plus_minus)
             print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
             return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
         elif args.command == 'dedupe-histories':

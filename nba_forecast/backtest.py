@@ -27,7 +27,9 @@ from zoneinfo import ZoneInfo
 from .calibration import minute_bucket, two_tailed_quantiles
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
 from .injury_parser import person_key
+from . import margins as margin_model
 from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, roster_continuity, team_ratings
+from .player_impact import ratings as impact_ratings, team_strength
 from .model import MODEL_VERSION, _baseline_forecast
 from .runner_release import package_digest
 from .schedule import atomic_json, canonical
@@ -174,14 +176,15 @@ def season_minutes(history):
 
 
 def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None,
-           earlier_finals=(), earlier_minutes=None):
+           earlier_finals=(), earlier_minutes=None, earlier_impacts=None):
     """Forecast each evaluation game from earlier game days only.
 
     ``injuries`` maps game IDs to their anchor report (``injury_history``); a
     game without one keeps every box-score player available. ``earlier_finals``
     are earlier seasons' games, which seed the team ratings' last-season prior
     as production's window does; ``earlier_minutes`` (``season_minutes``) gives
-    each team's previous-season minutes for roster continuity.
+    each team's previous-season minutes for roster continuity, and
+    ``earlier_impacts`` each season's player-impact ratings (``player_impact``).
     """
     home_of = {r['game_id']: r['home_team_id'] for r in records}
     by_game = defaultdict(list)
@@ -292,9 +295,12 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     previous = (earlier_minutes or {}).get(_previous_season(game['season']), {})
                     continuity = {t: roster_continuity(expected[t], previous.get(t, {}))
                                   for t in (g['home_team_id'], g['away_team_id'])}
+                    impacts = (earlier_impacts or {}).get(_previous_season(game['season']))
+                    priors = ({t: team_strength(impacts, expected[t]) for t in (g['home_team_id'], g['away_team_id'])}
+                              if impacts and margin_model.PRIOR_MODE == 'impact' else None)
                     location, _ = blended_location(
                         totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected'],
-                        edge, ratings, g['home_team_id'], g['away_team_id'], continuity)
+                        edge, ratings, g['home_team_id'], g['away_team_id'], continuity, priors)
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
                     games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
                                   _home_win_probability(location, sd) if sd else None])
@@ -677,14 +683,17 @@ def _subset(rows, game_ids):
                 teams=[r for r in rows['teams'] if r[0] in game_ids], games=[r for r in rows['games'] if r[0] in game_ids])
 
 
-def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None):
+def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None,
+                plus_minus=None):
     """Replay each season on its own and score them together; write and return the scoreboard.
 
     Each season is a dict of ``history``, ``records`` and optional ``sources``,
     ``market`` and ``injuries``. Metrics and the comparison pool every season's
     rows: game dates never overlap, so the date clusters stay independent. With
     more than one season each also reports its own metrics, market comparison and
-    verdict under ``seasons``; the gate is the pooled verdict.
+    verdict under ``seasons``; the gate is the pooled verdict. ``plus_minus``
+    ((game ID, player ID) -> plus-minus) rates the players of every season it
+    covers, for the next season's rating prior.
     """
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     cutoff = parse_time(as_of)
@@ -699,12 +708,18 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
                 players=[], teams=[], games=[])
     parts, dates, totals, skipped = [], {}, dict(total=0, evaluated=0), defaultdict(int)
     minutes = season_minutes([r for season in seasons for r in season['history']])
+    impacts = {}
+    for season in seasons:
+        labels = Counter(r['season'] for r in season['history'])
+        rated = impact_ratings(season['history'], season['records'], plus_minus) if plus_minus and labels else {}
+        if rated:
+            impacts[labels.most_common(1)[0][0]] = rated
     for i, season in enumerate(seasons):
         # Earlier seasons seed the ratings' prior; only a game's previous season is used, all of it in the past.
         earlier = sorted((g for s in seasons[:i] for g in s['records']), key=lambda g: g['game_time'])
         replayed = replay(season['history'], season['records'], as_of, warmup_fraction=warmup_fraction, limit=limit,
                           progress=progress, injuries=season.get('injuries'), earlier_finals=earlier,
-                          earlier_minutes=minutes)
+                          earlier_minutes=minutes, earlier_impacts=impacts)
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})

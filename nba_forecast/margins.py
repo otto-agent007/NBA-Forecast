@@ -56,6 +56,11 @@ RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
 # average toward zero, 'games' spends fewer pseudo-games on it so this season's
 # results count sooner. Production passes no continuity, so it is unaffected.
 CONTINUITY_MODE = os.environ.get('NBA_FORECAST_RATING_CONTINUITY', 'off')
+# Experiment only (branch exp/player-impact): where the rating's last-season prior
+# comes from. 'team' is 0.6 x last season's average margin; 'impact' is the
+# projected players' last-season impact ratings (player_impact). Production
+# passes no priors, so it is unaffected.
+PRIOR_MODE = os.environ.get('NBA_FORECAST_RATING_PRIOR', 'team')
 
 
 def _season(time):
@@ -122,14 +127,24 @@ def continuity_rating(entry, continuity, mode=None):
     raise ValueError(f'Unknown continuity mode {mode!r}')
 
 
-def blended_location(player_sum, home_edge, ratings, home, away, continuity=None):
+def prior_rating(entry, prior):
+    """A team rating with its last-season prior replaced by ``prior`` (points per game above average)."""
+    n, k = entry['games'], RATING_PRIOR_GAMES
+    current = entry['rating'] * (n + k) - k * entry['prior']
+    return dict(entry, rating=(current + k * prior) / (n + k), prior=prior)
+
+
+def blended_location(player_sum, home_edge, ratings, home, away, continuity=None, priors=None):
     """The margin location and its team-rating part, or the player sum alone without both ratings.
 
-    ``continuity`` optionally maps team IDs to ``roster_continuity``.
+    ``continuity`` optionally maps team IDs to ``roster_continuity``; ``priors``
+    to a replacement last-season prior (``prior_rating``).
     """
     if home not in ratings or away not in ratings or not _finite(home_edge):
         return player_sum, None
     continuity = continuity or {}
+    if priors:
+        ratings = {t: prior_rating(ratings[t], priors[t]) if t in priors else ratings[t] for t in (home, away)}
     rating = (home_edge + continuity_rating(ratings[home], continuity.get(home))
               - continuity_rating(ratings[away], continuity.get(away)))
     return (1 - RATING_WEIGHT) * player_sum + RATING_WEIGHT * rating, rating
