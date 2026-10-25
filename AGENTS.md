@@ -31,6 +31,12 @@ When a change is merged, commit its scoreboard as the new reference
 (`datasets/backtest-<date>/`, both files) and point this file at it. See
 `docs/backtest.md` for what the replay can and cannot measure.
 
+## Before changing the model
+
+Read `docs/field-notes-2026-10-24.md`: what the replay cannot see (week-one
+rosters, outs, early participation), the market comparison to run instead,
+the measured constants behind the budgets, and the traps.
+
 ## Other rules
 
 - Do not change the model version or model key for changes that do not alter
