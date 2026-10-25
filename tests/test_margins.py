@@ -164,9 +164,9 @@ class MarginForecastTests(unittest.TestCase):
         original = deepcopy((snapshot, result))
         value = margins.build_margin_forecasts(snapshot, result)[0]
         self.assertEqual(value['status'], 'estimated')
-        # Evenly matched sources with no home edge: half the player sum, half a zero rating.
+        # Evenly matched sources with no home edge: 0.4 of the player sum, 0.8 of a zero rating.
         self.assertEqual((value['player_sum_margin'], value['team_rating_margin']), (5., 0.))
-        self.assertEqual(value['mean_margin'], 2.5)
+        self.assertEqual(value['mean_margin'], 2.)
         self.assertEqual(value['calibration_status'], 'uncalibrated')
         self.assertEqual(value['settlement'], 'final_score_including_overtime')
         self.assertEqual(value['sample_count'], 100)
@@ -264,7 +264,7 @@ class TeamRatingTests(unittest.TestCase):
         ratings = dict(H=dict(rating=3.), A=dict(rating=-1.))
         location, rating = margins.blended_location(6., 2., ratings, 'H', 'A')
         self.assertEqual(rating, 6.)
-        self.assertEqual(location, (1 - margins.RATING_WEIGHT) * 6. + margins.RATING_WEIGHT * 6.)
+        self.assertEqual(location, margins.PLAYER_WEIGHT * 6. + margins.RATING_WEIGHT * 6.)
         self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'NEW'), (6., None))
 
 
