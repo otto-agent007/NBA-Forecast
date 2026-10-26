@@ -39,6 +39,70 @@ picked 69% of winners at Brier 0.194 (RC); Dunks & Threes' live model 11.0
 (2024-26); NBA_AI's best 2025-26 ensemble 11.45 and 0.205; a points-per-game
 baseline 11.93, 68.3% and 0.211.
 
+### Where the remaining gap is (2026-10-26)
+
+On the absence reference, pooled, the model trails the close by 0.39 points of
+margin MAE:
+
+- **Late season:** March and April hold 58% of it. April is the worst at
+  +0.80 a game, down from +1.35 before the absence adjustment; March is +0.48,
+  December to February +0.24 to +0.28. Tanking and shut-down teams the close
+  marks down further, such as Toronto 2023-24 and Memphis and Washington
+  2025-26 in March and April, were the largest single pieces.
+- **Big disagreements:** games where model and close differ by 6+ points are
+  8% of games and 47% of the gap.
+- **Underdog lean:** 72% of the gap comes from games where the model leans
+  further to the underdog than the close does, down from 85%.
+- **Back-to-backs:** games with one or two teams on the second night trail by
+  0.44 and 0.51, against 0.35 for neither. Before the adjustment the figures
+  were 0.76 and 0.68 against 0.48.
+- **Margins are no longer compressed:** the model's margin SD is 7.9 against
+  the close's 8.2, and the best stretch on the actual margin is 1.01, down
+  from 1.17. Regressing the actual margin on both model and close gives the
+  model +0.13, up from −0.003.
+- **Team points:** the bias grows by season, −0.6, −1.3 and −1.7 for 2023-24
+  to 2025-26.
+
+## Closing-line value (2026-10-25)
+
+Does the model know something the opening line has not priced?
+
+- **The test:** regress the line's move (close − open) on the forecast's
+  distance from the opener, with date-clustered standard errors. Opening and
+  closing home spreads come from the archived ESPN core odds responses
+  (`data/market-history/<season>/references/raw/`, gitignored, hash-checked).
+  The provider is the closing line's for 2024-25 and 2025-26.
+- **The forecast:** a replay with the official report published by 8:30 PM ET
+  the night before (`datasets/injury-reports-*-night-before`,
+  `injury_history --anchor 'D-1 20:30'`). That is about when live captures
+  first see the openers. T−30 and midday forecasts read news posted after
+  the open, so their CLV overstates the edge.
+- **A placebo:** the naive point-differential rating, which knows only the
+  standings, should score about zero if the opener prices public
+  information. Run it first on any new line source.
+
+Model 0.4.8, before the absence adjustment:
+
+| | Placebo slope | Night-before slope | CLV per bet |
+|---|---|---|---|
+| 2024-25 | +0.004 ± 0.022 | +0.100 ± 0.030 | about +0.11 |
+| 2025-26 | +0.022 ± 0.032 | +0.063 ± 0.034 | about +0.12 |
+
+One standard error shown.
+
+- **Real but small:** against the opener, betting the night-before forecast
+  covered 50.8% ± 1.2. Break-even is 52.4%, which needs about 0.8 points of
+  CLV per bet.
+- **Not an underdog drift:** the model's 5+ point underdog leans moved 0.62
+  more toward the dog than other games at the same opening spread.
+- **2023-24 cannot be used.** Its closing lines are Betfair's, which post no
+  opener, and ESPN BET's openers are soft. The placebo alone scores
+  +0.235 ± 0.035, still +0.15 with results four weeks old, steadily from
+  December to March. The moves were real corrections and the close is sound,
+  but a forecast that knows only the standings collects that CLV.
+- **Live:** captures in `production/market/game-lines` start 2026-10-24. A live
+  test needs a few hundred games, with the placebo run first.
+
 ## Lessons that held
 
 - The closing line is the bar for game outcomes. Pre-game models that beat it
@@ -74,7 +138,9 @@ uncorrected versions:
 - Margins are compressed, not over-dispersed: the slope of actual on
   projected margin was 1.31, rising to 1.81 in April. Shrinking them makes
   MAE worse. (Still true on 2026-10-25: slope about 1.2, model SD 6.6 against
-  the market's 8.35.)
+  the market's 8.35.) Most of the compression was absences. After the absence
+  adjustment (2026-10-26) the best stretch is 1.01, and the model SD is 7.9
+  against the close's 8.2.
 - The margin σ is fitted from paired finals (about 15.6), not assumed at 12.
 - Role minutes already decay at 0.70–0.75 per game, close to DARKO's.
 
@@ -94,12 +160,13 @@ uncorrected versions:
 | 10 | Player-impact ratings (box prior, then RAPM) | In progress: `exp/player-impact` |
 | 11 | A ~1:15 PM PT injury capture | Open: captures are 9 AM PT and T−30 |
 
-Margin experiments of 2026-10-25, all on branches in the `repo-gate` worktree,
-none merged:
+Margin experiments of 2026-10-25, all on branches pushed to GitHub, none
+merged:
 
 - `exp/margin-reweight`: 0.4 × player sum + 0.8 × team rating. Gate
   improved (winner Brier −0.0028 ± 0.0016, margin within noise), but the
-  weights were fitted on the same two seasons.
+  weights were fitted on the same two seasons. Superseded: the stretch it
+  added was mostly the absence effect, merged on 2026-10-26.
 - `exp/roster-continuity`: seeds the replay with last season's finals (within
   noise, `datasets/backtest-2026-10-25-seeded-prior`); continuity "games" mode
   improved Brier by 0.0005.
