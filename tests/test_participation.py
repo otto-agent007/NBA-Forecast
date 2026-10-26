@@ -1,5 +1,6 @@
 """Participation probabilities: who plays, how that weights the budget and totals, and how it is scored."""
 from datetime import datetime, timezone
+from math import fsum
 import unittest
 from unittest.mock import patch
 
@@ -116,7 +117,8 @@ class ParticipationForecastTests(unittest.TestCase):
             data += rows(range(10) if i < 8 else range(0, 10, 5), [] if i < 8 else [k for k in range(10) if k % 5], pid=f'p{i}', minutes=36 if i < 8 else 20)
         result = forecast(snap, data)
         projected = [p for p in result['predictions'] if p['status'] == 'projected']
-        expected = sum(p['participation_probability'] * p['expected_minutes'] for p in projected)
+        # game_totals sums with fsum; the builtin sum only matches it exactly from Python 3.12.
+        expected = fsum(p['participation_probability'] * p['expected_minutes'] for p in projected)
         self.assertLessEqual(expected, 240 + 1e-6)
         self.assertGreater(sum(p['expected_minutes'] for p in projected), expected)
         total = next(t for t in result['game_totals'][0]['teams'] if t['team_id'] == 'A')
