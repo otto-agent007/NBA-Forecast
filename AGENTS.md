@@ -41,7 +41,9 @@ When a change is merged, commit its scoreboard as the new reference
 
 Read `docs/field-notes-2026-10-24.md`: what the replay cannot see (week-one
 rosters, early participation), the market comparison to run instead,
-the measured constants behind the budgets, and the traps.
+the measured constants behind the budgets, and the traps. Read
+`docs/research-lessons-2026-10.md` for what the field does, where the model
+stands against the close, and which ideas were tried or set aside.
 
 ## Other rules
 
