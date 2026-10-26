@@ -78,6 +78,21 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["pool_rows"], 6)
         self.assertEqual(result["as_of"], snap["as_of"])
 
+    def test_an_out_player_records_what_his_absence_takes_from_the_team(self):
+        # Team A has played twelve games; "s" played the first nine at 32 minutes, "l" only the first two.
+        def game(i, pid, minutes):
+            return current(i, pid=pid, minutes=minutes, game_time=f"2025-12-{i + 1:02d}T00:00:00Z",
+                           known_at=f"2025-12-{i + 1:02d}T03:00:00Z")
+        history = ([game(i, "p", 30) for i in range(12)] + [game(i, "s", 32) for i in range(9)]
+                   + [game(i, "l", 28) for i in range(2)])
+        result = forecast(snapshot([player(), player("s", status="out"), player("l", status="out")]), history)
+        by_id = {p["player_id"]: p for p in result["predictions"]}
+        self.assertEqual(by_id["s"]["components"]["absence"], {
+            "team_games_played": 9, "minutes_per_game": 32, "played_recent_team_game": True, "recent_team_games": 10})
+        self.assertFalse(by_id["l"]["components"]["absence"]["played_recent_team_game"])  # out longer than ten games
+        self.assertEqual((by_id["s"]["points_mean"], by_id["s"]["expected_minutes"]), (0, 0))
+        self.assertNotIn("absence", by_id["p"]["components"])
+
     def test_model_filters_late_known_future_preseason_and_older_season(self):
         base = [row()]
         excluded = [row(1, known_at="2026-01-10T12:00:01Z"),

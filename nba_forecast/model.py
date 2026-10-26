@@ -107,6 +107,21 @@ LEAGUE_USAGE_PER_240 = 112.6
 USAGE_PRIOR_PSEUDO_GAMES = 10
 USAGE_BOUNDS = (.85, 1.10)
 REPLACEMENT_USAGE_PER_MINUTE = .38
+# A reported-out player's absence is recorded for the margin's team rating
+# (margins.absence_adjustment): his minutes per game for the team this season,
+# and whether he played one of its last ten games (one who missed all ten is
+# already absent from the team's recent results). Numbers stay zero either way.
+ABSENCE_RECENT_TEAM_GAMES = 10
+
+
+def _absence(current, team, team_games):
+    """What a reported-out player's absence takes from his team, from its season so far."""
+    played = [r for r in current if r["team_id"] == team and r["status"] == "played" and r["minutes"] > 0]
+    recent = {gid for _, gid in team_games[-ABSENCE_RECENT_TEAM_GAMES:]}
+    return {"team_games_played": len(played),
+            "minutes_per_game": fmean(r["minutes"] for r in played) if played else None,
+            "played_recent_team_game": any(r["game_id"] in recent for r in played),
+            "recent_team_games": len(recent)}
 
 
 def _time(value):
@@ -562,6 +577,7 @@ def _baseline_forecast(snapshot, history):
         if player["status"] == "out":
             p.update(status="out", reason="Sourced roster status is out.", participation_probability=0.0)
             p.update({field: 0.0 for field in NUMERIC_FIELDS})
+            p["components"]["absence"] = _absence(current, team, team_games.get(team, []))
             continue
         if player["status"] == "unknown" or player.get("status_basis") == "roster_membership_review":
             p["reason"] = "Availability must be resolved before assigning minutes."

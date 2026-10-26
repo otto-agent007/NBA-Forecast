@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 from .calibration import minute_bucket, two_tailed_quantiles
 from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
-from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, blended_location, team_ratings
+from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, absence_adjustment, blended_location, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
 from .runner_release import package_digest
 from .schedule import atomic_json, canonical
@@ -264,7 +264,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     edge, ratings = rating_cache[day]
                     location, _ = blended_location(
                         totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected'],
-                        edge, ratings, g['home_team_id'], g['away_team_id'])
+                        edge, ratings, g['home_team_id'], g['away_team_id'], absence_adjustment(result['predictions'], g)[0])
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
                     games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
                                   _home_win_probability(location, sd) if sd else None])

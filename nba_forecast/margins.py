@@ -18,7 +18,7 @@ from .totals import game_totals
 from .validation import parse_time
 
 
-METHOD = 'paired_final_score_outcome_dispersion_team_rating_blend_discrete_normal_v2'
+METHOD = 'paired_final_score_outcome_dispersion_team_rating_absence_blend_discrete_normal_v3'
 SETTLEMENT = 'final_score_including_overtime'
 EVIDENCE_KIND = 'historical_paired_final_score_outcomes'
 MINIMUM_GAMES = 100
@@ -28,7 +28,8 @@ TAIL_FLOOR = 1e-6
 PARAMETERS = dict(minimum_games=MINIMUM_GAMES, maximum_games=MAXIMUM_GAMES,
                   support=SUPPORT, tail_floor_per_side=TAIL_FLOOR,
                   minimum_scale=1., required_interior_standard_deviations=3.,
-                  rating_weight=.5, rating_prior_games=10, rating_prior_shrink=.6)
+                  rating_weight=.5, rating_prior_games=10, rating_prior_shrink=.6,
+                  absence_rating_per_minute=.1, absence_minimum_minutes=15.)
 LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
              'is an outcome prior, not this model\'s prediction-error calibration. '
              'The location uses regulation player means; final-score and overtime '
@@ -50,6 +51,17 @@ CALIBRATED_LIMITATION = ('Location and scale were fitted on genuinely saved preg
 RATING_WEIGHT = PARAMETERS['rating_weight']
 RATING_PRIOR_GAMES = PARAMETERS['rating_prior_games']
 RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
+# The team rating was earned by the players who usually play; the player sum
+# already loses tonight's reported-out players, the rating did not. On the
+# three replayed seasons the blended margin missed by 0.49 points (se 0.06) per
+# ten minutes a game of reported-out regulars, home minus away, against 0.17
+# for the closing line, about equally in each season. The rating carries half
+# the location, so it loses a round 0.1 points per such minute: a player
+# averaging 15 or more minutes for the team this season who played one of its
+# last ten games (model._absence). A longer absence is already in the team's
+# recent results.
+ABSENCE_RATING_PER_MINUTE = PARAMETERS['absence_rating_per_minute']
+ABSENCE_MINIMUM_MINUTES = PARAMETERS['absence_minimum_minutes']
 
 
 def _season(time):
@@ -84,11 +96,32 @@ def team_ratings(samples, as_of):
     return ratings
 
 
-def blended_location(player_sum, home_edge, ratings, home, away):
-    """The margin location and its team-rating part, or the player sum alone without both ratings."""
+def absent_minutes(predictions, game_id, team_id):
+    """Minutes a game of the team's reported-out regulars (``model._absence``)."""
+    total = 0.
+    for p in predictions:
+        absence = (p.get('components') or {}).get('absence')
+        if p.get('game_id') == game_id and p['team_id'] == team_id and p['status'] == 'out' and absence:
+            minutes = absence.get('minutes_per_game')
+            if absence.get('played_recent_team_game') and _finite(minutes) and minutes >= ABSENCE_MINIMUM_MINUTES:
+                total += minutes
+    return total
+
+
+def absence_adjustment(predictions, game):
+    """Home-minus-away team-rating change for reported-out regulars, with each side's absent minutes."""
+    minutes = {side: absent_minutes(predictions, game['game_id'], game[side + '_team_id']) for side in ('home', 'away')}
+    return -ABSENCE_RATING_PER_MINUTE * (minutes['home'] - minutes['away']), minutes
+
+
+def blended_location(player_sum, home_edge, ratings, home, away, absence=0.):
+    """The margin location and its team-rating part, or the player sum alone without both ratings.
+
+    ``absence`` is the home-minus-away rating change for reported-out regulars.
+    """
     if home not in ratings or away not in ratings or not _finite(home_edge):
         return player_sum, None
-    rating = home_edge + ratings[home]['rating'] - ratings[away]['rating']
+    rating = home_edge + ratings[home]['rating'] - ratings[away]['rating'] + absence
     return (1 - RATING_WEIGHT) * player_sum + RATING_WEIGHT * rating, rating
 
 
@@ -338,10 +371,13 @@ def build_margin_forecasts(snapshot, result):
                 value['reason'] = 'incomplete_team_totals'; continue
             means = {t['team_id']: t['points_mean'] for t in totals['teams']}
             player_sum = means[game['home_team_id']] - means[game['away_team_id']]
+            absence, absent = absence_adjustment(result['predictions'], game)
             raw_location, rating_margin = blended_location(player_sum, inputs['historical_mean_margin'],
-                inputs.get('team_ratings') or {}, game['home_team_id'], game['away_team_id'])
+                inputs.get('team_ratings') or {}, game['home_team_id'], game['away_team_id'], absence)
             value.update(player_sum_margin=player_sum, team_rating_margin=rating_margin,
-                         rating_weight=RATING_WEIGHT if rating_margin is not None else 0.)
+                         rating_weight=RATING_WEIGHT if rating_margin is not None else 0.,
+                         absence_rating_adjustment=absence if rating_margin is not None else 0.,
+                         absent_regular_minutes=absent)
             raw_sd = inputs['standard_deviation']
             if not _finite(raw_location) or abs(raw_location)+PARAMETERS['required_interior_standard_deviations']*raw_sd>=SUPPORT:
                 value['reason']='margin_location_or_scale_outside_support';continue
@@ -367,7 +403,7 @@ def build_margin_forecasts(snapshot, result):
                 pmf=pmf, pmf_sha256=_sha(pmf), sample_count=inputs['sample_count'],
                 distribution_mean_margin=distribution_mean, distribution_standard_deviation=distribution_sd,
                 mean_basis=(('Half the unrounded regulation player-sum difference, half the home edge plus the '
-                    'team-rating difference' if rating_margin is not None else
+                    'team-rating difference less reported-out regulars' if rating_margin is not None else
                     'Unrounded regulation player-sum difference (a team rating was unavailable)')
                     + (', plus validated prospective location correction' if calibration else '')),
                 scale_basis=('Historical paired-final prior times validated prospective residual scale correction'

@@ -210,6 +210,25 @@ class BacktestTests(unittest.TestCase):
         self.assertLess(sat['participation_probability'], .3)  # doubtful
         self.assertEqual(board['games']['availability']['by_status']['doubtful'], dict(players=1, played=0, play_rate=0.))
 
+    def test_a_reported_out_regular_lowers_his_teams_rating_in_the_replay(self):
+        from nba_forecast import margins
+        game = self.records[-1]
+        team = game['home_team_id']
+        evidence = dict(source_url='https://example.test/report', published_at=game['game_time'],
+                        retrieved_at='2026-02-01T00:00:00Z', sha256='0' * 64)
+        injuries = {game['game_id']: dict(report=evidence, complete_team_ids=[team],
+                                          statuses={team + '0': ['out', 'Out', team]})}
+        locations = []
+        for per_minute in (margins.ABSENCE_RATING_PER_MINUTE, 0.):
+            with tempfile.TemporaryDirectory() as d, unittest.mock.patch.object(margins, 'ABSENCE_RATING_PER_MINUTE', per_minute):
+                backtest.run_backtest(self.history, self.records, Path(d) / 'o', warmup_fraction=.5, as_of=AS_OF,
+                                      injuries=injuries, limit=1)
+                locations.append(backtest.read_json(Path(d) / 'o' / 'rows.json.gz')['games'][0][3])
+        before = [r['minutes'] for r in self.history if r['player_id'] == team + '0' and r['game_time'] < game['game_time']
+                  and r['status'] == 'played']
+        expected = -margins.RATING_WEIGHT * margins.ABSENCE_RATING_PER_MINUTE * sum(before) / len(before)
+        self.assertAlmostEqual(locations[0] - locations[1], expected)
+
     def test_seasons_replay_separately_and_pool_into_one_verdict(self):
         def earlier(value):
             return value.replace('2026-', '2025-', 1)

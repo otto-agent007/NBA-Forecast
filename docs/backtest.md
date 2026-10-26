@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-26-three-seasons
+  --reference datasets/backtest-2026-10-26-absence
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -131,7 +131,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-26-three-seasons-midday
+  --reference datasets/backtest-2026-10-26-absence-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -163,6 +163,45 @@ the code before and after each 2026-10-24 change, without injury reports:
 On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
 (ESPN BET for every game) and the naive point-differential rating's 11.50; winner
 Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-26 (absences in the team rating)
+
+`datasets/backtest-2026-10-26-absence/` (T-minus-30) and
+`datasets/backtest-2026-10-26-absence-midday/` (preliminary): player model
+`regular-season-baseline-0.4.8` unchanged, margin method
+`..._team_rating_absence_blend_discrete_normal_v3`. The team-rating half of the
+margin loses 0.1 points per minute a game of each reported-out regular: a
+player averaging 15 or more minutes for the team this season who played one of
+its last ten games (`model._absence`, `margins.absence_adjustment`). The player
+sum already lost those players; the season-to-date rating, earned with them,
+did not. On the three-season reference the blended margin missed by 0.49
+points (standard error 0.06) per ten such minutes (home minus away), the close
+by 0.17, about
+equally in each season; fitted on two seasons and scored on the third, a
+correction of that size cut margin MAE in all three. 0.1 is the round value
+(the rating carries half the location). Rerunning the player model with the
+absentees restored and moving the rating by the change in the player sum was
+worse instead (margin +0.13 ± 0.09); why was not investigated.
+
+T-minus-30, against the three-season reference (± two standard errors): margin
+−0.186 ± 0.108 (11.48 → 11.29), winner Brier −0.0046 ± 0.0020 (0.2101 →
+0.2055): improved; player, team-point and interval metrics unchanged. Every
+season improves:
+
+| Season | Margin MAE | Close | Gap | Winner Brier | Encompassing slope |
+|---|---|---|---|---|---|
+| 2023-24 | 11.40 → 11.26 | 10.82 | 0.44 | 0.213 → 0.209 | −0.06 → +0.09 ± 0.14 |
+| 2024-25 | 11.27 → 11.13 | 10.69 | 0.44 | 0.210 → 0.205 | −0.08 → +0.02 ± 0.13 |
+| 2025-26 | 11.76 → 11.48 | 11.18 | 0.30 | 0.207 → 0.203 | −0.09 → +0.13 ± 0.13 |
+
+The encompassing slope (one standard error shown) is now above zero in every
+season, though not by two standard errors. Midday: winner Brier −0.0018 ±
+0.0016, improved; margin −0.067 ± 0.077 within noise, smaller because
+questionable and doubtful players are not counted as absent. Not measured: the
+first 30% of each season's dates are history only, so absences in the first
+weeks are not replayed. A regular out since opening night has no minutes for
+the team yet and is not counted, while the early rating is mostly last
+season's, which he helped earn.
 
 ## Reference: 2026-10-26 (three seasons)
 

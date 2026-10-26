@@ -18,18 +18,20 @@ computed from that odds dataset; sources for the rest are cited in the report.
 ## Where we stand against the close
 
 The gate's market comparison (`market_metrics`, reference
-`datasets/backtest-2026-10-26-three-seasons`), on the replay's own games:
+`datasets/backtest-2026-10-26-absence`), on the replay's own games:
 
 | Season | Model margin MAE | Close | Naive rating | Model Brier | Close Brier | Encompassing slope |
 |---|---|---|---|---|---|---|
-| 2023-24 (867 games) | 11.40 | 10.82 | 11.47 | 0.213 | 0.199 | −0.06 ± 0.13 |
-| 2024-25 (869 games) | 11.27 | 10.69 | 11.50 | 0.210 | 0.196 | −0.08 ± 0.12 |
-| 2025-26 (868 games) | 11.76 | 11.18 | 11.90 | 0.207 | 0.193 | −0.09 ± 0.12 |
+| 2023-24 (867 games) | 11.26 | 10.82 | 11.47 | 0.209 | 0.199 | +0.09 ± 0.14 |
+| 2024-25 (869 games) | 11.13 | 10.69 | 11.50 | 0.205 | 0.196 | +0.02 ± 0.13 |
+| 2025-26 (868 games) | 11.48 | 11.18 | 11.90 | 0.203 | 0.193 | +0.13 ± 0.13 |
 
-The gap to the close was 1.2 points of margin MAE when the research ran; it is
-0.58 now, and the model now beats the naive point-differential rating it lost
-to then. The encompassing slope is not above zero: where the model disagrees
-with the close, the close is right. Team points trail the market's implied
+The gap to the close was 1.2 points of margin MAE when the research ran. It
+was 0.58 in every season before reported-out regulars entered the team rating
+(2026-10-26, `docs/backtest.md`) and is 0.30–0.44 now. The encompassing slope
+was about −0.08 then; it is now slightly above zero in every season, though
+not by two standard errors, so where the model disagrees with the close the
+close is still at least as right. Team points trail the market's implied
 totals by about 0.6–0.8 MAE.
 
 Outside benchmarks (different samples): the 2025-26 close missed by 10.9 and
@@ -83,7 +85,7 @@ uncorrected versions:
 | 1 | Cluster the gate's standard errors | Done: two-way, date × player. No materiality floor yet |
 | 2 | Market and naive baselines on the scoreboard, encompassing test | Done: `market_metrics` |
 | 3 | Official injury reports in the replay, second season | Done: 2024-25 and 2025-26 with T−30 reports |
-| 4 | Blend the player-sum margin with a team rating, preseason prior | Done: 50/50, prior 10 games at 0.6 × last season. Reweighting and roster continuity tested on branches (below) |
+| 4 | Blend the player-sum margin with a team rating, preseason prior | Done: 50/50, prior 10 games at 0.6 × last season; the rating loses 0.1 per minute of reported-out regulars (2026-10-26). Reweighting and roster continuity tested on branches (below) |
 | 5 | Calibrate the interval's two tails separately | Done: `calibration.two_tailed_quantiles` |
 | 6 | Measured status play rates; return-from-absence minutes ramp | Rates done: factors on the role rate fitted on 12:30 PM ET reports (questionable .64, doubtful .04); raw play rates 89/49/3%, close to the outside source's 87/48/4%. Ramp open |
 | 7 | Market composite as a separate, labeled output | Open: a product decision; it would make the edge report echo the price |

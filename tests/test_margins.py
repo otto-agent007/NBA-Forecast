@@ -177,6 +177,21 @@ class MarginForecastTests(unittest.TestCase):
         self.assertEqual((snapshot, result), original)
         json.dumps(value, allow_nan=False)
 
+    def test_reported_out_regulars_lower_their_teams_rating(self):
+        snapshot, result = forecast_inputs()
+        def out(pid, team, minutes, recent=True):
+            return dict(game_id='next', team_id=team, player_id=pid, status='out', points_mean=0., expected_minutes=0.,
+                        components=dict(absence=dict(team_games_played=20, minutes_per_game=minutes,
+                                                     played_recent_team_game=recent, recent_team_games=10)))
+        result['predictions'] += [out('Hstar', 'H', 30.), out('Hbench', 'H', 10.),   # bench: under 15 minutes
+                                  out('Along', 'A', 34., recent=False),             # out longer than ten games
+                                  dict(out('Aother', 'A', 30.), game_id='other')]   # another game's player
+        value = margins.build_margin_forecasts(snapshot, result)[0]
+        self.assertEqual(value['absent_regular_minutes'], {'home': 30., 'away': 0.})
+        self.assertAlmostEqual(value['absence_rating_adjustment'], -margins.ABSENCE_RATING_PER_MINUTE * 30.)
+        self.assertAlmostEqual(value['team_rating_margin'], -3.)
+        self.assertAlmostEqual(value['mean_margin'], .5 * 5. + .5 * -3.)
+
     def test_home_away_means_mirror_the_entire_distribution(self):
         s1, r1 = forecast_inputs(110, 105)
         s2, r2 = forecast_inputs(105, 110)
@@ -266,6 +281,8 @@ class TeamRatingTests(unittest.TestCase):
         self.assertEqual(rating, 6.)
         self.assertEqual(location, (1 - margins.RATING_WEIGHT) * 6. + margins.RATING_WEIGHT * 6.)
         self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'NEW'), (6., None))
+        self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'A', -3.)[1], 3.)  # absences move the rating
+        self.assertEqual(margins.blended_location(6., 2., ratings, 'H', 'NEW', -3.), (6., None))
 
 
 class MarginEventTests(unittest.TestCase):
