@@ -12,8 +12,9 @@ official history, all recorded in each record's provenance:
 - ESPN lists some inactive players and omits others; the replay adds every
   player the official injury report lists (``backtest._roster``).
 
-Only regular-season games count: the NBA Cup championship, which ESPN files as a
-regular-season game but the league does not count, is excluded. Each response is
+Only regular-season games count: the NBA Cup championship (the In-Season
+Tournament championship in 2023-24), which ESPN files as a regular-season game
+but the league does not count, is excluded. Each response is
 archived by hash with its retrieval time (``reference.fetch_reference``).
 """
 import argparse
@@ -32,7 +33,7 @@ from .validation import parse_time, validate_history
 
 VERSION = 'espn-season-1'
 ARCHIVE_AGE = 10 ** 10  # finished games do not change
-EXCLUDED_NOTES = ('NBA Cup Championship',)
+EXCLUDED_NOTES = ('NBA Cup Championship', 'NBA In-Season Tournament Championship')
 
 
 def _iso(value):

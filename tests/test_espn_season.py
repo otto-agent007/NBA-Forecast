@@ -86,6 +86,10 @@ class NormalizeTests(unittest.TestCase):
     def test_the_cup_final_mismatched_totals_and_other_seasons_are_refused(self):
         with self.assertRaisesRegex(ValueError, 'Cup Championship'):
             espn_season.normalize(summary(note='NBA Cup Championship'), META, TEAMS, '2024-25')
+        with self.assertRaisesRegex(ValueError, 'In-Season Tournament Championship'):  # its 2023-24 name
+            espn_season.normalize(summary(note='NBA In-Season Tournament Championship'), META, TEAMS, '2024-25')
+        # The tournament's semifinals count in the standings.
+        espn_season.normalize(summary(note='NBA In-Season Tournament - Semifinals'), META, TEAMS, '2024-25')
         with self.assertRaisesRegex(ValueError, 'season'):
             espn_season.normalize(summary(), META, TEAMS, '2025-26')
         broken = copy.deepcopy(summary())
