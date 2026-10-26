@@ -18,10 +18,11 @@ computed from that odds dataset; sources for the rest are cited in the report.
 ## Where we stand against the close
 
 The gate's market comparison (`market_metrics`, reference
-`datasets/backtest-2026-10-25-status-rates`), on the replay's own games:
+`datasets/backtest-2026-10-26-three-seasons`), on the replay's own games:
 
 | Season | Model margin MAE | Close | Naive rating | Model Brier | Close Brier | Encompassing slope |
 |---|---|---|---|---|---|---|
+| 2023-24 (867 games) | 11.40 | 10.82 | 11.47 | 0.213 | 0.199 | −0.06 ± 0.13 |
 | 2024-25 (869 games) | 11.27 | 10.69 | 11.50 | 0.210 | 0.196 | −0.08 ± 0.12 |
 | 2025-26 (868 games) | 11.76 | 11.18 | 11.90 | 0.207 | 0.193 | −0.09 ± 0.12 |
 

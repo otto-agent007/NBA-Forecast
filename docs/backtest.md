@@ -1,6 +1,6 @@
 # Backtest scoreboard
 
-`python -m nba_forecast backtest` replays two seasons with the current model
+`python -m nba_forecast backtest` replays three seasons with the current model
 code and scores them. It is the gate for model changes (see `AGENTS.md`): a
 change to how forecasts are computed is judged here first, on the same games
 and players as the committed reference, before anything is merged or
@@ -8,12 +8,12 @@ activated.
 
 ```bash
 python -m nba_forecast backtest \
-  --history datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
-  --team-games datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
-  --injuries datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
-  --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
+  --history datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
+  --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-25-status-rates
+  --reference datasets/backtest-2026-10-26-three-seasons
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -22,7 +22,7 @@ order. The seasons' rows are pooled into one set of metrics and one comparison
 (game dates never overlap, so the date clusters stay independent), and each
 season also reports its own metrics, market comparison and verdict under
 `seasons`. The gate is the pooled verdict; a season-level `worse` under a pooled
-pass must be explained. It takes about seven minutes. `--limit N` replays only
+pass must be explained. It takes about eleven minutes. `--limit N` replays only
 the last N evaluation games of each season (CI uses 400); `--json` prints the
 full scoreboard. The exit code is 3 when the pooled verdict is `worse`.
 
@@ -88,12 +88,13 @@ players. A listed player keeps the report's status: out means no minutes;
 probable, questionable and doubtful scale the participation probability
 (`model.STATUS_PARTICIPATION`). A player the report omits is available. A player
 it lists but the box score omits (ESPN drops some inactives) is added and scored
-as not playing. Every game in both seasons has a report: 2025-26 3 minutes old
-on average at the checkpoint, 2024-25 10.
+as not playing. Every game in the three seasons has a report: 2025-26 3 minutes
+old on average at the checkpoint, 2024-25 10, 2023-24 9.5.
 
 At the checkpoint almost every tag is resolved: of 21,682 players listed out
-over both seasons two played, and only 382 (2024-25) and 110 (2025-26) are
-still probable, questionable or doubtful. Over both seasons those played 91%
+over 2024-25 and 2025-26 two played (2023-24: 3 of 9,723), and only 382
+(2024-25) and 110 (2025-26) are still probable, questionable or doubtful (2023-24:
+426). Over 2024-25 and 2025-26 those played 91%
 (probable, 142), 56% (questionable, 311) and 3% (doubtful, 39). The status
 factors are fitted where most tags are, the midday reports (see "Preliminary
 replay" and the status-rates reference).
@@ -125,12 +126,12 @@ participation or reported statuses must also pass it:
 
 ```bash
 python -m nba_forecast backtest \
-  --history datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
-  --team-games datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
-  --injuries datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
-  --market datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
+  --history datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
+  --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-25-midday
+  --reference datasets/backtest-2026-10-26-three-seasons-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -162,6 +163,35 @@ the code before and after each 2026-10-24 change, without injury reports:
 On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
 (ESPN BET for every game) and the naive point-differential rating's 11.50; winner
 Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-26 (three seasons)
+
+`datasets/backtest-2026-10-26-three-seasons/` (T-minus-30) and
+`datasets/backtest-2026-10-26-three-seasons-midday/` (preliminary): model
+`regular-season-baseline-0.4.8`, unchanged, with 2023-24 added as the first
+season. 2023-24 is the first season under the Player Participation Policy and
+the 65-game awards minimum, like the two already replayed. Its box scores come
+from ESPN summaries (`datasets/espn-season-2023-24/`, the In-Season Tournament
+final excluded), its closing lines from Betfair Sportsbook
+(`datasets/market-closing-2023-24/`; half its spreads are whole numbers) and its
+injury reports from the league's hourly PDFs (`datasets/injury-reports-2023-24*/`).
+The 2024-25 and 2025-26 rows are identical to the status-rates references (every
+paired change is exactly zero), so the old references carry over unchanged.
+
+| Season (T-minus-30) | Points MAE | Minutes MAE | Margin MAE | Close | Naive rating | Winners | Winner Brier | Team points bias |
+|---|---|---|---|---|---|---|---|---|
+| 2023-24 (867 games) | 4.47 | 4.83 | 11.40 | 10.82 | 11.47 | 65.4% | 0.213 | −0.62 |
+| 2024-25 (869 games) | 4.53 | 4.83 | 11.27 | 10.69 | 11.50 | 67.4% | 0.210 | −1.34 |
+| 2025-26 (868 games) | 4.49 | 4.85 | 11.76 | 11.18 | 11.90 | 69.7% | 0.207 | −1.74 |
+
+Pooled over 2,604 games and 55,332 played player-games: points MAE 4.50 (bias
++0.06), minutes 4.84, 80% coverage 80.0% (interval score 19.69), participation
+Brier 0.088, team points 9.45 (bias −1.23), margin 11.48, winners 67.5%, winner
+Brier 0.2101. Midday: points 4.56, minutes 5.00, participation Brier 0.116,
+margin 11.51; 2023-24 alone 4.52, 4.94 and 11.46. The gap to the close is 0.58
+in every season. 2023-24 is the model's weakest against the naive rating (0.07
+of margin MAE, winner Brier tied), and the team-points shortfall grows season by
+season. The third season narrows the pooled standard errors by about a fifth.
 
 ## Reference: 2026-10-25 (status rates)
 
