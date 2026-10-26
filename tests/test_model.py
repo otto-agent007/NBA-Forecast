@@ -78,6 +78,21 @@ class ForecastTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["pool_rows"], 6)
         self.assertEqual(result["as_of"], snap["as_of"])
 
+    def test_an_out_player_records_what_his_absence_takes_from_the_team(self):
+        # Team A has played twelve games; "s" played the first nine at 32 minutes, "l" only the first two.
+        def game(i, pid, minutes):
+            return current(i, pid=pid, minutes=minutes, game_time=f"2025-12-{i + 1:02d}T00:00:00Z",
+                           known_at=f"2025-12-{i + 1:02d}T03:00:00Z")
+        history = ([game(i, "p", 30) for i in range(12)] + [game(i, "s", 32) for i in range(9)]
+                   + [game(i, "l", 28) for i in range(2)])
+        result = forecast(snapshot([player(), player("s", status="out"), player("l", status="out")]), history)
+        by_id = {p["player_id"]: p for p in result["predictions"]}
+        self.assertEqual(by_id["s"]["components"]["absence"], {
+            "team_games_played": 9, "minutes_per_game": 32, "played_recent_team_game": True, "recent_team_games": 10})
+        self.assertFalse(by_id["l"]["components"]["absence"]["played_recent_team_game"])  # out longer than ten games
+        self.assertEqual((by_id["s"]["points_mean"], by_id["s"]["expected_minutes"]), (0, 0))
+        self.assertNotIn("absence", by_id["p"]["components"])
+
     def test_model_filters_late_known_future_preseason_and_older_season(self):
         base = [row()]
         excluded = [row(1, known_at="2026-01-10T12:00:01Z"),
@@ -117,7 +132,7 @@ class ForecastTests(unittest.TestCase):
         before = self.one(past)
         after = self.one(past + recent)
         self.assertGreater(after["expected_minutes"], 35)
-        self.assertGreater(after["expected_fga"], 18)
+        self.assertGreater(after["expected_fga"], before["expected_fga"])
         self.assertGreater(after["components"]["shooting"]["two_point"]["percentage"], .35)
         self.assertIn("minutes_change", after["flags"])
         self.assertIn("opportunity_change", after["flags"])
@@ -146,9 +161,13 @@ class ForecastTests(unittest.TestCase):
         p = self.one([dnp])
         self.assertEqual(p["status"], "needs_review")
         self.assertIsNone(p["points_mean"])
-        with_dnp = self.one([row(), current(0, minutes=0, fgm=0, fga=0,
+        played = [row()] + [current(i) for i in range(3)]
+        with_dnp = self.one(played[:3] + [current(2, minutes=0, fgm=0, fga=0,
                               fg3m=0, fg3a=0, ftm=0, fta=0, tov=0, status="dnp")])
-        self.assertLess(with_dnp["expected_minutes"], 30)
+        # The DNP lowers the probability of playing, not the minutes when playing.
+        without = self.one(played)
+        self.assertGreater(with_dnp["expected_minutes"], 0)
+        self.assertLess(with_dnp["participation_probability"], without["participation_probability"])
 
     def test_game_specific_sourced_adjustment_is_audited(self):
         snap = snapshot()
@@ -160,7 +179,8 @@ class ForecastTests(unittest.TestCase):
         past = [row(i) for i in range(12)]
         before = self.one(past)
         after = self.one(past, snap)
-        self.assertEqual(after["expected_minutes"], before["expected_minutes"] + 5)
+        # A sourced adjustment is applied to the role minutes exactly and is not raised to fill the budget.
+        self.assertEqual(after["expected_minutes"], before["components"]["opportunities"]["minutes_before_adjustment"] + 5)
         self.assertGreater(after["expected_fga"], before["expected_fga"] * 1.3)
         self.assertEqual(after["components"]["manual_adjustment"], adjustment)
         self.assertIn("manual_role_adjustment", after["flags"])
@@ -174,20 +194,25 @@ class ForecastTests(unittest.TestCase):
         players = [player(f"p{i}") for i in range(8)]
         past = [row(i, pid=p["player_id"], minutes=45) for p in players for i in range(10)]
         projections = forecast(snapshot(players), past)["predictions"]
-        self.assertLessEqual(sum(p["expected_minutes"] for p in projections), 240.00001)
+        # The budget constrains expected minutes (probability of playing times minutes when playing).
+        self.assertLessEqual(sum(p["participation_probability"] * p["expected_minutes"] for p in projections), 240.00001)
         for p in projections:
-            self.assertAlmostEqual(p["expected_minutes"], 30)
+            self.assertAlmostEqual(p["participation_probability"] * p["expected_minutes"], 30)
             self.assertIn("team_minutes_scaled", p["flags"])
             self.assertLess(p["components"]["rotation"]["scale"], 1)
-            self.assertAlmostEqual(p["expected_fga"], 8)
+            # Eight light shooters fall short of a team's usage, so the possession budget raises the rates.
+            usage = p["components"]["team_usage"]["factor"]
+            self.assertGreater(usage, 1)
+            self.assertAlmostEqual(p["expected_fga"], p["expected_minutes"] * 12 / 45 * usage)
 
     def test_missing_rotation_minutes_are_flagged_not_invented(self):
         result = forecast(snapshot([player(), player("new")]), [row()])
         by_id = {p["player_id"]: p for p in result["predictions"]}
-        self.assertEqual(by_id["p"]["expected_minutes"], 30)
         self.assertIsNone(by_id["new"]["expected_minutes"])
         self.assertIn("team_minutes_unresolved", by_id["p"]["flags"])
-        self.assertEqual(by_id["p"]["components"]["rotation"]["unallocated_minutes"], 210)
+        # Too few supported players to fill the budget: minutes are not invented.
+        self.assertAlmostEqual(by_id["p"]["expected_minutes"], 30)
+        self.assertAlmostEqual(by_id["p"]["components"]["rotation"]["unallocated_minutes"], 240 - 30 * by_id["p"]["participation_probability"])
 
     def complete_game(self, gid, b_allowed, partial=False):
         # Five 48-minute players per side establish complete 240-minute groups.
@@ -312,7 +337,7 @@ class ForecastTests(unittest.TestCase):
         players = [player(f"p{i}") for i in range(11)]
         past = [row(i, pid=p["player_id"], minutes=44) for i, p in enumerate(players)]
         result = forecast(snapshot(players), past)
-        self.assertLessEqual(sum(p["expected_minutes"] for p in result["predictions"]), 240.0)
+        self.assertLessEqual(sum((p["participation_probability"] or 0) * (p["expected_minutes"] or 0) for p in result["predictions"]), 240.0)
 
     def test_zero_minutes_adjustment_has_zero_scoring_uncertainty(self):
         snap = snapshot()

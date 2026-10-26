@@ -1,7 +1,9 @@
 import PlayerPortrait from "./PlayerPortrait";
-import React, { useMemo } from "react";
-import { filterPlayers, number, statusLabel } from "./data";
-import { Icon } from "./Icons";
+import React, { useMemo, useState } from "react";
+import { filterPlayers, groupPlayers, number, statusLabel } from "./data";
+import { BOX_SCORE_COLUMNS, boxScoreTitle, boxScoreValue } from "./boxscore";
+import { Icon, TeamMark } from "./Icons";
+import ColumnScroll from "./ColumnScroll";
 export function Status({ player }) {
   return (
     <span
@@ -24,16 +26,26 @@ export default function PlayerTable({
   title = "Player outlook",
   expanded = false,
 }) {
+  const [teamId, setTeamId] = useState("all");
+  const allTeams = useMemo(() => groupPlayers(players), [players]);
   const rows = useMemo(
-    () => filterPlayers(players, query, filter, sort),
-    [players, query, filter, sort],
+    () => filterPlayers(players, query, filter, sort).filter((p) => teamId === "all" || p.team_id === teamId),
+    [players, query, filter, sort, teamId],
   );
+  const teams = useMemo(() => groupPlayers(rows, players), [rows, players]);
+  const columns = BOX_SCORE_COLUMNS.length + 3 + (expanded ? 2 : 0);
   return (
     <section className="player-section">
       <div className="section-heading">
         <h2>{title}</h2>
         <span className="count">{rows.length} players</span>
       </div>
+      {allTeams.length === 2 && <div className="team-selector" aria-label="Team outlook selector">
+        <button aria-pressed={teamId === "all"} onClick={() => setTeamId("all")}>Both teams</button>
+        {allTeams.map((team) => <button key={team.team_id} aria-label={`View ${team.team_name || team.team_code}`} aria-pressed={teamId === team.team_id} onClick={() => setTeamId(team.team_id)}>
+          <TeamMark id={team.team_id} code={team.team_code} />{team.team_name || team.team_code}<small>{team.total} players</small>
+        </button>)}
+      </div>}
       <div className="table-toolbar">
         <div className="filters" aria-label="Player status filter">
           {[
@@ -62,54 +74,56 @@ export default function PlayerTable({
           />
         </label>
       </div>
-      <div className="table-scroll">
-        <table>
+      <p className="boxscore-hint">Projected boxscore · Move the More stats slider at the bottom of the screen (or shift-scroll) for shooting splits and all stats; the player column stays put. MIN:SS is an estimate.</p>
+      <ColumnScroll label={title}>
+        <table className="boxscore-table" aria-label={`${title} full boxscore`}>
           <thead>
             <tr>
-              <th scope="col">Player</th>
+              <th scope="col" className="player-cell">Player</th>
               {expanded && <th scope="col">Matchup</th>}
               <th scope="col">Status</th>
-              <th scope="col" className="numeric">
-                Min
-              </th>
-              <th scope="col" className="numeric">
-                FGA
-              </th>
-              <th scope="col" className="numeric">
-                <button
-                  className="sort"
-                  aria-label="Sort by projected points"
-                  aria-pressed={sort === "points"}
-                  onClick={() => setSort(sort === "points" ? "name" : "points")}
-                >
-                  Points {sort === "points" ? "↓" : ""}
-                </button>
-              </th>
+              <th scope="col" className="numeric observed-ppg">Season PPG</th>
+              {BOX_SCORE_COLUMNS.map(column => <th key={column.id} scope="col" className="numeric" title={column.description} aria-label={column.label}>
+                {column.id === "pts" ? <button
+                    className="sort"
+                    aria-label="Sort by projected points"
+                    aria-pressed={sort === "points"}
+                    onClick={() => setSort(sort === "points" ? "rotation" : "points")}
+                  >PTS {sort === "points" ? "↓" : ""}</button>
+                  : column.label}
+              </th>)}
               {expanded && (
                 <th scope="col" className="numeric">
                   80% range
                 </th>
               )}
-              {expanded &&
-                ["REB", "AST", "3PM", "TO", "STL", "BLK"].map((k) => (
-                  <th key={k} scope="col" className="numeric">
-                    {k}
-                  </th>
-                ))}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((p) => (
-              <tr key={p.player_id}>
-                <td>
+          {teams.map((team) => (
+          <tbody key={team.team_id} data-team-id={team.team_id}>
+            <tr className="team-heading"><th colSpan={columns} scope="rowgroup">
+              <div className="team-heading-content"><TeamMark id={team.team_id} code={team.team_code} />
+              <h3>{team.team_name || team.team_code}</h3><span>{team.players.length} players · Projected five, unconfirmed</span></div>
+            </th></tr>
+            {team.unavailable > 0 && <tr className="coverage-warning"><td colSpan={columns}><span className="boxscore-row-note">Availability unresolved for {team.unavailable} players in this saved forecast. Unsupported forecasts are withheld; captured season averages remain visible.</span></td></tr>}
+            {team.unfilled_slots > 0 && !query.trim() && filter === "all" && <tr className="coverage-warning"><td colSpan={columns}><span className="boxscore-row-note">{team.unfilled_slots} of 5 starting slots await sufficient evidence. No lineup has been confirmed.</span></td></tr>}
+            {team.groups.map((group) => (
+            <React.Fragment key={group.key}>
+            <tr className="role-heading"><th colSpan={columns} scope="rowgroup"><span className="boxscore-row-note">{group.label}</span></th></tr>
+            {group.players.map((p) => (
+              <tr key={p.player_id} className="player-row" data-role={group.key}>
+                <td className="player-cell">
                   <button className="player-button" onClick={() => onSelect(p)}>
                     <PlayerPortrait key={p.player_id} player={p} />
                     <span>
                       {p.name}
-                      <small>
+                      <small title={p.history_games != null ? `${p.history_games} games of evidence` : undefined}>
                         {p.team_code || "NBA"}
                         {p.history_games != null
-                          ? ` · ${p.history_games} games of evidence`
+                          ? ` · ${p.history_games} games`
+                          : ""}
+                        {p.status === "projected" && typeof p.participation_probability === "number" && p.participation_probability < 0.95
+                          ? ` · ${Math.round(p.participation_probability * 100)}% to play`
                           : ""}
                       </small>
                     </span>
@@ -121,13 +135,12 @@ export default function PlayerTable({
                 <td>
                   <Status player={p} />
                 </td>
-                <td className="numeric">{number(p.expected_minutes)}</td>
-                <td className="numeric">{number(p.expected_fga)}</td>
-                <td
-                  className={`numeric points ${p.status === "projected" ? "supported" : ""}`}
-                >
-                  {number(p.points_mean)}
-                </td>
+                <td className="numeric observed-ppg" title={p.observed_stats ? `${p.observed_stats.season} · ${p.observed_stats.games} captured games · Observed as of ${p.observed_stats.as_of || "saved capture"}; not a game forecast` : "No captured season statistics"}>{number(p.observed_stats?.points_average)}</td>
+                {BOX_SCORE_COLUMNS.map(column => <td key={column.id} data-stat={column.id}
+                  className={`numeric ${column.id === "pts" ? `points ${p.status === "projected" ? "supported" : ""}` : ""}`}
+                  title={boxScoreTitle(p, column)}>
+                  {boxScoreValue(p, column)}
+                </td>)}
                 {expanded && (
                   <td className="numeric range">
                     {p.status === "projected"
@@ -135,22 +148,12 @@ export default function PlayerTable({
                       : "—"}
                   </td>
                 )}
-                {expanded &&
-                  [
-                    "expected_reb",
-                    "expected_ast",
-                    "expected_fg3m",
-                    "expected_tov",
-                    "expected_stl",
-                    "expected_blk",
-                  ].map((k) => (
-                    <td key={k} className="numeric">
-                      {number(p[k])}
-                    </td>
-                  ))}
               </tr>
             ))}
+            </React.Fragment>
+            ))}
           </tbody>
+          ))}
         </table>
         {!rows.length && (
           <div className="empty small">
@@ -167,12 +170,16 @@ export default function PlayerTable({
             </button>
           </div>
         )}
-      </div>
+      </ColumnScroll>
       <div className="table-note">
         <Icon name="info" />
         <span>
-          Dashes mean unsupported estimates. Conditional projections use a
-          complete-report not-listed assumption; participation is not confirmed.
+          Dashes mean missing estimates or an undefined shooting percentage.
+          Shooting percentages are undefined with no attempts. Conditional projections use a
+          verified report not-listed assumption; participation is not confirmed.
+          {" "}Each team has five projected starting slots, selected before filters.
+          Upcoming lineups remain unconfirmed. Season PPG is an observed average,
+          not a forecast; its tooltip identifies the season and captured games.
         </span>
       </div>
     </section>

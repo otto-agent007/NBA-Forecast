@@ -54,6 +54,28 @@ class ValidationTests(unittest.TestCase):
         validate_history([row(status='dnp', **zero)])
         validate_history([row(status='played', **zero)])
 
+    def test_full_box_optional_counts_signed_plus_minus_and_rebound_identity(self):
+        validate_history([row(reb=7, oreb=2, dreb=5, pf=3, plus_minus=-12)])
+        validate_history([row(reb=None, oreb=None, dreb=5, pf=None, plus_minus=None)])
+        for change in (dict(oreb=-1), dict(dreb=True), dict(pf=1.5),
+                       dict(plus_minus=True), dict(plus_minus=1.2),
+                       dict(reb=7, oreb=2, dreb=4), dict(reb=2, oreb=3)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_history([row(**change)])
+
+    def test_percentages_must_match_counts_when_present(self):
+        validate_history([row(fg_pct=.5, fg3_pct=1/3, ft_pct=1)])
+        for change in (dict(fg_pct=50), dict(fg_pct=.51), dict(fg3_pct=float('nan')),
+                       dict(fta=0, ftm=0, pts=11, ft_pct=0)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_history([row(**change)])
+
+    def test_nonzero_optional_dnp_fields_are_rejected(self):
+        zero = dict(minutes=0, fgm=0, fga=0, fg3m=0, fg3a=0, ftm=0, fta=0, tov=0, pts=0)
+        for change in (dict(oreb=1), dict(dreb=1), dict(pf=1), dict(plus_minus=-1)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_history([row(status='dnp', **zero, **change)])
+
     def test_roster_freshness_duplicates_unknown_teams(self):
         for mutate in (
             lambda s: s['roster'].update(observed_at='2026-10-18T17:00:00Z'),

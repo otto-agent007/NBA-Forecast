@@ -77,13 +77,24 @@ versions/seasons separate; exclude demo/replay/subset and off-slate rows.
 Use previous-season regular-season baselines plus current regular-season data.
 Minutes and attempt rates adapt faster than shooting efficiency. Shrink shooting
 percentages to established attempts so a bad shooting night alone cannot erase
-the baseline. No unobserved rookie production, no assumed return-to-play odds,
-and no automatic teammate-usage redistribution. Questionable/unknown players
-are withheld pending a sourced status. Roster changes and major minutes/shot
+the baseline. No unobserved rookie production and no automatic teammate-usage
+redistribution. Each projected player carries a participation probability:
+his rate of appearing with positive minutes over the team's last ten games
+since he joined, leaving out games his official injury report listed him out
+of, shrunk toward a 2025-26 role prior, and scaled by a reported
+questionable-type status. Player projections stay conditional on playing;
+the 240-minute budget and team totals weight them by that probability; minutes
+the rotation leaves unallocated enter the team total at a replacement scoring rate.
+Each team's expected possessions used are held to its own usage level (league
+112.6 per 240 minutes), so rates learned in other roles cannot add up past it.
+Questionable players are projected that way; unknown players are withheld. Roster changes and major minutes/shot
 changes enter a reasoning queue. Opponent adjustment is a bounded, shrunk
 points-allowed proxy derived only from complete pre-cutoff team boxscores; it
-is not a measured possession-adjusted defensive rating. Intervals are initial
-heuristics until measured on a sufficient prospective sample.
+is not a measured possession-adjusted defensive rating. A symmetric home-court
+factor (home up, away down by the same ratio) comes from complete pre-cutoff
+box scores that record the side, shrunk toward a 2025-26 prior of 1.45% and
+bounded. Intervals are initial heuristics until measured on a sufficient
+prospective sample.
 
 ## Evidence and acceptance
 

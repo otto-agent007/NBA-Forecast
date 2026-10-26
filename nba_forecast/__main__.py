@@ -53,6 +53,7 @@ def _parser():
         if name == 'forecast':
             cmd.add_argument('--stage', choices=('preliminary','final'), default='preliminary')
             cmd.add_argument('--injury-check')
+            cmd.add_argument('--cache-dir',default='data/raw',help='Archived injury PDFs for the live preflight cross-check')
             cmd.add_argument('--db', required=True)
             cmd.add_argument('--mode', choices=('live', 'replay', 'demo'), default='live')
     evaluate = sub.add_parser('evaluate')
@@ -106,6 +107,19 @@ def _parser():
     benchmarks = sub.add_parser('benchmarks')
     benchmarks.add_argument('--db', required=True)
     benchmarks.add_argument('--output')
+    dedupe = sub.add_parser('dedupe-histories', help='Rebuild a ledger so each distinct input history is stored once')
+    dedupe.add_argument('--directory', required=True, help='Operations directory holding forecast.sqlite')
+    dedupe.add_argument('--output')
+    backtest = sub.add_parser('backtest', help='Replay a season with the current model code and score it (docs/backtest.md)')
+    backtest.add_argument('--history', required=True, nargs='+', help='Normalized box-score history (.json or .json.gz), one per season')
+    backtest.add_argument('--team-games', required=True, nargs='+', help='Reconciled team games (datasets/model-upgrade-*/team-games.json.gz), one per season')
+    backtest.add_argument('--output', required=True, help='New directory for scoreboard.json and rows.json.gz')
+    backtest.add_argument('--reference', help='Directory of an earlier backtest to compare against')
+    backtest.add_argument('--warmup-fraction', type=float, default=.3, help='Share of game dates used only as history')
+    backtest.add_argument('--limit', type=int, help='Only the last N evaluation games (smoke runs)')
+    backtest.add_argument('--market', nargs='+', help='Closing lines for the replayed games (datasets/market-closing-*/closing-lines.json.gz), one per season')
+    backtest.add_argument('--injuries', nargs='+', help='Anchor injury reports for the replayed games (datasets/injury-reports-*/statuses.json.gz), one per season')
+    backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
     dashboard.add_argument('--assets', default='dashboard/dist')
@@ -114,13 +128,17 @@ def _parser():
     post=sub.add_parser('postgame')
     post.add_argument('--directory',required=True)
     post.add_argument('--output')
+    daily=sub.add_parser('daily-review')
+    daily.add_argument('--directory',required=True)
+    daily.add_argument('--date',help='Pacific date YYYY-MM-DD; defaults to automatic today/yesterday reports')
+    daily.add_argument('--output')
     enrich=sub.add_parser('enrich-history')
     enrich.add_argument('--archive',required=True)
     enrich.add_argument('--output',required=True)
     sync=sub.add_parser('sync-players')
     sync.add_argument('--directory',required=True)
     sync.add_argument('--history',nargs='*',default=[])
-    sync.add_argument('--max-shot-games',type=int,default=2)
+    sync.add_argument('--max-shot-games',type=int,default=16)
     sync.add_argument('--output')
     return parser
 
@@ -148,12 +166,23 @@ def main(argv=None):
             else:
                 from .model import forecast
                 from .store import save_run
+                if args.mode == 'live':
+                    if args.scope != 'league':raise ValueError('live runs require league scope')
+                    from .preflight import run_preflight
+                    from .profiles import build_profiles
+                    check=run_preflight(snapshot,history,build_profiles(snapshot,history),Path(args.db).parent,cache_dir=args.cache_dir)
+                    if check['status']!='passed':raise ValueError('preflight blocked: '+ '; '.join(i['detail'] for i in check['issues']))
+                    snapshot['preflight']=check
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
                 value = dict(run_id=run_id, mode=args.mode, scope=args.scope, forecast=result)
         elif args.command == 'postgame':
             from .postgame import build_postgames
             value=build_postgames(args.directory)
+        elif args.command == 'daily-review':
+            from .daily_review import build_daily_reviews,review_day
+            now=datetime.now(timezone.utc).isoformat()
+            value=review_day(args.directory,args.date,now) if args.date else build_daily_reviews(args.directory,now)
         elif args.command == 'enrich-history':
             from .player_sync import enrich_archive
             value=enrich_archive(args.archive)
@@ -195,6 +224,35 @@ def main(argv=None):
         elif args.command == 'benchmarks':
             from .benchmarks import benchmark_report
             value=benchmark_report(args.db)
+        elif args.command == 'backtest':
+            from .backtest import run_seasons, read_json as read_source, sha256_of, format_scoreboard
+            from .market_history import read_lines
+            from .injury_history import read_statuses
+            count = len(args.history)
+            for name in ('team_games', 'market', 'injuries'):
+                if getattr(args, name) is not None and len(getattr(args, name)) != count:
+                    raise ValueError(f'--{name.replace("_", "-")} needs one file per --history season')
+            seasons = []
+            for i in range(count):
+                paths = dict(history=args.history[i], team_games=args.team_games[i],
+                             market=args.market[i] if args.market else None,
+                             injuries=args.injuries[i] if args.injuries else None)
+                seasons.append(dict(history=read_source(paths['history']), records=read_source(paths['team_games']),
+                                    market=read_lines(paths['market']) if paths['market'] else None,
+                                    injuries=read_statuses(paths['injuries']) if paths['injuries'] else None,
+                                    sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
+            board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction,
+                                limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
+            print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
+            return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
+        elif args.command == 'dedupe-histories':
+            import fcntl
+            from .store import dedupe_histories
+            folder=Path(args.directory)
+            with (folder/'tick.lock').open('a') as lock:
+                try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError as exc:raise ValueError('a tick is running; retry when it finishes') from exc
+                value=dedupe_histories(folder/'forecast.sqlite')
         elif args.command == 'backfill':
             from .backfill import backfill_seasons
             result=backfill_seasons(args.seasons,args.directory,args.workers)

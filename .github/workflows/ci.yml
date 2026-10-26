@@ -20,6 +20,14 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q nba_forecast
+      # The model-change rule (AGENTS.md): a forecast change must not score worse
+      # than the committed reference beyond noise. Exit code 3 means worse.
+      - run: >
+          python -m nba_forecast backtest
+          --history datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz
+          --team-games datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz
+          --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz
+          --output /tmp/backtest --reference datasets/backtest-2026-10-26-absence --limit 400
   dashboard:
     runs-on: ubuntu-latest
     steps:
@@ -32,3 +40,5 @@ jobs:
       - run: npm ci --prefix dashboard
       - run: npm test --prefix dashboard
       - run: npm run build --prefix dashboard
+      - run: npm exec --prefix dashboard -- playwright install --with-deps chromium
+      - run: npm run test:e2e --prefix dashboard

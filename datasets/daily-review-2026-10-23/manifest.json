@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-23",
+  "generated_at": "2026-10-24T05:54:50.112245+00:00",
+  "input_signature": "fe22b3c9799f230aa7416876529522dfc5662fb6208bff0d2a59c91a01ae4c5d",
+  "files": {
+    "independent-analysis.json.gz": {
+      "bytes": 117839,
+      "sha256": "88a073fa475327ddf3cc998848eff364cafbc74b90f44a550b79b1a8e65cedbe"
+    },
+    "source-and-role-audit.json.gz": {
+      "bytes": 731,
+      "sha256": "b619309236bcc33fc2f47bbd38f64f8087122a6a5b49a9e77aec4a7f4d1f7214"
+    },
+    "rotation-replay.json.gz": {
+      "bytes": 1485,
+      "sha256": "d94f325dd85d2d96d8422e253be457756f4cb2c67fc91ee8bbd7680a7d32b151"
+    },
+    "review.json.gz": {
+      "bytes": 110771,
+      "sha256": "88a9e2ad2d002122af92033db79f3e4e92a43d252539aeb74d7597c21cb3450f"
+    },
+    "README.md": {
+      "bytes": 5710,
+      "sha256": "8adb705a4d88c3abe9a0d4d6d3c1774caaf49e1a637162d74bf9acfc40038818"
+    },
+    "verification.json": {
+      "bytes": 2123,
+      "sha256": "dec8cd1726b97e5cf662b89a839c5d121bbe18486f877b8b32c6e6fa2543de6a"
+    }
+  },
+  "policy": "Original forecast evaluation, separate posthoc mechanism replay, and archived-source audit. No retrospective forecasts inserted as live; no formula tuning from this day."
+}

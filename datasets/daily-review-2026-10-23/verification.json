@@ -1,0 +1,68 @@
+{
+  "release": "/mnt/2TBHDD/NBA-Forecast/repo/data/operations/production/runner-releases/454cca83b95058c8a7d741356ac087af3ba49e1ef77e64d5ac34986d12087b8e",
+  "python_tests": 373,
+  "browser_tests": 34,
+  "completed_tick": {
+    "started_at": "2026-10-24T05:56:55.772637+00:00",
+    "finished_at": "2026-10-24T05:59:06.485684+00:00",
+    "status": "complete",
+    "errors": [],
+    "daily_review": {
+      "analysis_version": "daily-review-1.0",
+      "errors": [],
+      "generated_at": "2026-10-24T05:58:54.522345+00:00",
+      "reports": {
+        "2026-10-22": {
+          "coverage": {
+            "final_forecasts": 0,
+            "play_by_play_games": 0,
+            "preliminary_forecasts": 0,
+            "scheduled_games": 2,
+            "verified_finals": 2
+          },
+          "game_ids": [
+            "0022600006",
+            "0022600007"
+          ],
+          "input_signature": "5ce384f2cee383e5fe3f9d5c06606787f6a2e2dbd04657dab572b4ab1253c059",
+          "source_watch": "ff88e43e9957a0dad3479f9dd4b4cbcc6972bafa056671b050b2b4630a1d0c44",
+          "status": "complete"
+        },
+        "2026-10-23": {
+          "coverage": {
+            "final_forecasts": 12,
+            "play_by_play_games": 0,
+            "preliminary_forecasts": 12,
+            "scheduled_games": 12,
+            "verified_finals": 12
+          },
+          "game_ids": [
+            "0022600099",
+            "0022600008",
+            "0022600094",
+            "0022600095",
+            "0022600096",
+            "0022600097",
+            "0022600098",
+            "0022600009",
+            "0022600100",
+            "0022600101",
+            "0022600102",
+            "0022600103"
+          ],
+          "input_signature": "fe22b3c9799f230aa7416876529522dfc5662fb6208bff0d2a59c91a01ae4c5d",
+          "source_watch": "28d5cf75b80fb26a3c11f8452ae5728d9277d858bbd912177099258211e773d6",
+          "status": "complete"
+        }
+      }
+    }
+  },
+  "dashboard_checks": {
+    "desktop": true,
+    "mobile": true,
+    "all_game_rows": 12,
+    "evidence_expansion": true,
+    "game_navigation": true,
+    "page_errors": []
+  }
+}

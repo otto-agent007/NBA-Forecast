@@ -30,9 +30,10 @@ A [validated historical snapshot](datasets/regular-season-2026-10-21/README.md) 
 5. `evaluate` final boxscores, then `report` season/model performance.
 
 Use `--history data/history/history.json.gz` for the backfill. Every roster player
-gets a projected, out, needs-review, or no-game row. Unknown availability and
-unsupported production are withheld. Prior shooting evidence is preserved;
-minutes and opportunities adapt faster.
+gets a projected, out, needs-review, or no-game row, and every projection a
+probability of playing (questionable players are projected conditionally on
+playing). Unknown availability and unsupported production are withheld. Prior
+shooting evidence is preserved; minutes and opportunities adapt faster.
 
 ## Guides
 
@@ -41,10 +42,27 @@ minutes and opportunities adapt faster.
 - [Backfill and T−30 report workflow](docs/backfill-and-injuries.md)
 - [Daily research and review loop](docs/operations.md)
 - [Model design](docs/design.md) · [Verification](docs/validation-results.md)
+- [Backtest scoreboard and the model-change rule](docs/backtest.md) · [Rules for agents](AGENTS.md)
 
-This is an initial scoring baseline: uncertainty intervals are not yet calibrated.
+This is an initial scoring baseline. Interval widths use a measured heuristic
+default until the pooled prospective calibration is ready. Any change to the
+model is judged on the season replay before it is merged (`backtest`, see
+`AGENTS.md`).
 Injury extraction is conservative: omission never means available.
 `tick` runs the loop once; persistent Linux timer templates are in `deploy/systemd/`.
+The automatic loop captures a daily injury report at 9 AM Pacific and each
+game's final checkpoint at T−30. Preliminary forecasts remain inspectable
+alongside finals, with player outlooks grouped by team and five projected starters.
+Automated and live CLI runs cross-check the matchup, tipoff and rosters against
+ESPN and apply official injury information for both teams before running the
+model. Only evidence that would make the forecast wrong blocks it (a started,
+postponed or moved game, invalid inputs, or contradicted availability); provider
+differences and pending reports are notes on the dashboard. Until a team's
+official injury report is published, ESPN's game injury list supplies its
+availability. Projected starters remain unconfirmed.
+When the official PDF omits a healthy team's block, an explicit empty injury list
+in the verified game-specific ESPN report can support conditional projections.
+Missing fields, unsubmitted reports and roster Active labels cannot do this.
 Back up `data/forecast.sqlite` and `data/`: they are ignored by Git. GitHub CI tests
 Python 3.11–3.13; PRs are reviewed before merging.
 

@@ -3,13 +3,34 @@ import { Icon } from "./Icons";
 import { stamp, timeLabel, health, safeSource } from "./data";
 export default function Sidebar({ game, data, onReview, now }) {
   const forecast = game?.forecast,
-    check = forecast?.injury_check;
-  const report = check?.anchor_report;
+    latestCheck = game?.injury_capture?.games?.find((c) => c.game_id === game?.game_id),
+    check = latestCheck || forecast?.injury_check;
+  const evidence = forecast?.injury_check;
+  const report = evidence?.latest_report || evidence?.anchor_report;
+  const daily = data.injury_capture;
+  const dailySource = safeSource(daily?.capture?.report?.source_url);
+  const sourceWarnings = (data.runner?.warnings || []).filter((w) => ['schedule', 'roster'].includes(w.task));
+  const crosscheck=data.schedule_crosscheck;
+  const scheduleSource=data.runner?.schedule_source;
+  const verifiedSecondary=crosscheck?.status === 'verified' && scheduleSource !== 'unverified_cached_nba';
+  const staleSecondary=scheduleSource === 'espn_verified_cached_nba' && !crosscheck;
+  const unverifiedSchedule=scheduleSource === 'unverified_cached_nba';
+  const scheduleLabel=unverifiedSchedule ? 'Unverified'
+    : verifiedSecondary ? 'ESPN cross-checked'
+    : crosscheck ? 'Partial cross-check'
+    : staleSecondary ? 'Cross-check unavailable'
+      : data.schedule_observed_at ? 'NBA captured' : 'Missing';
   const h = health(data.runner, now);
+  const waiting = data.runner?.waiting_jobs || [];
+  const runnerIssues = data.runner?.errors || [];
+  const runnerGame = (id) => {
+    const match = data.games.find((g) => g.game_id === id);
+    return match ? `${match.away_tricode}@${match.home_tricode}` : id;
+  };
   const start = game?.start_time ? Date.parse(game.start_time) : null;
   const before = start && now < start;
   const final =
-    forecast?.stage === "final"
+    (game?.forecasts?.final || forecast?.stage === "final")
       ? "Saved"
       : before && now < start - 1800000
         ? "Waiting for T−30"
@@ -24,16 +45,17 @@ export default function Sidebar({ game, data, onReview, now }) {
     <aside className="sidebar">
       <h2>Pregame checklist</h2>
       <div className="checklist">
+        <Check icon="clock" label="Daily report · 9 AM Pacific" value={daily?.state === 'captured' ? 'Captured' : daily?.state === 'error' ? 'Retrying' : 'Pending'} kind={daily?.state === 'captured' ? 'good' : 'warn'} />
         <Check
           icon="check"
           label="Schedule"
-          value={data.schedule_observed_at ? "Captured" : "Missing"}
-          kind={data.schedule_observed_at ? "good" : "warn"}
+          value={scheduleLabel}
+          kind={!unverifiedSchedule && (verifiedSecondary || (data.schedule_observed_at && !crosscheck && !staleSecondary)) ? "good" : "warn"}
         />
         <Check
           icon="info"
-          label="Injury report"
-          value={report ? "Review needed" : "Not captured"}
+          label="T−30 injury report"
+          value={check?.phase === 'final_review' && check?.report_status === 'captured_pending_review' ? "Captured" : report ? "Preliminary" : "Not captured"}
           kind="warn"
         />
         <Check
@@ -79,9 +101,16 @@ export default function Sidebar({ game, data, onReview, now }) {
         ))}
       <section className="evidence-block">
         <h3>Evidence freshness</h3>
+        {sourceWarnings.map((w) => <p className="warning" key={w.task}>
+          {w.task === 'schedule' ? 'Calendar refresh unavailable. Using the saved schedule with its original capture time.'
+            : 'Roster refresh unavailable. Only saved roster evidence within 48 hours can support a forecast.'}
+        </p>)}
+        {staleSecondary && <p className="warning">Today's ESPN calendar check is unavailable. Each forecast still confirms its own matchup and tipoff.</p>}
+        {verifiedSecondary && <p>Tipoff and status checked against ESPN; NBA game IDs come from the saved NBA calendar.</p>}
         <dl>
-          <dt>Schedule</dt>
+          <dt>NBA calendar captured</dt>
           <dd>{stamp(data.schedule_observed_at)}</dd>
+          {crosscheck && <><dt>ESPN cross-check</dt><dd>{stamp(crosscheck.observed_at)}</dd></>}
           <dt>Forecast saved</dt>
           <dd>{stamp(forecast?.created_at)}</dd>
           <dt>Report published</dt>
@@ -92,6 +121,7 @@ export default function Sidebar({ game, data, onReview, now }) {
             Official injury report <Icon name="arrow" size={14} />
           </a>
         )}
+        {dailySource && <p><a href={dailySource} target="_blank" rel="noreferrer">Daily injury report ↗</a><br /><small>Captured {stamp(daily.capture.checked_at)}</small></p>}
         {check?.later_report_available && (
           <p className="warning">
             A later injury report is available. Review changes before relying on
@@ -102,6 +132,17 @@ export default function Sidebar({ game, data, onReview, now }) {
           <span className="status-dot" />
           {h.label}
         </div>
+        {!!waiting.length && <p className="tiny" aria-label="Upcoming forecast checkpoints">
+          {waiting.length} upcoming {waiting.length === 1 ? "game" : "games"} waiting for the initial forecast checkpoint. Next: {stamp(waiting.map((j) => j.ready_at).sort()[0])}.
+        </p>}
+        {!!runnerIssues.length && <ul className="runner-issues" aria-label="Runner issues">
+          {runnerIssues.slice(0, 3).map((issue, index) => <li key={index}>
+            {issue.game_id ? runnerGame(issue.game_id) : issue.task}: {issue.error || issue.issues?.map((i) => i.detail).join(" ") || "Task failed; retry pending."}
+          </li>)}
+        </ul>}
+        {!!data.runner?.missed_final_games?.length && <p className="warning">
+          Missing final forecasts: {data.runner.missed_final_games.map(runnerGame).join(", ")}.
+        </p>}
         <p className="tiny">
           {stamp(data.runner?.finished_at)}. Refresh reloads saved evidence; it
           does not start the runner.

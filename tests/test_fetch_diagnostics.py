@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
-from nba_forecast.data import fetch_json, SCHEDULE_URL
+from nba_forecast.data import _fetch, fetch_json, SCHEDULE_URL
 
 
 class FetchDiagnosticsTests(unittest.TestCase):
@@ -24,6 +25,19 @@ class FetchDiagnosticsTests(unittest.TestCase):
                 fetch_json(SCHEDULE_URL, cache_dir=directory)
             self.assertIn(SCHEDULE_URL, str(caught.exception))
             self.assertIn('TimeoutError', str(caught.exception))
+
+    def test_cdn_requests_send_a_current_browser_user_agent_and_referer(self):
+        # cdn.nba.com refuses bare "Mozilla/5.0" and Firefox below ~150 with 403;
+        # www.nba.com pages time out on that agent and keep the bare one.
+        with tempfile.TemporaryDirectory() as directory, patch('urllib.request.OpenerDirector.open') as request:
+            request.return_value.__enter__.return_value.read.return_value = b'{}'
+            fetch_json(SCHEDULE_URL, cache_dir=directory)
+            sent = request.call_args.args[0]
+            self.assertGreaterEqual(int(re.search(r'Firefox/(\d+)', sent.get_header('User-agent'))[1]), 150)
+            self.assertEqual(sent.get_header('Referer'), 'https://www.nba.com/')
+            request.return_value.__enter__.return_value.read.return_value = b'<html></html>'
+            _fetch('https://www.nba.com/game/0022600104/box-score', directory)
+            self.assertEqual(request.call_args.args[0].get_header('User-agent'), 'Mozilla/5.0')
 
     def test_invalid_json_leaves_parse_evidence_and_raw_archive(self):
         with tempfile.TemporaryDirectory() as directory, patch('urllib.request.OpenerDirector.open') as request:

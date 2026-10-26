@@ -1,6 +1,9 @@
 import Postgame from "./Postgame";
 import Projections from "./Projections";
-import React, { useEffect, useMemo, useState } from "react";
+import ForecastStages from "./ForecastStages";
+import ForecastTotals from "./ForecastTotals";
+import MarginForecast from "./MarginForecast";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, TeamMark } from "./Icons";
 import PlayerTable from "./PlayerTable";
 import PlayerDetail from "./PlayerDetail";
@@ -13,7 +16,23 @@ import {
   longDate,
   timeLabel,
   stamp,
+  finalResult,
 } from "./data";
+
+// A game-rail logo with the final score under it once the game is over.
+function TileTeam({ game, side }) {
+  const result = game.status === "final" ? finalResult(game.final_score) : null;
+  return (
+    <div className="tile-team">
+      <TeamMark id={game[side + "_team_id"]} code={game[side + "_tricode"]} />
+      {result && (
+        <b className={`final-score ${result.winner === side ? "won" : ""}`}>
+          {game.final_score[side]}
+        </b>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [data, setData] = useState(null),
@@ -24,10 +43,15 @@ export default function App() {
     [selected, setSelected] = useState(""),
     [query, setQuery] = useState(""),
     [filter, setFilter] = useState("all"),
-    [sort, setSort] = useState("name"),
+    [sort, setSort] = useState("rotation"),
+    [forecastStage, setForecastStage] = useState("latest"),
     [detail, setDetail] = useState(null),
+    [refreshRevision, setRefreshRevision] = useState(0),
     [now, setNow] = useState(Date.now());
-  async function reload() {
+  const refreshInFlight = useRef(false);
+  const reload = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setLoading(true);
     setError("");
     try {
@@ -49,23 +73,35 @@ export default function App() {
       )
         throw new Error("Dashboard data format is not supported.");
       setData(next);
+      setRefreshRevision((old) => old + 1);
       setDate((old) => old || initialDay(next));
     } catch (e) {
       setError(e.message);
     } finally {
+      refreshInFlight.current = false;
       setLoading(false);
     }
-  }
+  }, []);
   useEffect(() => {
     reload();
-    const timer = setInterval(() => setNow(Date.now()), 30000);
+    const staticMode = new URLSearchParams(location.search).get("snapshot") === "1";
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      if (!staticMode) reload();
+    }, 30000);
     return () => clearInterval(timer);
-  }, []);
+  }, [reload]);
   const games = useMemo(
     () => data?.games.filter((g) => gameDay(g) === date) || [],
     [data, date],
   );
-  const game = games.find((g) => g.game_id === selected) || games[0];
+  const selectedGame = games.find((g) => g.game_id === selected) || games[0];
+  const game = useMemo(() => {
+    if (!selectedGame || forecastStage === "latest") return selectedGame;
+    const saved = selectedGame.forecasts?.[forecastStage] ||
+      (selectedGame.forecast?.stage === forecastStage ? selectedGame.forecast : null);
+    return { ...selectedGame, forecast: saved };
+  }, [selectedGame, forecastStage]);
   const players = useMemo(() => {
     if (!data) return [];
     if (tab === "Games") return gamePlayers(data, game);
@@ -162,20 +198,25 @@ export default function App() {
                 className={`game-tile ${game?.game_id === g.game_id ? "selected" : ""}`}
                 key={g.game_id}
                 aria-pressed={game?.game_id === g.game_id}
-                aria-label={`${g.away_tricode || "TBD"} at ${g.home_tricode || "TBD"}`}
+                aria-label={`${g.away_tricode || "TBD"} at ${g.home_tricode || "TBD"}${
+                  g.status === "final" && finalResult(g.final_score)
+                    ? `, final ${g.final_score.away}–${g.final_score.home}`
+                    : ""
+                }`}
                 onClick={() => {
                   setSelected(g.game_id);
+                  setForecastStage("latest");
                   chooseTab(tab === "Postgame" ? "Postgame" : "Games");
                 }}
               >
                 <div>
-                  <TeamMark id={g.away_team_id} code={g.away_tricode} />
+                  <TileTeam game={g} side="away" />
                   <span>at</span>
-                  <TeamMark id={g.home_team_id} code={g.home_tricode} />
+                  <TileTeam game={g} side="home" />
                 </div>
                 <small>
                   {g.status === "final"
-                    ? "Final"
+                    ? finalResult(g.final_score)?.label || "Final"
                     : g.status === "live"
                       ? "In progress"
                       : g.status === "postponed"
@@ -223,6 +264,7 @@ export default function App() {
               onChange={(e) => {
                 setDate(e.target.value);
                 setSelected("");
+                setForecastStage("latest");
                 setFilter("all");
               }}
             />
@@ -254,9 +296,9 @@ export default function App() {
               <span>Times shown in Pacific Time</span>
             </div>
             {tab === "Postgame" ? (
-              <Postgame game={game} />
+              <Postgame game={game} refreshRevision={refreshRevision} />
             ) : tab === "Performance" ? (
-              <Performance data={data} />
+              <Performance data={data} date={date} onSelect={setDetail} onGame={id=>{setSelected(id);setTab("Games");}} />
             ) : tab === "Projections" ? (
               <Projections
                 players={players}
@@ -271,6 +313,9 @@ export default function App() {
             ) : (
               <>
                 {tab === "Games" && game && <Matchup game={game} />}
+                {tab === "Games" && game && <ForecastStages game={selectedGame} selected={game.forecast?.stage} onSelect={setForecastStage} />}
+                {tab === "Games" && game && <ForecastTotals game={game} />}
+                {tab === "Games" && game?.forecast && <MarginForecast key={`${game.game_id}:${game.forecast.run_id || game.forecast.stage}`} game={game} />}
                 {tab === "Games" && !game ? (
                   <div className="empty">
                     <h2>No games on this date</h2>
@@ -285,6 +330,7 @@ export default function App() {
                   >
                     <div id="player-area">
                       <PlayerTable
+                        key={`${tab}-${game?.game_id || "pool"}`}
                         players={players}
                         query={query}
                         setQuery={setQuery}
@@ -355,10 +401,21 @@ function Matchup({ game }) {
   };
   const away = splitName(game.away_name, game.away_tricode),
     home = splitName(game.home_name, game.home_tricode);
+  const result = game.status === "final" ? finalResult(game.final_score) : null;
+  const logo = (side) => (
+    <div className="matchup-logo">
+      <TeamMark id={game[side + "_team_id"]} code={game[side + "_tricode"]} large />
+      {result && (
+        <b className={`final-score ${result.winner === side ? "won" : ""}`}>
+          {game.final_score[side]}
+        </b>
+      )}
+    </div>
+  );
   return (
     <section className="matchup" aria-label="Selected matchup">
       <div className="matchup-team away">
-        <TeamMark id={game.away_team_id} code={game.away_tricode} large />
+        {logo("away")}
         <div>
           <span className="city">{away[0]}</span>
           <strong>{away[1]}</strong>
@@ -366,7 +423,7 @@ function Matchup({ game }) {
       </div>
       <span className="versus">AT</span>
       <div className="matchup-team home">
-        <TeamMark id={game.home_team_id} code={game.home_tricode} large />
+        {logo("home")}
         <div>
           <span className="city">{home[0]}</span>
           <strong>{home[1]}</strong>
@@ -377,7 +434,7 @@ function Matchup({ game }) {
           {game.status === "postponed"
             ? "Postponed"
             : game.status === "final"
-              ? "Final"
+              ? result?.label || "Final"
               : timeLabel(game.start_time)}
         </strong>
         <span>

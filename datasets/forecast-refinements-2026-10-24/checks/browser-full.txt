@@ -1,0 +1,71 @@
+npm notice run nba-forecast-dashboard@0.1.0 test:e2e
+npm notice run playwright test
+[WebServer] npm notice run nba-forecast-dashboard@0.1.0 dev
+[WebServer] npm notice run vite --host 127.0.0.1 --port 4173 --strictPort
+[WebServer] (node:741011) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 44 tests using 4 workers
+
+(node:741034) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:741042) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:741035) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:741037) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   3 [desktop] › e2e/dashboard.spec.js:73:1 › historical validation is separated from prospective calibration evidence (1.4s)
+  ✓   1 [desktop] › e2e/dashboard.spec.js:45:1 › View review queue includes projected role reviews and excludes routine players (1.4s)
+  ✓   4 [desktop] › e2e/dashboard.spec.js:58:1 › runner separates waiting checkpoints from actionable errors (1.4s)
+  ✓   2 [desktop] › e2e/dashboard.spec.js:90:1 › daily review shows date-specific coverage and preserves partial forecast totals (1.6s)
+  ✓   5 [desktop] › e2e/dashboard.spec.js:113:1 › player details show applied environment effects and empirical interval evidence (1.2s)
+  ✓   7 [desktop] › e2e/dashboard.spec.js:151:1 › switching games cancels a pending recap and keeps the newly selected game (1.2s)
+  ✓   6 [desktop] › e2e/dashboard.spec.js:126:1 › Refresh reloads newly available and corrected postgame evidence for the same game (1.3s)
+  ✓   8 [desktop] › e2e/dashboard.spec.js:179:1 › player outlook separates teams and places starters before bench by minutes (1.1s)
+  ✓   9 [desktop] › e2e/dashboard.spec.js:197:1 › preliminary forecast remains selectable alongside the final checkpoint (1.3s)
+  ✓  10 [desktop] › e2e/dashboard.spec.js:217:1 › an open dashboard automatically shows a newly saved final forecast (1.2s)
+  ✓  11 [desktop] › e2e/dashboard.spec.js:234:1 › automatic refresh preserves an explicitly selected preliminary and player search (1.2s)
+  ✓  12 [desktop] › e2e/dashboard.spec.js:252:1 › team and game point totals follow the forecast stage and ignore player filters (1.2s)
+  ✓  13 [desktop] › e2e/dashboard.spec.js:278:1 › partial point totals disclose missing coverage and unavailable teams stay blank (912ms)
+  ✓  16 [desktop] › e2e/dashboard.spec.js:348:1 › roster quarantine stays visible while verified player projections remain inspectable (1.2s)
+  ✓  15 [desktop] › e2e/dashboard.spec.js:326:1 › recovered zero-injury update is visible without rewriting the saved forecast (1.3s)
+  ✓  14 [desktop] › e2e/dashboard.spec.js:295:1 › Bucks information stays accessible with five projected starters and a visible cross-check block (1.7s)
+  ✓  17 [desktop] › e2e/dashboard.spec.js:366:1 › player details disclose historical scoring seasons and samples used by the forecast (1.1s)
+  ✓  18 [desktop] › e2e/full-boxscore.spec.js:71:1 › full box forecasts preserve team starters, signed values and unsupported cells (2.0s)
+  ✓  21 [desktop] › e2e/margins.spec.js:36:1 › line explorer handles equality, away side, invalid input and mobile layout (1.3s)
+  ✓  20 [desktop] › e2e/full-boxscore.spec.js:146:1 › shot chart distinguishes verified zero attempts from missing played games (1.9s)
+  ✓  19 [desktop] › e2e/full-boxscore.spec.js:114:1 › player forecast and game log show full stats with honest minute precision (2.5s)
+(node:742363) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:742376) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  22 [desktop] › e2e/margins.spec.js:61:1 › partial forecasts and legacy snapshots never invent probabilities (994ms)
+(node:742387) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:742587) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  23 [mobile] › e2e/dashboard.spec.js:45:1 › View review queue includes projected role reviews and excludes routine players (1.1s)
+  ✓  24 [mobile] › e2e/dashboard.spec.js:58:1 › runner separates waiting checkpoints from actionable errors (1.3s)
+  ✓  25 [mobile] › e2e/dashboard.spec.js:73:1 › historical validation is separated from prospective calibration evidence (1.3s)
+  ✓  27 [mobile] › e2e/dashboard.spec.js:113:1 › player details show applied environment effects and empirical interval evidence (1.1s)
+  ✓  26 [mobile] › e2e/dashboard.spec.js:90:1 › daily review shows date-specific coverage and preserves partial forecast totals (1.3s)
+  ✓  28 [mobile] › e2e/dashboard.spec.js:126:1 › Refresh reloads newly available and corrected postgame evidence for the same game (1.3s)
+  ✓  29 [mobile] › e2e/dashboard.spec.js:151:1 › switching games cancels a pending recap and keeps the newly selected game (1.1s)
+  ✓  30 [mobile] › e2e/dashboard.spec.js:179:1 › player outlook separates teams and places starters before bench by minutes (987ms)
+  ✓  31 [mobile] › e2e/dashboard.spec.js:197:1 › preliminary forecast remains selectable alongside the final checkpoint (1.2s)
+  ✓  32 [mobile] › e2e/dashboard.spec.js:217:1 › an open dashboard automatically shows a newly saved final forecast (949ms)
+  ✓  33 [mobile] › e2e/dashboard.spec.js:234:1 › automatic refresh preserves an explicitly selected preliminary and player search (1.2s)
+  ✓  34 [mobile] › e2e/dashboard.spec.js:252:1 › team and game point totals follow the forecast stage and ignore player filters (1.0s)
+  ✓  35 [mobile] › e2e/dashboard.spec.js:278:1 › partial point totals disclose missing coverage and unavailable teams stay blank (925ms)
+  ✓  37 [mobile] › e2e/dashboard.spec.js:326:1 › recovered zero-injury update is visible without rewriting the saved forecast (978ms)
+  ✓  38 [mobile] › e2e/dashboard.spec.js:348:1 › roster quarantine stays visible while verified player projections remain inspectable (984ms)
+  ✓  36 [mobile] › e2e/dashboard.spec.js:295:1 › Bucks information stays accessible with five projected starters and a visible cross-check block (1.5s)
+  ✓  39 [mobile] › e2e/dashboard.spec.js:366:1 › player details disclose historical scoring seasons and samples used by the forecast (1.0s)
+  ✓  40 [mobile] › e2e/full-boxscore.spec.js:71:1 › full box forecasts preserve team starters, signed values and unsupported cells (1.8s)
+  ✓  43 [mobile] › e2e/margins.spec.js:36:1 › line explorer handles equality, away side, invalid input and mobile layout (1.2s)
+  ✓  42 [mobile] › e2e/full-boxscore.spec.js:146:1 › shot chart distinguishes verified zero attempts from missing played games (1.6s)
+  ✓  41 [mobile] › e2e/full-boxscore.spec.js:114:1 › player forecast and game log show full stats with honest minute precision (1.8s)
+  ✓  44 [mobile] › e2e/margins.spec.js:61:1 › partial forecasts and legacy snapshots never invent probabilities (702ms)
+
+  44 passed (17.4s)

@@ -1,5 +1,43 @@
 # Postgame review
 
+## Daily forecast review
+
+The persistent runner builds today's and yesterday's Pacific-date reviews after
+final-result collection. The **Performance** tab shows the selected date's review:
+each game's actual score, saved preliminary/final totals, player and minutes error,
+range coverage, paired stage comparison and evidence-backed improvement questions.
+Final boxes are enough for these comparisons; detailed play-by-play coverage is
+reported separately. A report becomes complete when every scheduled game has a
+reconciled final. Missing player rows remain unscored, even if an out player would
+usually be absent from the provider's boxscore.
+
+```sh
+python -m nba_forecast daily-review --directory data/operations/production
+python -m nba_forecast daily-review --directory data/operations/production --date 2026-10-23 --output /tmp/oct23-review.json
+```
+
+The selector takes the latest whole live league forecast per game/stage before
+opening outcomes, preserving abstentions, original model versions and creation
+times. Saved partial totals retain their original designation. Earlier forecasts
+without saved aggregate totals are labeled as sums derived from their frozen
+player forecasts. Partial totals and overtime are excluded from complete
+regulation-total metrics; unknown final duration is excluded as well. DNPs remain
+in projected-player error, and out forecasts have separate metrics.
+
+Reports live in `daily-reviews/YYYY-MM-DD.json`; content-hash revisions preserve
+the earlier review. The index watches final and postgame evidence plus schedule
+identity for previously reviewed dates. A later ingested correction regenerates
+that older date even after it leaves the current two-day window. This does not
+add unbounded historical provider polling. Unchanged reports keep their timestamp.
+
+Review priorities distinguish participation, overfull protected rotations, minutes,
+attempts, and interval coverage. Components are accounting decompositions;
+small forecast attempt denominators can produce unstable terms. Do not infer
+shooting luck, injury, foul trouble or coaching decisions without supporting
+evidence. The report also flags identities reported for multiple teams on one
+date. New validated outcomes enter the existing history/calibration process;
+model formula changes still require tests and multi-game evaluation.
+
 After collecting final boxscores and player/shot data:
 
 ```sh

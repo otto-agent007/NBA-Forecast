@@ -11,6 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliTests(unittest.TestCase):
+    def test_blocked_live_preflight_does_not_execute_model_or_create_ledger(self):
+        from unittest.mock import patch
+        from nba_forecast.__main__ import main
+        from tests.test_store import inputs
+        s,_,_=inputs()
+        with tempfile.TemporaryDirectory() as d:
+            snapshot=Path(d)/'snapshot.json';snapshot.write_text(json.dumps(s));db=Path(d)/'ledger.sqlite'
+            with patch('nba_forecast.preflight.run_preflight',return_value={'status':'blocked','issues':[{'detail':'Missing coverage'}]}),patch('nba_forecast.model.forecast') as model:
+                code=main(['forecast','--snapshot',str(snapshot),'--db',str(db),'--mode','live'])
+            self.assertNotEqual(code,0);model.assert_not_called();self.assertFalse(db.exists())
     def run_cli(self, *args, success=True):
         result = subprocess.run([sys.executable, '-m', 'nba_forecast', *map(str, args)],
                                 cwd=ROOT, text=True, capture_output=True)

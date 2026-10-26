@@ -15,3 +15,6 @@ dashboard/public/dashboard.json
 dashboard/public/players/
 
 dashboard/public/postgame/
+
+dashboard/test-results/
+dashboard/playwright-report/

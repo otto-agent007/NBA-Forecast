@@ -1,0 +1,5 @@
+error: preflight blocked: Missing coverage
+----------------------------------------------------------------------
+Ran 523 tests in 10.554s
+
+OK

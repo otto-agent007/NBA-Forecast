@@ -1,0 +1,70 @@
+{
+  "release": "/mnt/2TBHDD/NBA-Forecast/repo/data/operations/production/runner-releases/fa12bb0f379caeddc725a1dc0efd7e9bf9402d8f24f9fb48ad1433036858a0e0",
+  "artifact_sha256": "e25bec66bd5a9258eccb5a5de0e47afa0b84b3da1d698c25b8672910eee624b2",
+  "baseline_release": "95f69ec510ee959cb1a551a6077d9d01700d7ce836658eb1b335bafd6223deaf",
+  "verification": {
+    "python_tests": 354,
+    "browser_tests": 32
+  },
+  "raw_archive": {
+    "path": "/mnt/2TBHDD/NBA-Forecast/repo/data/operations/model-research/pace-defense-2026-10-23/verified-source-archive.tar.gz",
+    "sha256": "c9d33093997c6a77688803e0c383e7a9cc2a7397247857188fcd570ebcd3686c",
+    "bytes": 61339825
+  },
+  "first_verified_tick": {
+    "started_at": "2026-10-24T02:17:00.979337+00:00",
+    "finished_at": "2026-10-24T02:18:03.142730+00:00",
+    "status": "complete",
+    "created_runs": 0,
+    "evaluated_runs": 97,
+    "errors": [],
+    "final_sync": {
+      "environment_updates": [],
+      "environment_warnings": [],
+      "errors": [],
+      "imported": [],
+      "pending": [
+        "0022600008",
+        "0022600098"
+      ],
+      "pending_details": [
+        {
+          "evidence": {
+            "game_id": "0022600008",
+            "player_total": 81,
+            "provider_event_id": "401909095",
+            "retrieved_at": "2026-10-24T02:17:25.233627+00:00",
+            "source_sha256": "7c2885545c2950d5ba8f358871b6c5912ab38d14389072da229b7ffc8e0e072a",
+            "source_url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=401909095",
+            "statistic": "fga",
+            "team_id": "1610612752",
+            "team_total": 80
+          },
+          "game_id": "0022600008",
+          "reason": "ESPN team/player fga totals mismatch: players=81, team=80; awaiting source correction"
+        },
+        {
+          "evidence": null,
+          "game_id": "0022600098",
+          "reason": "ESPN game is not explicitly final"
+        }
+      ]
+    },
+    "prospective_calibration": {
+      "game_count": 0,
+      "minimum_games": 20,
+      "reason": "insufficient_games",
+      "sample_count": 0,
+      "status": "not_ready"
+    },
+    "waiting_jobs_count": 8
+  },
+  "dashboard_checks": {
+    "desktop": true,
+    "mobile": true,
+    "no_page_errors": true,
+    "no_horizontal_overflow": true
+  },
+  "activated_at": "2026-10-24T02:15:27.365166+00:00",
+  "full_tick_receipt": "data/operations/production/model-upgrade-verification.json"
+}

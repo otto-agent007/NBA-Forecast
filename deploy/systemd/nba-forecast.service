@@ -5,9 +5,10 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-# Replace /ABSOLUTE/PATH/NBA-Forecast in both lines before installation.
-WorkingDirectory=/ABSOLUTE/PATH/NBA-Forecast
-ExecStart=/usr/bin/python3 -m nba_forecast tick --directory data/operations/production --history datasets/regular-season-2026-10-21/history.json.gz
+# Pin with: python3 -m nba_forecast.runner_release --directory data/operations/production/runner-releases
+# Replace WorkingDirectory with the printed release path; keep data paths absolute.
+WorkingDirectory=/ABSOLUTE/PATH/PINNED-RUNNER-RELEASE
+ExecStart=/usr/bin/python3 -m nba_forecast tick --directory /ABSOLUTE/PATH/NBA-Forecast/data/operations/production --history /ABSOLUTE/PATH/NBA-Forecast/datasets/regular-season-2026-10-21/history.json.gz
 TimeoutStartSec=10min
 UMask=0077
 NoNewPrivileges=true

@@ -14,6 +14,9 @@ import sqlite3
 import uuid
 
 from .validation import parse_time, validate_history, validate_inputs
+from .totals import game_totals
+from .boxscore_model import validate_boxscore, PERCENTAGES, VERSION as BOX_MODEL_VERSION
+from .model_versions import uses_refinements, REFINED_VERSION
 
 PROJECTION_FIELDS = (
     'expected_minutes', 'expected_fga', 'expected_fta', 'expected_tov',
@@ -23,8 +26,11 @@ PROJECTION_FIELDS = (
 OPTIONAL_PROJECTION_FIELDS = ('expected_reb', 'expected_ast', 'expected_fg3m', 'expected_stl', 'expected_blk')
 STAT_PROJECTIONS = {'reb': 'expected_reb', 'ast': 'expected_ast', 'fg3m': 'expected_fg3m',
                     'stl': 'expected_stl', 'blk': 'expected_blk', 'tov': 'expected_tov'}
+STAT_PROJECTIONS.update({k:'expected_'+k for k in ('fgm','fga','fg3a','ftm','fta','oreb','dreb','pf','plus_minus',*PERCENTAGES)})
 
-_SCHEMA = """
+# Original single-table layout. Ledgers created before history deduplication
+# keep it until ``dedupe_histories`` rebuilds them; readers see the same rows.
+_LEGACY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -65,6 +71,89 @@ CREATE TRIGGER IF NOT EXISTS evaluations_no_delete
 BEFORE DELETE ON evaluations BEGIN SELECT RAISE(ABORT, 'evaluation revisions are immutable'); END;
 """
 
+# Every run used to embed its own copy of the (large, usually identical) input
+# history. Each distinct history is now stored once, keyed by its digest. The
+# ``runs`` view still presents the complete logical row, including
+# history_json and the insertion-order rowid, so readers are unchanged. Trigger
+# names match the legacy layout so older code's IF NOT EXISTS setup is a no-op.
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS histories (
+    history_sha256 TEXT PRIMARY KEY,
+    history_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_records (
+    run_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    as_of TEXT NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('live', 'replay', 'demo')),
+    scope TEXT NOT NULL CHECK (scope IN ('league', 'subset')),
+    snapshot_json TEXT NOT NULL,
+    history_sha256 TEXT NOT NULL REFERENCES histories(history_sha256),
+    forecast_json TEXT NOT NULL,
+    snapshot_sha256 TEXT NOT NULL,
+    forecast_sha256 TEXT NOT NULL,
+    inputs_sha256 TEXT NOT NULL
+);
+CREATE VIEW IF NOT EXISTS runs AS
+SELECT r.run_id AS run_id, r.created_at AS created_at, r.as_of AS as_of, r.mode AS mode,
+       r.scope AS scope, r.snapshot_json AS snapshot_json, h.history_json AS history_json,
+       r.forecast_json AS forecast_json, r.snapshot_sha256 AS snapshot_sha256,
+       r.history_sha256 AS history_sha256, r.forecast_sha256 AS forecast_sha256,
+       r.inputs_sha256 AS inputs_sha256, r.rowid AS rowid
+FROM run_records r JOIN histories h ON h.history_sha256 = r.history_sha256;
+CREATE TABLE IF NOT EXISTS evaluations (
+    run_id TEXT NOT NULL REFERENCES run_records(run_id),
+    revision INTEGER NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    actuals_json TEXT NOT NULL,
+    actuals_sha256 TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, revision)
+);
+CREATE TRIGGER IF NOT EXISTS runs_insert INSTEAD OF INSERT ON runs BEGIN
+    SELECT RAISE(ABORT, 'input history differs from the copy stored under its digest')
+    WHERE EXISTS (SELECT 1 FROM histories WHERE history_sha256 = NEW.history_sha256
+                  AND history_json IS NOT NEW.history_json);
+    INSERT INTO histories (history_sha256, history_json)
+    SELECT NEW.history_sha256, NEW.history_json
+    WHERE NOT EXISTS (SELECT 1 FROM histories WHERE history_sha256 = NEW.history_sha256);
+    INSERT INTO run_records (run_id, created_at, as_of, mode, scope, snapshot_json, history_sha256,
+                             forecast_json, snapshot_sha256, forecast_sha256, inputs_sha256)
+    VALUES (NEW.run_id, NEW.created_at, NEW.as_of, NEW.mode, NEW.scope, NEW.snapshot_json,
+            NEW.history_sha256, NEW.forecast_json, NEW.snapshot_sha256, NEW.forecast_sha256,
+            NEW.inputs_sha256);
+END;
+CREATE TRIGGER IF NOT EXISTS runs_view_no_update
+INSTEAD OF UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS runs_view_no_delete
+INSTEAD OF DELETE ON runs BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS runs_no_replace
+BEFORE INSERT ON run_records WHEN EXISTS (SELECT 1 FROM run_records WHERE run_id = NEW.run_id)
+BEGIN SELECT RAISE(ABORT, 'forecast runs cannot be replaced'); END;
+CREATE TRIGGER IF NOT EXISTS runs_no_update
+BEFORE UPDATE ON run_records BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS runs_no_delete
+BEFORE DELETE ON run_records BEGIN SELECT RAISE(ABORT, 'forecast runs are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS histories_no_replace
+BEFORE INSERT ON histories WHEN EXISTS (SELECT 1 FROM histories WHERE history_sha256 = NEW.history_sha256)
+BEGIN SELECT RAISE(ABORT, 'input histories cannot be replaced'); END;
+CREATE TRIGGER IF NOT EXISTS histories_no_update
+BEFORE UPDATE ON histories BEGIN SELECT RAISE(ABORT, 'input histories are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS histories_no_delete
+BEFORE DELETE ON histories BEGIN SELECT RAISE(ABORT, 'input histories are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS evaluations_no_replace
+BEFORE INSERT ON evaluations WHEN EXISTS (
+    SELECT 1 FROM evaluations WHERE run_id = NEW.run_id AND revision = NEW.revision
+) BEGIN SELECT RAISE(ABORT, 'evaluation revisions cannot be replaced'); END;
+CREATE TRIGGER IF NOT EXISTS evaluations_no_update
+BEFORE UPDATE ON evaluations BEGIN SELECT RAISE(ABORT, 'evaluation revisions are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS evaluations_no_delete
+BEFORE DELETE ON evaluations BEGIN SELECT RAISE(ABORT, 'evaluation revisions are immutable'); END;
+"""
+
+_RUN_COLUMNS = ('run_id', 'created_at', 'as_of', 'mode', 'scope', 'snapshot_json', 'history_json',
+                'forecast_json', 'snapshot_sha256', 'history_sha256', 'forecast_sha256', 'inputs_sha256')
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -81,11 +170,15 @@ def _hash(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def _is_legacy(conn):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'").fetchone() is not None
+
+
 def _connect(db_path):
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
-    conn.executescript(_SCHEMA)
+    conn.executescript(_LEGACY_SCHEMA if _is_legacy(conn) else _SCHEMA)
     return conn
 
 
@@ -108,6 +201,10 @@ def _validate_forecast(snapshot, forecast):
         seen = set()
         for row in rows:
             player_id = row['player_id']
+            if forecast.get('boxscore_model_version') and (forecast['boxscore_model_version']!=BOX_MODEL_VERSION or row.get('boxscore_model_version')!=forecast['boxscore_model_version']):
+                raise ValueError('Full-box model versions disagree')
+            if row.get('boxscore_model_version') and not forecast.get('boxscore_model_version'):
+                raise ValueError('Forecast lacks its full-box model version')
             if player_id not in roster or player_id in seen:
                 raise ValueError('forecast contains duplicate or unknown player')
             seen.add(player_id)
@@ -125,8 +222,21 @@ def _validate_forecast(snapshot, forecast):
                 raise ValueError('off-slate players must be labeled no_game')
             if game and player['status'] == 'out' and status != 'out':
                 raise ValueError('out roster player must have out forecast')
-            if game and player['status'] in ('unknown', 'questionable') and status != 'needs_review':
-                raise ValueError('uncertain availability cannot have a numeric forecast')
+            if game and player['status'] == 'unknown' and status != 'needs_review':
+                raise ValueError('unknown availability cannot have a numeric forecast')
+            probability = row.get('participation_probability')
+            if probability is not None and (isinstance(probability, bool) or not isinstance(probability, (int, float))
+                                            or not math.isfinite(probability) or not 0 <= probability <= 1):
+                raise ValueError('participation probability must be in [0, 1]')
+            if game and player['status'] == 'questionable':
+                if status == 'projected' and not (probability is not None and probability < 1):
+                    raise ValueError('a questionable player needs a participation probability below one')
+                if status not in ('projected', 'needs_review'):
+                    raise ValueError('questionable availability must be projected conditionally or withheld')
+            if status in ('no_game', 'needs_review') and probability is not None:
+                raise ValueError('unsupported forecasts have no participation probability')
+            if status == 'out' and probability not in (None, 0, 0.0):
+                raise ValueError('out forecasts have zero participation probability')
             if status == 'out' and player['status'] != 'out':
                 raise ValueError('out forecast requires sourced out roster status')
             if (not isinstance(row['reason'], str) or not isinstance(row['flags'], list) or
@@ -154,11 +264,27 @@ def _validate_forecast(snapshot, forecast):
                 if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
                                           or not math.isfinite(value) or value < 0):
                     raise ValueError('optional projections must be finite nonnegative numbers or null')
+            validate_boxscore(row)
             if status in ('projected', 'out'):
                 if not row['points_lower80'] <= row['points_mean'] <= row['points_upper80']:
                     raise ValueError('forecast interval must contain its mean')
                 if row['expected_minutes'] > 60:
                     raise ValueError('expected minutes exceed supported forecast bound')
+        if 'game_totals' in forecast:
+            versions={t.get('schema_version',1) for t in forecast['game_totals']}
+            if len(versions)>1:raise ValueError('forecast totals mix schema versions')
+            version=next(iter(versions),2)
+            expected=[game_totals(g,rows,schema_version=version,lineups=snapshot.get('preflight',{}).get('lineups')) for g in snapshot['games'] if g['season_type']=='Regular Season']
+            if _canonical(forecast['game_totals'])!=_canonical(expected):
+                raise ValueError('forecast totals disagree with player projections')
+        if uses_refinements(snapshot):
+            from .margins import build_margin_forecasts
+            if forecast['model_version']!=REFINED_VERSION or forecast.get('model_key')!=snapshot['model_enhancements']['model_key']:
+                raise ValueError('Refined model configuration does not match its snapshot')
+            if _canonical(forecast.get('margin_forecasts'))!=_canonical(build_margin_forecasts(snapshot,forecast)):
+                raise ValueError('Forecast margins disagree with the frozen model inputs and player totals')
+        elif 'margin_forecasts' in forecast:
+            raise ValueError('Margin distributions require a matching refined model snapshot')
     except (KeyError, TypeError) as exc:
         raise ValueError(f'incomplete forecast: {exc}') from exc
 
@@ -170,6 +296,8 @@ def save_run(db_path, snapshot, history, forecast, mode='live', scope='league'):
     creation strictly before every scheduled game. A supplied generated_at has
     no authority. Historical ``replay``/``demo`` runs remain visibly non-live.
     """
+    if mode=='live' and snapshot.get('research_reconstruction'):
+        raise ValueError('Research reconstruction cannot be saved as a live forecast')
     if mode not in ('live', 'replay', 'demo'):
         raise ValueError('mode must be live, replay, or demo')
     if mode == 'live' and scope != 'league':
@@ -193,8 +321,9 @@ def save_run(db_path, snapshot, history, forecast, mode='live', scope='league'):
                     raise ValueError('live as_of must be within 48 hours before actual save time')
                 if any(parse_time(game['start_time']) <= created for game in snapshot['games']):
                     raise ValueError('live run must be saved before every tipoff')
+            # Named columns work for both the legacy table and the deduplicated view.
             conn.execute(
-                'INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                f'INSERT INTO runs ({", ".join(_RUN_COLUMNS)}) VALUES ({", ".join(["?"] * len(_RUN_COLUMNS))})',
                 (run_id, created.isoformat(), snapshot['as_of'], mode, scope,
                  encoded['snapshot'], encoded['history'], encoded['forecast'],
                  _hash(encoded['snapshot']), _hash(encoded['history']),
@@ -213,12 +342,17 @@ def _metrics(rows):
         per_stat[stat] = {'count': len(errors),
                           'mae': sum(abs(e) for e in errors) / len(errors) if errors else None,
                           'mean_signed_error': sum(errors) / len(errors) if errors else None}
+    scored = [r for r in rows if r.get('participation_probability') is not None and r.get('played') is not None]
+    participation = dict(count=len(scored),
+                         brier=sum((r['participation_probability'] - r['played']) ** 2 for r in scored) / len(scored) if scored else None,
+                         mean_probability=sum(r['participation_probability'] for r in scored) / len(scored) if scored else None,
+                         played_share=sum(r['played'] for r in scored) / len(scored) if scored else None)
     if not count:
         return dict(count=0, points_mae=None, points_rmse=None, mean_signed_error=None,
                     minutes_mae=None, interval80_coverage=None, interval80_mean_width=None,
-                    interval_count=0, per_stat=per_stat)
+                    interval_count=0, per_stat=per_stat, participation=participation)
     return dict(
-        count=count, per_stat=per_stat,
+        count=count, per_stat=per_stat, participation=participation,
         points_mae=sum(abs(r['points_error']) for r in rows) / count,
         points_rmse=math.sqrt(sum(r['points_error'] ** 2 for r in rows) / count),
         mean_signed_error=sum(r['points_error'] for r in rows) / count,
@@ -286,9 +420,13 @@ def _report(run, forecast, actuals, revision, evaluated_at):
         stat_errors, stat_feedback = {}, {}
         for stat, field in STAT_PROJECTIONS.items():
             predicted, actual = prediction.get(field), observed.get(stat)
+            if stat in PERCENTAGES and actual is None:
+                made,attempted=PERCENTAGES[stat]
+                if observed.get(attempted) and observed.get(made) is not None:
+                    actual=observed[made]/observed[attempted]
             error = predicted - actual if predicted is not None and actual is not None else None
             stat_errors[stat] = error
-            rate = predicted / predicted_minutes if predicted is not None and predicted_minutes > 0 else None
+            rate = predicted / predicted_minutes if predicted is not None and predicted_minutes > 0 and stat not in PERCENTAGES else None
             stat_feedback[stat] = {
                 'predicted': predicted, 'actual': actual, 'error': error,
                 'minutes_component': (predicted_minutes - minutes) * rate if rate is not None and error is not None else None,
@@ -297,6 +435,8 @@ def _report(run, forecast, actuals, revision, evaluated_at):
         matched.append({
             'stat_errors': stat_errors, 'stat_feedback': stat_feedback,
             **identity, 'forecast_status': status, 'actual_status': observed['status'],
+            'participation_probability': prediction.get('participation_probability'),
+            'played': observed['status'] == 'played' and minutes > 0,
             'predicted_points': predicted_points, 'actual_points': points,
             'predicted_minutes': predicted_minutes, 'actual_minutes': minutes,
             'points_error': predicted_points - points, 'minutes_error': predicted_minutes - minutes,
@@ -313,7 +453,8 @@ def _report(run, forecast, actuals, revision, evaluated_at):
     return {
         'run_id': run['run_id'], 'revision': revision, 'evaluated_at': evaluated_at,
         'created_at': run['created_at'], 'as_of': run['as_of'], 'mode': run['mode'],
-        'scope': run['scope'], 'model_version': forecast['model_version'], 'live_eligible': live,
+        'scope': run['scope'], 'model_version': forecast['model_version'],
+        'boxscore_model_version':forecast.get('boxscore_model_version'), 'live_eligible': live,
         'evaluation_label': 'LIVE — per-run prospective results' if live else 'NON-LIVE — replay/demo results',
         'signed_error_convention': 'forecast minus actual; positive means overprediction',
         'aggregation_policy': 'Per-run only. Do not select favorable reruns after outcomes are known.',
@@ -343,7 +484,10 @@ def evaluate_run(db_path, run_id, actuals):
     try:
         with conn:
             conn.execute('BEGIN IMMEDIATE')
-            run = conn.execute('SELECT * FROM runs WHERE run_id = ?', (run_id,)).fetchone()
+            # Never the run's input history: scoring needs only the frozen forecast.
+            run = conn.execute(
+                'SELECT run_id, created_at, as_of, mode, scope, snapshot_json, forecast_json '
+                'FROM runs WHERE run_id = ?', (run_id,)).fetchone()
             if run is None:
                 raise ValueError(f'unknown forecast run: {run_id}')
             snapshot, forecast = json.loads(run['snapshot_json']), json.loads(run['forecast_json'])
@@ -399,7 +543,8 @@ def performance_report(db_path):
     try:
         with conn:
             conn.execute('BEGIN')
-            runs = conn.execute('SELECT rowid AS insertion_order, * FROM runs').fetchall()
+            runs = conn.execute(
+                'SELECT rowid AS insertion_order,run_id,created_at,mode,scope,forecast_json FROM runs')
             selected = {}
             off_slate_rows = non_live_runs = ineligible_rows = 0
             for run in runs:
@@ -409,6 +554,7 @@ def performance_report(db_path):
                 forecast = json.loads(run['forecast_json'])
                 created = parse_time(run['created_at'])
                 rank = created, run['insertion_order']
+                identity = {'run_id': run['run_id'], 'created_at': run['created_at']}
                 for prediction in forecast['predictions']:
                     if prediction['game_id'] is None:
                         off_slate_rows += 1
@@ -419,7 +565,10 @@ def performance_report(db_path):
                     key = (forecast['season'], forecast['model_version'],
                            prediction['game_id'], prediction['player_id'])
                     if key not in selected or rank > selected[key][0]:
-                        selected[key] = rank, run, prediction
+                        # Selection needs identity/status only, not another copy
+                        # of every input or each prediction's component audit.
+                        selected[key] = rank, identity, {
+                            'team_id': prediction['team_id'], 'status': prediction['status']}
 
             # Only now inspect final-result revisions; none participate in selection.
             evaluations = {}
@@ -491,3 +640,93 @@ def performance_report(db_path):
             }
     finally:
         conn.close()
+
+
+def _row_digest(conn, query):
+    """Order-sensitive digest of every value, keeping SQLite types distinct."""
+    digest, count = hashlib.sha256(), 0
+    for row in conn.execute(query):
+        for value in row:
+            data = b'' if value is None else str(value).encode('utf-8')
+            digest.update(type(value).__name__.encode() + len(data).to_bytes(8, 'big') + data)
+        count += 1
+    return count, digest.hexdigest()
+
+
+def dedupe_histories(db_path, backup_suffix='.pre-history-dedupe'):
+    """Rebuild a legacy ledger so each distinct input history is stored once.
+
+    The rebuilt file is verified before it replaces the original: every run,
+    including its insertion-order rowid, and every evaluation revision must read
+    back value-for-value through the new ``runs`` view. The original file stays
+    beside it (a hard link, so no copy) until the owner deletes it. Stop ticks
+    and other writers first; this holds the write lock while it runs.
+    """
+    import os
+    from pathlib import Path
+    db = Path(db_path)
+    backup, staging = db.with_name(db.name + backup_suffix), db.with_name(db.name + '.dedupe-tmp')
+    for suffix in ('-wal', '-journal'):
+        if db.with_name(db.name + suffix).exists():
+            raise ValueError(f'{db.name}{suffix} exists; recover the open transaction first')
+    if backup.exists():
+        raise ValueError(f'{backup} already exists')
+    source = sqlite3.connect(db, timeout=30)
+    try:
+        if not _is_legacy(source):
+            raise ValueError('ledger histories are already stored once')
+        source.execute('BEGIN IMMEDIATE')  # No other writer can commit until the swap.
+        staging.unlink(missing_ok=True)
+        target = sqlite3.connect(staging)
+        try:
+            target.execute('PRAGMA foreign_keys = ON')
+            target.executescript(_SCHEMA)
+            stored, mismatched = {}, 0
+            with target:
+                rows = source.execute(f'SELECT rowid, {", ".join(_RUN_COLUMNS)} FROM runs ORDER BY rowid')
+                for row in rows:
+                    run = dict(zip(('rowid', *_RUN_COLUMNS), row))
+                    content = _hash(run['history_json'])
+                    mismatched += content != run['history_sha256']
+                    if run['history_sha256'] not in stored:
+                        target.execute('INSERT INTO histories (history_sha256, history_json) VALUES (?, ?)',
+                                       (run['history_sha256'], run['history_json']))
+                        stored[run['history_sha256']] = content
+                    elif stored[run['history_sha256']] != content:
+                        raise ValueError(f'run {run["run_id"]} shares a history digest with different content')
+                    columns = ('rowid', *(c for c in _RUN_COLUMNS if c != 'history_json'))
+                    target.execute(f'INSERT INTO run_records ({", ".join(columns)}) '
+                                   f'VALUES ({", ".join(["?"] * len(columns))})',
+                                   tuple(run[c] for c in columns))
+                eval_columns = 'rowid, run_id, revision, evaluated_at, actuals_json, actuals_sha256, report_json'
+                for row in source.execute(f'SELECT {eval_columns} FROM evaluations ORDER BY rowid'):
+                    target.execute(f'INSERT INTO evaluations ({eval_columns}) VALUES (?, ?, ?, ?, ?, ?, ?)', row)
+            run_query = f'SELECT rowid, {", ".join(_RUN_COLUMNS)} FROM runs ORDER BY rowid'
+            eval_query = f'SELECT {eval_columns} FROM evaluations ORDER BY rowid'
+            runs, evaluations = _row_digest(source, run_query), _row_digest(source, eval_query)
+            if (runs, evaluations) != (_row_digest(target, run_query), _row_digest(target, eval_query)):
+                raise ValueError('rebuilt ledger does not read back identically; original left in place')
+            if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or \
+                    target.execute('PRAGMA foreign_key_check').fetchall():
+                raise ValueError('rebuilt ledger failed SQLite integrity checks; original left in place')
+        finally:
+            target.close()
+        with open(staging, 'rb') as stream:
+            os.fsync(stream.fileno())
+        os.chmod(staging, db.stat().st_mode & 0o777)
+        before = db.stat().st_size
+        os.link(db, backup)
+        os.replace(staging, db)
+        directory = os.open(db.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    finally:
+        source.close()
+    return dict(runs=runs[0], evaluations=evaluations[0], histories=len(stored),
+                history_digest_mismatches=mismatched, bytes_before=before,
+                bytes_after=db.stat().st_size, backup=str(backup))

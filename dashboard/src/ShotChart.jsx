@@ -10,6 +10,8 @@ export default function ShotChart({ chart }) {
     (s) => result === "all" || s.made === (result === "made"),
   );
   const made = shots.filter((s) => s.made).length;
+  const coverage = chart?.coverage || {};
+  const verifiedZero = coverage.complete === true && coverage.games > 0 && coverage.attempts === 0;
   return (
     <section className="shot-panel">
       <div className="section-heading">
@@ -25,10 +27,18 @@ export default function ShotChart({ chart }) {
         </select>
       </div>
       <p className="muted">
-        Actual regular-season shots · {chart?.coverage?.games || 0} captured
-        games · {made}/{shots.length} FG
+        Actual regular-season shots · {Number.isFinite(coverage.played_games)
+          ? `${coverage.games || 0}/${coverage.played_games} played games captured`
+          : `${coverage.games || 0} captured games`}
+        {coverage.games > 0 ? ` · ${made}/${shots.length} FG` : ""}
       </p>
-      {!located.length ? (
+      {coverage.missing_games > 0 && <p className="warning" aria-label="Shot coverage">
+        Shot coverage is incomplete: {coverage.missing_games} played {coverage.missing_games === 1 ? "game awaits" : "games await"} verified shot data.
+      </p>}
+      {verifiedZero ? <div className="empty">
+        <h3>No field-goal attempts</h3>
+        <p>{coverage.games} played {coverage.games === 1 ? "game verified" : "games verified"} with zero attempts.</p>
+      </div> : !located.length ? (
         <div className="empty">
           <h3>Shot locations unavailable</h3>
           <p>

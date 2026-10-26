@@ -33,6 +33,30 @@ class DataTests(unittest.TestCase):
         rows=data.normalize_boxscore(self.payload,URL,KNOWN)
         self.assertEqual(sum(r.get('starter',False) for r in rows),10)
 
+    def test_full_box_fields_preserve_seconds_and_derive_percentages(self):
+        player = self.payload['game']['homeTeam']['players'][0]
+        player['statistics'].update(minutes='PT31M07.00S', reboundsOffensive=2,
+                                    reboundsDefensive=5, reboundsTotal=7,
+                                    foulsPersonal=3, plusMinusPoints=-8,
+                                    fieldGoalsPercentage=0.999)
+        rows = data.normalize_boxscore(self.payload, URL, KNOWN)
+        result = next(r for r in rows if r['player_id'] == str(player['personId']))
+        self.assertEqual(result.get('minutes_precision'), 'seconds')
+        self.assertEqual(result.get('minutes_source_value'), 'PT31M07.00S')
+        self.assertAlmostEqual(result['minutes'], 31 + 7/60)
+        self.assertEqual([result.get(k) for k in ('oreb','dreb','pf','plus_minus')], [2,5,3,-8])
+        self.assertAlmostEqual(result.get('fg_pct'), result['fgm']/result['fga'])
+
+    def test_absent_full_box_optional_fields_remain_unknown(self):
+        player = self.payload['game']['homeTeam']['players'][0]
+        for key in ('reboundsOffensive','reboundsDefensive','foulsPersonal','plusMinusPoints'):
+            player['statistics'].pop(key, None)
+        rows = data.normalize_boxscore(self.payload, URL, KNOWN)
+        result = next(r for r in rows if r['player_id'] == str(player['personId']))
+        for key in ('oreb','dreb','pf','plus_minus'):
+            self.assertIn(key, result)
+            self.assertIsNone(result[key])
+
     def test_nonregular_and_nonfinal_games_are_rejected(self):
         for game_id, status in [("0012600001", 3), ("0042600001", 3), ("0062600001", 3), ("0022600001", 2)]:
             with self.subTest(game_id=game_id, status=status):

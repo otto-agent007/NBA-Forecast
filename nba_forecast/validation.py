@@ -5,8 +5,16 @@ import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-OPTIONAL_COUNTS = ('reb', 'ast', 'stl', 'blk')
+OPTIONAL_COUNTS = ('reb', 'ast', 'stl', 'blk', 'oreb', 'dreb', 'pf')
 COUNTS = ('fgm', 'fga', 'fg3m', 'fg3a', 'ftm', 'fta', 'tov', 'pts')
+PERCENTAGE_FIELDS = (('fg_pct', 'fgm', 'fga'), ('fg3_pct', 'fg3m', 'fg3a'),
+                     ('ft_pct', 'ftm', 'fta'))
+
+
+def shooting_percentages(row):
+    """Derive ratios from counts; zero attempts have no defined percentage."""
+    return {field: row[made] / row[attempts] if row[attempts] else None
+            for field, made, attempts in PERCENTAGE_FIELDS}
 
 
 def parse_time(value):
@@ -90,6 +98,15 @@ def validate_history(history):
                 value = row.get(field)
                 if value is not None and (type(value) is not int or value < 0):
                     raise ValueError(f'{field} must be a nonnegative integer or null')
+            if row.get('plus_minus') is not None and type(row['plus_minus']) is not int:
+                raise ValueError('plus_minus must be a signed integer or null')
+            if row.get('reb') is not None:
+                for field in ('oreb', 'dreb'):
+                    if row.get(field) is not None and row[field] > row['reb']:
+                        raise ValueError(f'{field} exceeds total rebounds')
+                if (row.get('oreb') is not None and row.get('dreb') is not None
+                        and row['oreb'] + row['dreb'] != row['reb']):
+                    raise ValueError('offensive and defensive rebounds do not sum to total rebounds')
             if any(row[m] > row[a] for m, a in (('fgm', 'fga'), ('fg3m', 'fg3a'), ('ftm', 'fta'))):
                 raise ValueError('made shots exceed attempts')
             if (row['fg3m'] > row['fgm'] or row['fg3a'] > row['fga'] or
@@ -97,11 +114,22 @@ def validate_history(history):
                 raise ValueError('inconsistent two/three-point counts')
             if row['pts'] != 2 * row['fgm'] + row['fg3m'] + row['ftm']:
                 raise ValueError('points do not match made shots/free throws')
+            for field, expected in shooting_percentages(row).items():
+                if field not in row:
+                    continue
+                value = row[field]
+                if expected is None:
+                    if value is not None:
+                        raise ValueError(f'{field} must be null with zero attempts')
+                else:
+                    _number(value, field, high=1)
+                    if not math.isclose(value, expected, rel_tol=1e-9, abs_tol=1e-12):
+                        raise ValueError(f'{field} does not match made shots and attempts')
             if 'starter' in row and type(row['starter']) is not bool:
                 raise ValueError('starter must be explicit boolean evidence')
             if row['status'] not in ('played', 'dnp'):
                 raise ValueError('observation status must be played or dnp')
-            if row['status'] == 'dnp' and (row['minutes'] != 0 or any(row.get(k) for k in COUNTS + OPTIONAL_COUNTS)):
+            if row['status'] == 'dnp' and (row['minutes'] != 0 or any(row.get(k) for k in COUNTS + OPTIONAL_COUNTS + ('plus_minus',))):
                 raise ValueError('DNP observations must have zero minutes and counts')
     except (KeyError, TypeError) as exc:
         raise ValueError(f'incomplete normalized history: {exc}') from exc

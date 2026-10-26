@@ -1,0 +1,164 @@
+{
+  "artifact_sha256": "e25bec66bd5a9258eccb5a5de0e47afa0b84b3da1d698c25b8672910eee624b2",
+  "mode": "posthoc_replay_only",
+  "replays": [
+    {
+      "game_id": "0022600101",
+      "source_run_id": "e6e215a5-f07f-4e6e-8bbf-39aa9efa9d98",
+      "as_of": "2026-10-24T01:56:08.797426+00:00",
+      "mode": "posthoc_replay_only",
+      "totals": [
+        {
+          "schema_version": 2,
+          "method": "regulation_player_sum",
+          "game_id": "0022600101",
+          "teams": [
+            {
+              "team_id": "1610612763",
+              "side": "away",
+              "status": "partial",
+              "points_mean": 118.71736915884125,
+              "projected_players": 13,
+              "out_players": 3,
+              "withheld_player_ids": [
+                "1631200",
+                "1643510"
+              ],
+              "projected_minutes": 239.99999999999997,
+              "unallocated_minutes": 2.842170943040401e-14,
+              "regulation_minutes": 240.0,
+              "cold_start_player_ids": [
+                "1643510"
+              ],
+              "unresolved_player_ids": [
+                "1631200"
+              ]
+            },
+            {
+              "team_id": "1610612744",
+              "side": "home",
+              "status": "complete",
+              "points_mean": 120.43934510429747,
+              "projected_players": 14,
+              "out_players": 4,
+              "withheld_player_ids": [],
+              "projected_minutes": 239.99999999999997,
+              "unallocated_minutes": 2.842170943040401e-14,
+              "regulation_minutes": 240.0,
+              "cold_start_player_ids": [],
+              "unresolved_player_ids": []
+            }
+          ],
+          "points_mean": 239.15671426313872,
+          "status": "partial",
+          "basis": "Sum of supported player means before rounding; conditional on participation and the projected regulation rotation. Withheld players are excluded."
+        }
+      ],
+      "model_version": "regular-season-baseline-0.5.0"
+    },
+    {
+      "game_id": "0022600102",
+      "source_run_id": "e7a4f9ee-273f-4abf-b240-7a8cfd8f8fa1",
+      "as_of": "2026-10-24T01:56:12.983637+00:00",
+      "mode": "posthoc_replay_only",
+      "totals": [
+        {
+          "schema_version": 2,
+          "method": "regulation_player_sum",
+          "game_id": "0022600102",
+          "teams": [
+            {
+              "team_id": "1610612746",
+              "side": "away",
+              "status": "complete",
+              "points_mean": 111.78721640343291,
+              "projected_players": 13,
+              "out_players": 5,
+              "withheld_player_ids": [],
+              "projected_minutes": 240.0,
+              "unallocated_minutes": 0.0,
+              "regulation_minutes": 240.0,
+              "cold_start_player_ids": [],
+              "unresolved_player_ids": []
+            },
+            {
+              "team_id": "1610612747",
+              "side": "home",
+              "status": "complete",
+              "points_mean": 121.44052000060714,
+              "projected_players": 13,
+              "out_players": 3,
+              "withheld_player_ids": [
+                "1641751",
+                "1643758"
+              ],
+              "projected_minutes": 239.99999999999994,
+              "unallocated_minutes": 5.684341886080802e-14,
+              "regulation_minutes": 240.0,
+              "cold_start_player_ids": [
+                "1641751",
+                "1643758"
+              ],
+              "unresolved_player_ids": []
+            }
+          ],
+          "points_mean": 233.22773640404006,
+          "status": "complete",
+          "basis": "Sum of supported player means before rounding; conditional on participation and the projected regulation rotation. Withheld players are excluded."
+        }
+      ],
+      "model_version": "regular-season-baseline-0.5.0"
+    },
+    {
+      "game_id": "0022600103",
+      "source_run_id": "d1961e81-df3a-4554-8776-8ada1e0838c3",
+      "as_of": "2026-10-24T01:56:24.981099+00:00",
+      "mode": "posthoc_replay_only",
+      "totals": [
+        {
+          "schema_version": 2,
+          "method": "regulation_player_sum",
+          "game_id": "0022600103",
+          "teams": [
+            {
+              "team_id": "1610612757",
+              "side": "away",
+              "status": "complete",
+              "points_mean": 122.50754093629075,
+              "projected_players": 14,
+              "out_players": 3,
+              "withheld_player_ids": [],
+              "projected_minutes": 239.99999999999994,
+              "unallocated_minutes": 5.684341886080802e-14,
+              "regulation_minutes": 240.0,
+              "cold_start_player_ids": [],
+              "unresolved_player_ids": []
+            },
+            {
+              "team_id": "1610612758",
+              "side": "home",
+              "status": "partial",
+              "points_mean": 116.99254760251995,
+              "projected_players": 13,
+              "out_players": 3,
+              "withheld_player_ids": [
+                "1641778"
+              ],
+              "projected_minutes": 239.99999999999997,
+              "unallocated_minutes": 2.842170943040401e-14,
+              "regulation_minutes": 240.0,
+              "cold_start_player_ids": [],
+              "unresolved_player_ids": [
+                "1641778"
+              ]
+            }
+          ],
+          "points_mean": 239.5000885388107,
+          "status": "partial",
+          "basis": "Sum of supported player means before rounding; conditional on participation and the projected regulation rotation. Withheld players are excluded."
+        }
+      ],
+      "model_version": "regular-season-baseline-0.5.0"
+    }
+  ]
+}

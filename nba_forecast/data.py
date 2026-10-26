@@ -19,11 +19,21 @@ import urllib.request
 SCHEDULE_URL = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json"
 ROSTER_URL = "https://www.nba.com/players"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Origin": "https://www.nba.com"}
+# Since about 2026-10-22 cdn.nba.com answers bare or outdated browser user agents
+# with 403 Access Denied. A current Firefox user agent plus the nba.com Referer is
+# accepted (Firefox 140 was refused, 150+ passed); bump the version if 403s return.
+# www.nba.com pages still answer the bare HEADERS and time out on these, so only
+# the CDN gets them.
+CDN_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0",
+               "Referer": "https://www.nba.com/", "Accept": "application/json, text/plain, */*",
+               "Accept-Language": "en-US,en;q=0.5"}
 MAX_BYTES = 12 * 1024 * 1024
 DEFAULT_CACHE = Path(".nba_forecast/raw")
 STAT_FIELDS = {"fgm": "fieldGoalsMade", "fga": "fieldGoalsAttempted", "fg3m": "threePointersMade", "fg3a": "threePointersAttempted", "ftm": "freeThrowsMade", "fta": "freeThrowsAttempted", "tov": "turnovers", "pts": "points"}
 
-OPTIONAL_STAT_FIELDS = {"reb": "reboundsTotal", "ast": "assists", "stl": "steals", "blk": "blocks"}
+OPTIONAL_STAT_FIELDS = {"reb": "reboundsTotal", "ast": "assists", "stl": "steals", "blk": "blocks",
+                        "oreb": "reboundsOffensive", "dreb": "reboundsDefensive",
+                        "pf": "foulsPersonal", "plus_minus": "plusMinusPoints"}
 
 def _timestamp(value):
     if not isinstance(value, str):
@@ -46,6 +56,9 @@ def _allowed_url(url, allow_roster=False):
         return
     if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}_\d{2}[AP]M\.pdf", url):
         return
+    # Hourly reports before 2025-12-22 are named by the hour alone (injuries.LEGACY_REPORT_PATTERN).
+    if re.fullmatch(r"https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_\d{4}-\d{2}-\d{2}_\d{2}[AP]M\.pdf", url):
+        return
     if url.startswith("https://stats.nba.com/stats/leaguedashplayerclutch?"):
         from .clutch import clutch_url
         match = re.search(r"(?:[?&])Season=(20\d{2}-\d{2})(?:&|$)", url)
@@ -56,6 +69,8 @@ def _allowed_url(url, allow_roster=False):
     if parsed.scheme != "https" or parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment:
         raise ValueError("Only exact allowlisted HTTPS NBA URLs are accepted")
     if url == SCHEDULE_URL or (allow_roster and url == ROSTER_URL):
+        return
+    if parsed.netloc == "www.nba.com" and re.fullmatch(r"/game/002\d{7}/box-score", parsed.path):
         return
     if parsed.netloc == "cdn.nba.com" and re.fullmatch(r"/static/json/liveData/boxscore/boxscore_002\d{7}\.json", parsed.path):
         return
@@ -76,7 +91,7 @@ def archive_payload(raw, source_url, known_at, directory):
     digest = hashlib.sha256(raw).hexdigest()
     folder = Path(directory)
     folder.mkdir(parents=True, exist_ok=True)
-    suffix = ".pdf" if source_url.endswith(".pdf") else ".html" if source_url == ROSTER_URL or "official.nba.com/" in source_url else ".json"
+    suffix = ".pdf" if source_url.endswith(".pdf") else ".html" if source_url == ROSTER_URL or "official.nba.com/" in source_url or source_url.endswith("/box-score") else ".json"
     raw_path = folder / (digest + suffix)
     meta_path = folder / (digest + ".provenance.json")
     metadata = {"source_url": source_url, "retrieved_at": known_at, "sha256": digest, "bytes": len(raw)}
@@ -104,12 +119,13 @@ def _record_fetch_failure(cache_dir, url, category, exc, attempt=None, status=No
         pass
 
 
-def _fetch(url, cache_dir, allow_roster=False):
+def _fetch(url, cache_dir, allow_roster=False, timeout=15):
     _allowed_url(url, allow_roster=allow_roster)
     opener = urllib.request.build_opener(_NoRedirects())
     for attempt in range(3):
         try:
-            with opener.open(urllib.request.Request(url, headers=HEADERS), timeout=15) as response:
+            headers = CDN_HEADERS if urlsplit(url).netloc == "cdn.nba.com" else HEADERS
+            with opener.open(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
                 raw = response.read(MAX_BYTES + 1)
             if len(raw) > MAX_BYTES:
                 raise ValueError("NBA response exceeds the 12 MiB limit")
@@ -158,7 +174,7 @@ def _minutes(value):
 
 def normalize_boxscore(payload, source_url, known_at):
     """Normalize final regular-season rows; an absent player remains absent."""
-    from .validation import validate_history
+    from .validation import shooting_percentages, validate_history
 
     _allowed_url(source_url)
     observed = _timestamp(known_at)
@@ -189,9 +205,15 @@ def normalize_boxscore(payload, source_url, known_at):
                 row = {"game_id": game_id, "season": season, "season_type": "Regular Season", "game_time": game_time, "known_at": known_at, "source_url": source_url, "player_id": str(player["personId"]), "name": player["name"], "team_id": str(team["teamId"]), "opponent_id": str(opponent["teamId"]), "minutes": _minutes(stats["minutes"]), "status": "played" if played == "1" else "dnp"}
                 row.update({field: stats[source] for field, source in STAT_FIELDS.items()})
                 row.update({field: stats.get(source) for field, source in OPTIONAL_STAT_FIELDS.items()})
+                if type(row["plus_minus"]) is float and row["plus_minus"].is_integer():
+                    row["plus_minus"] = int(row["plus_minus"])
+                row.update(minutes_precision="seconds" if played == "1" else "not_played",
+                           minutes_source_value=stats["minutes"])
+                row.update(shooting_percentages(row))
                 if 'starter' in player:
                     if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
                     row['starter']=player['starter']=='1'
+                row['home']=side=='homeTeam'
                 rows.append(row)
     except (KeyError, TypeError) as exc:
         raise ValueError(f"Incomplete or malformed NBA boxscore: {exc}") from exc
@@ -255,7 +277,10 @@ def normalize_roster(players, observed_at, season):
 
 
 def fetch_roster(season, *, cache_dir=DEFAULT_CACHE):
-    raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
+    try:raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
+    except (ValueError,OSError):
+        from .roster_refresh import fetch_team_rosters
+        return fetch_team_rosters(season,cache_dir)
     parser = _NextDataParser()
     try:
         parser.feed(raw.decode("utf-8"))

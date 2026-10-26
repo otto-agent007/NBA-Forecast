@@ -5,6 +5,49 @@
   font-synthesis: none;
   font-size: 14px;
 }
+.team-heading th { background: #edf3fb; padding: 18px 20px; border-top: 2px solid #dce6f3; }
+.team-heading h3 { display: inline; margin: 0 10px; font-size: 16px; }
+.team-heading span { color: #64748b; font-size: 11px; font-weight: 400; }
+.role-heading th { padding: 11px 20px; background: #f7f9fc; color: #52637a; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.forecast-stages { margin: 20px 0; background: white; border: 1px solid #dce6f3; border-radius: 7px; padding: 16px; }
+.forecast-stage-buttons { display: flex; gap: 10px; }
+.forecast-stage-buttons button { flex: 1; text-align: left; padding: 12px; border: 1px solid #dce6f3; border-radius: 5px; font-weight: 600; }
+.forecast-stage-buttons button[aria-pressed="true"] { background: #edf5ff; border-color: #2472d5; color: #1261cb; }
+.forecast-stage-buttons small { display: block; font-size: 10px; font-weight: 400; margin-top: 7px; }
+.forecast-stage-summary { margin: 12px 0 0; font-size: 11px; color: #64748b; line-height: 1.6; }
+.runner-issues { font-size: 11px; color: #9a382a; line-height: 1.6; padding-left: 16px; overflow-wrap: anywhere; }
+.forecast-totals { margin: 20px 0; }
+.margin-forecast { margin: 20px 0; padding: 20px; border: 1px solid #dce6f3; border-radius: 7px; background: white; }
+.margin-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.margin-heading h2 { font-size: 18px; margin: 0; }
+.margin-forecast p { color: #52637a; font-size: 12px; line-height: 1.7; }
+.margin-controls { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+.margin-controls label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; max-width: 100%; }
+.margin-controls select, .margin-controls input { padding: 10px; border: 1px solid #aebed0; border-radius: 5px; background: white; color: #20334c; font: inherit; max-width: 100%; }
+.margin-controls input { width: 140px; }
+.margin-probabilities { display: flex; gap: 32px; }
+.margin-probabilities div { display: flex; flex-direction: column; gap: 3px; }
+.margin-probabilities span { font-size: 11px; color: #52637a; }
+.margin-probabilities strong { font-size: 26px; font-variant-numeric: tabular-nums; }
+.margin-bar { height: 8px; border-radius: 4px; overflow: hidden; background: #dce6f3; margin: 12px 0; }
+.margin-bar span { display: block; height: 100%; background: #2563eb; }
+.margin-forecast summary { cursor: pointer; font-size: 12px; margin-top: 14px; }
+.forecast-totals h2 { font-size: 18px; margin-bottom: 12px; }
+.point-total-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.point-total-grid article { background: white; border: 1px solid #dce6f3; border-radius: 7px; padding: 18px; min-width: 0; }
+.point-total-grid .combined-point-total { background: #edf5ff; border-color: #bdd5f2; }
+.total-kind { display: block; color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 7px; }
+.point-total-grid h3 { font-size: 14px; line-height: 1.5; margin: 0 0 10px; }
+.point-total-value { display: inline-block; font-size: 32px; font-variant-numeric: tabular-nums; margin-right: 10px; }
+.total-state { display: inline-block; font-size: 10px; padding: 4px 7px; border-radius: 4px; background: #eaf2fc; color: #245a9f; vertical-align: middle; }
+.total-state.partial, .total-state.unavailable { background: #fff2d8; color: #805314; }
+.point-total-grid p { font-size: 11px; color: #52637a; line-height: 1.6; margin: 8px 0 0; }
+.point-total-note { color: #64748b; font-size: 11px; line-height: 1.7; margin: 10px 0 0; }
+@media (max-width: 600px) {
+  .point-total-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .point-total-grid article { padding: 14px; }
+  .point-total-grid .combined-point-total { grid-column: 1 / -1; }
+}
 * {
   box-sizing: border-box;
 }
@@ -150,6 +193,32 @@ p {
   color: #59687b;
   font-size: 11px;
   font-weight: 600;
+}
+.tile-team,
+.matchup-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.final-score {
+  font-family: "Barlow Condensed";
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+  color: #8d97a7;
+  font-variant-numeric: tabular-nums;
+}
+.final-score.won {
+  color: #172235;
+  font-weight: 700;
+}
+.matchup .final-score {
+  font-size: 30px;
+  color: #8293ac;
+}
+.matchup .final-score.won {
+  color: #ffffff;
 }
 .team-logo {
   width: 35px;
@@ -368,6 +437,44 @@ h3 {
   border-radius: 5px;
   background: white;
 }
+/* Wide stat tables keep a visible horizontal bar: desktop overlay scrollbars
+   hide until hovered, which made the columns past the viewport look missing. */
+.boxscore-scroll {
+  overflow-x: scroll;
+  scrollbar-width: auto;
+  scrollbar-color: #8fa3bf #e9eef5;
+}
+.boxscore-scroll::-webkit-scrollbar { height: 14px; background: #e9eef5; }
+.boxscore-scroll::-webkit-scrollbar-thumb { background: #8fa3bf; border-radius: 7px; border: 3px solid #e9eef5; }
+.boxscore-scroll::-webkit-scrollbar-thumb:hover { background: #6d84a6; }
+/* ColumnScroll: the slider sticks to the bottom of the screen while its table is in view. */
+.column-slider {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: -1px;
+  padding: 8px 14px;
+  border: 1px solid #e1e7f0;
+  border-radius: 0 0 5px 5px;
+  background: #f0f4f9;
+  box-shadow: 0 -2px 6px rgba(15, 23, 42, 0.06);
+  color: #475569;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.column-slider input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: #1766cf;
+  cursor: ew-resize;
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -395,6 +502,134 @@ tbody tr:hover {
 .numeric {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+.boxscore-hint {
+  margin: 0 0 10px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.boxscore-scroll {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+  container-type: inline-size;
+}
+.boxscore-scroll:focus-visible {
+  outline: 2px solid #1766cf;
+  outline-offset: 3px;
+}
+/* Compact box score: about twice as many players per screen, and most of the stat
+   columns fit before the slider is needed. */
+.boxscore-table th,
+.boxscore-table td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.boxscore-table td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.boxscore-table thead th {
+  height: 34px;
+}
+.boxscore-table tbody th {
+  height: auto;
+}
+.boxscore-table .team-heading th {
+  padding: 9px 12px;
+}
+.boxscore-table .role-heading th {
+  padding: 5px 12px;
+}
+.boxscore-table th.observed-ppg {
+  white-space: normal;
+  line-height: 1.2;
+}
+.boxscore-table .player-button {
+  gap: 8px;
+}
+.boxscore-table .player-button small {
+  margin-top: 2px;
+}
+.boxscore-table .player-portrait {
+  flex-basis: 34px;
+  width: 34px;
+  height: 30px;
+  border-radius: 6px;
+}
+.boxscore-table .status {
+  padding: 3px 6px;
+}
+.boxscore-table .player-cell,
+.boxscore-table .game-date-cell {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  box-shadow: 2px 0 0 #e1e7f0;
+}
+.boxscore-table th.player-cell,
+.boxscore-table th.game-date-cell {
+  background: #f0f4f9;
+  z-index: 3;
+}
+.boxscore-table .player-cell {
+  min-width: 180px;
+  max-width: 230px;
+}
+.boxscore-table .player-row:hover .player-cell {
+  background: #f7faff;
+}
+.boxscore-table .team-heading-content {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  width: max-content;
+  max-width: calc(100cqw - 32px);
+  position: sticky;
+  left: 16px;
+  white-space: normal;
+  gap: 6px;
+}
+.boxscore-table .team-heading-content h3 {
+  margin: 0;
+}
+.boxscore-table .team-heading-content > span {
+  margin-left: 6px;
+}
+.boxscore-table .boxscore-row-note {
+  display: block;
+  position: sticky;
+  left: 16px;
+  width: max-content;
+  max-width: calc(100cqw - 32px);
+  white-space: normal;
+}
+.single-boxscore td {
+  font-size: 14px;
+  font-weight: 600;
+}
+.profile-columns > section {
+  min-width: 0;
+}
+.profile-forecast {
+  grid-column: 1 / -1;
+}
+@media (max-width: 650px) {
+  .boxscore-table .player-cell {
+    min-width: 160px;
+    max-width: 180px;
+  }
+  .boxscore-table .player-button {
+    gap: 8px;
+  }
+  .boxscore-table .player-button > span {
+    white-space: normal;
+  }
+  .boxscore-table .team-heading-content > span {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
 }
 .player-button {
   display: flex;
@@ -1552,3 +1787,25 @@ pre {
     overflow-x: auto;
   }
 }
+
+.team-selector { display:flex; gap:8px; flex-wrap:wrap; padding:0 20px 16px; }
+.team-selector button { display:flex; align-items:center; gap:8px; border:1px solid var(--line, #ddd); border-radius:8px; padding:9px 12px; background:white; font:inherit; cursor:pointer; }
+.team-selector button[aria-pressed="true"] { background:#edf5ff; border-color:#2266be; }
+.team-selector small { color:#657183; }
+.coverage-warning td { white-space:normal; padding:12px 20px; color:#7b5614; background:#fff9ed; font-size:12px; line-height:1.6; }
+.preflight-status { padding:14px 18px; border:1px solid #dce3ec; border-radius:10px; background:#f7f9fc; line-height:1.5; }
+.preflight-status.blocked { background:#fff8ed; border-color:#edd7b1; }
+.preflight-status.passed { background:#f1f8f4; border-color:#bdd9c6; }
+.availability-update { padding:14px 18px; margin-bottom:12px; border:1px solid #bdd9c6; border-radius:10px; background:#f1f8f4; line-height:1.6; }
+.availability-update p { font-size:13px; }
+.availability-update a { color:#2266be; }
+.availability-update.superseded { background:#fff8ed; border-color:#edd7b1; }
+.preflight-status > span { display:block; color:#657183; font-size:12px; }
+.preflight-status p, .preflight-status li { font-size:13px; }
+.preflight-status ul { padding-left:18px; }
+@media (max-width:600px) { .team-selector { padding:0 12px 12px; } .team-selector button { font-size:12px; flex-wrap:wrap; } }
+.daily-review-link { background: transparent; border: 0; padding: 4px 0; color: #155fca; text-align: left; font: inherit; cursor: pointer; }
+.daily-review-link:hover { text-decoration: underline; }
+.daily-review li { margin-bottom: 14px; line-height: 1.5; }
+.daily-review details { margin-top: 12px; }
+.daily-review h4 { margin-top: 24px; }
