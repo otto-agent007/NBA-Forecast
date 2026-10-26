@@ -48,17 +48,23 @@ def slot_url(local):
 
 
 def checkpoint_at(game_time, anchor=None):
-    """The game's T-minus-30 checkpoint, or ``anchor`` (HH:MM Eastern on game day) when that is earlier.
+    """The game's T-minus-30 checkpoint, or ``anchor`` Eastern when that is earlier.
 
-    An anchor replays an earlier, preliminary forecast: a midday anchor reads
-    the game-day report most tags are still open on.
+    An anchor replays an earlier, preliminary forecast: ``HH:MM`` on game day (a
+    midday anchor reads the game-day report most tags are still open on), or
+    ``D-n HH:MM`` that many days before (``D-1 20:30`` reads the night-before
+    report, filed by 5 PM local, about when the opening lines are posted).
     """
     tip = parse_time(game_time)
     final = tip - CHECKPOINT
     if anchor is None:
         return final
-    hour, minute = (int(part) for part in anchor.split(':'))
-    local = tip.astimezone(EASTERN).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    days, _, clock = anchor.rpartition(' ')
+    if days and not (days.startswith('D-') and days[2:].isdigit()):
+        raise ValueError(f'anchor {anchor!r} is not HH:MM or D-n HH:MM')
+    hour, minute = (int(part) for part in clock.split(':'))
+    local = (tip.astimezone(EASTERN) - timedelta(days=int(days[2:]) if days else 0)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0)
     return min(final, local.astimezone(timezone.utc))
 
 
@@ -271,7 +277,8 @@ def main():
     parser.add_argument('--directory', required=True, help='Raw archive and manifest (resumable)')
     parser.add_argument('--output', help='Write statuses.json.gz here once every game is resolved')
     parser.add_argument('--fetch', action='store_true', help='Fetch missing reports first')
-    parser.add_argument('--anchor', help='HH:MM Eastern on game day, for a preliminary replay (default T-30)')
+    parser.add_argument('--anchor', help="HH:MM Eastern on game day, or 'D-1 HH:MM' the day before, for a "
+                                         'preliminary replay (default T-30)')
     parser.add_argument('--workers', type=int, default=1, help='Parallel first-choice fetches')
     args = parser.parse_args()
     records = [r for r in _read(args.team_games) if r['season'] in args.season]

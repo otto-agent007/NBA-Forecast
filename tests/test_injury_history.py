@@ -43,6 +43,20 @@ class ReportNamingTests(unittest.TestCase):
         self.assertEqual(injury_history.checkpoint_at('2026-01-16T00:00:00Z', '12:30').isoformat(), '2026-01-15T17:30:00+00:00')
         self.assertEqual(injury_history.checkpoint_at('2026-01-16T00:00:00Z').isoformat(), '2026-01-15T23:30:00+00:00')
 
+    def test_a_night_before_anchor_reads_the_previous_evening_report_in_that_dates_naming(self):
+        # 7:00 PM ET tip on Jan 15, 2025: the hourly file of Jan 14 published at 8:30 PM (named 08PM).
+        self.assertEqual(injury_history.checkpoint_at('2025-01-16T00:00:00Z', 'D-1 20:30').isoformat(),
+                         '2025-01-15T01:30:00+00:00')
+        self.assertEqual(injury_history.candidates('2025-01-16T00:00:00Z', 'D-1 20:30')[0], BASE + '2025-01-14_08PM.pdf')
+        # A Dec 22, 2025 game reads Dec 21, the last hourly day; Dec 23 reads a quarter-hour file.
+        self.assertEqual(injury_history.candidates('2025-12-23T00:00:00Z', 'D-1 20:30')[0], BASE + '2025-12-21_08PM.pdf')
+        self.assertEqual(injury_history.candidates('2025-12-24T00:00:00Z', 'D-1 20:30')[0], BASE + '2025-12-22_08_30PM.pdf')
+        # Across the fall-back change the evening stays 8:30 PM Eastern (EST, UTC-5).
+        self.assertEqual(injury_history.checkpoint_at('2025-11-02T23:00:00Z', 'D-1 20:30').isoformat(),
+                         '2025-11-02T00:30:00+00:00')
+        with self.assertRaisesRegex(ValueError, 'not HH:MM or D-n HH:MM'):
+            injury_history.checkpoint_at('2025-01-16T00:00:00Z', 'yesterday 20:30')
+
     def test_every_game_resolves_against_the_run_anchor_and_a_failed_slot_is_tried_once(self):
         calls = []
 
