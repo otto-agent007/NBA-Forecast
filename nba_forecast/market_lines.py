@@ -219,6 +219,21 @@ def build_index(folder):
                                 providers={pid: dict(provider=v['provider'], first_captured_at=v['first']['captured_at'],
                                                      latest_captured_at=v['latest']['captured_at'], latest=v['latest']['lines'],
                                                      first=v['first']['lines']) for pid, v in providers.items()})
+    from .kalshi_lines import read_kalshi_lines  # imported here: kalshi_lines uses this module's line parser
+    kalshi_root = Path(folder) / 'market' / 'kalshi'
+    for path in sorted(kalshi_root.glob('*.jsonl')) if kalshi_root.exists() else []:
+        try:
+            records = read_kalshi_lines(folder, path.stem)
+        except ValueError:
+            damaged.append(path.stem)
+            continue
+        if not records:
+            continue
+        entry = index.setdefault(path.stem, dict(start_time=records[-1]['start_time'], captures=0, providers={}))
+        entry['providers']['kalshi'] = dict(provider='Kalshi', first_captured_at=records[0]['captured_at'],
+                                            latest_captured_at=records[-1]['captured_at'], latest=records[-1]['lines'],
+                                            first=records[0]['lines'], home_win_probability=records[-1]['home_win_probability'],
+                                            captures=len(records))
     return dict(version=VERSION, generated_at=datetime.now(timezone.utc).isoformat(), games=index, damaged=damaged)
 
 
@@ -247,6 +262,7 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     when the model margin exceeds the market margin by the threshold.
     """
     from .daily_review import _selected
+    from .kalshi_lines import closing_kalshi_line, read_kalshi_lines
     folder = Path(folder)
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     games = {g['game_id']: g for g in schedule.get('games', []) if g.get('start_time') and g.get('status') not in ('postponed', 'cancelled', 'tbd')}
@@ -282,6 +298,11 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             except (ValueError, KeyError, TypeError):
                 model_home_win = None
         actual_margin, actual_total = home_pts - away_pts, home_pts + away_pts
+        try:
+            kalshi = closing_kalshi_line(read_kalshi_lines(folder, gid), game['start_time'])
+        except ValueError as exc:
+            errors.append(dict(game_id=gid, error=str(exc)))
+            kalshi = None
         for pid, line in sorted(lines.items()):
             spread = line['lines']['spread']['home']['current_line']
             total = line['lines']['total']['over']['current_line']
@@ -306,6 +327,11 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             implied_away = _implied(away_ml)
             if implied_home is not None and implied_away is not None and implied_home + implied_away > 0:
                 row['market_home_win'] = implied_home / (implied_home + implied_away)
+            if kalshi and kalshi.get('implied_home_margin') is not None:
+                # Kalshi's last pre-tip price, a second close beside the sportsbook's.
+                row.update(kalshi_margin=kalshi['implied_home_margin'], kalshi_home_win=kalshi.get('home_win_probability'),
+                           kalshi_total=kalshi.get('implied_total'), kalshi_captured_at=kalshi['captured_at'],
+                           kalshi_abs_error=abs(kalshi['implied_home_margin'] - actual_margin))
             rows.append(row)
     summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows))
     spread_rows = [r for r in rows if 'spread_edge' in r]
@@ -338,6 +364,13 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                 else:
                     picks.append('win' if (r['total_edge'] > 0) == r['went_over'] else 'loss')
             summary['total_leans'][f'edge>={threshold:g}'] = _record(picks)
+    kalshi_rows = [r for r in rows if 'kalshi_abs_error' in r]
+    if kalshi_rows:
+        summary.setdefault('margin_abs_error', {})
+        summary['margin_abs_error'].update(kalshi=sum(r['kalshi_abs_error'] for r in kalshi_rows) / len(kalshi_rows), kalshi_n=len(kalshi_rows))
+        kalshi_wins = [r for r in kalshi_rows if r.get('kalshi_home_win') is not None and r['actual_margin'] != 0]
+        if kalshi_wins:
+            summary['kalshi_winner'] = dict(n=len(kalshi_wins), brier=sum((r['kalshi_home_win'] - (r['actual_margin'] > 0)) ** 2 for r in kalshi_wins) / len(kalshi_wins))
     win_rows = [r for r in rows if r.get('market_home_win') is not None and r['actual_margin'] != 0]
     if win_rows:
         summary['winner'] = dict(n=len(win_rows),
