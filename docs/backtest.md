@@ -237,8 +237,8 @@ the team games of earlier dates (a labelled historical reconstruction), the
 rest and travel context from the season calendar, and the artifact's
 parameters and fitted context model. `datasets/model-upgrade-2026-10-23/artifact.json.gz`
 carries the same parameters and context model as the live 0.6.0 artifact.
-Add `--production-path datasets/model-upgrade-2026-10-23/artifact.json.gz` to
-the gate command. Live-only inputs are still absent: recap role context, shot
+To replay it, add `--production-path datasets/model-upgrade-2026-10-23/artifact.json.gz`
+to the gate command; `AGENTS.md` still gates on the baseline path. Live-only inputs are still absent: recap role context, shot
 profiles, aggregate historical priors. The context model was fitted on
 2025-26, so that season is in-sample for it.
 
