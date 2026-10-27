@@ -306,6 +306,44 @@ class BacktestTests(unittest.TestCase):
                 expected, _ = margins.blended_location(teams[gid, home] - teams[gid, away], edge, ratings, home, away)
                 self.assertAlmostEqual(location, expected)
 
+    def test_the_production_path_reads_only_earlier_games_and_moves_the_forecast(self):
+        from nba_forecast import candidate
+        counts = ('minutes', 'fgm', 'fga', 'fg3m', 'fg3a', 'ftm', 'fta', 'tov', 'pts', 'reb', 'ast', 'stl', 'blk')
+        # The production path validates history strictly: a did-not-play row has zero counts.
+        history = [r if r['status'] == 'played' else dict(r, **dict.fromkeys(counts, 0)) for r in self.history]
+        box = {}
+        for r in history:
+            t = box.setdefault((r['game_id'], r['team_id']), dict(fga=0, fta=0, oreb=0, tov=0))
+            for key in ('fga', 'fta', 'tov'):
+                t[key] += r[key]
+            t['oreb'] += r['reb'] // 4
+        records = [dict(r, team_stats={t: dict(s, **box[(r['game_id'], t)]) for t, s in r['team_stats'].items()})
+                   for r in self.records]
+        artifact = dict(model_version='regular-season-baseline-0.5.0', model_key='k' * 64, known_at='2026-01-01T00:00:00Z',
+                        parameters=dict(pace_strength=.25, defense_strength=1., context_strength=.5, rotation_enabled=True,
+                                        context_features_enabled=True), context_model=None, excluded_history_game_ids=[])
+        seen, real = [], candidate.forecast_candidate
+        def spy(snapshot, history):
+            seen.append(snapshot)
+            return real(snapshot, history)
+        with tempfile.TemporaryDirectory() as d, unittest.mock.patch.object(candidate, 'forecast_candidate', spy):
+            production = backtest.run_seasons([dict(history=history, records=records)], Path(d) / 'p', warmup_fraction=.5,
+                                              as_of=AS_OF, artifact=artifact)
+            baseline = backtest.run_seasons([dict(history=history, records=records)], Path(d) / 'b', warmup_fraction=.5,
+                                            as_of=AS_OF)
+            rows = {k: backtest.read_json(Path(d) / k / 'rows.json.gz')['players'] for k in ('p', 'b')}
+        time = {r['game_id']: r['game_time'] for r in records}
+        self.assertEqual(len(seen), 24)
+        for snapshot in seen:
+            game = snapshot['games'][0]
+            used = {gid for team in snapshot['model_enhancements']['environment']['teams'].values() for gid in team['audit']['game_ids']}
+            self.assertTrue(used)
+            self.assertTrue(all(backtest._day(time[gid]) < backtest._day(game['start_time']) for gid in used))
+            self.assertEqual(set(snapshot['schedule_context']), {game['home_team_id'], game['away_team_id']})
+        self.assertEqual((production['model_path'], baseline['model_path']), ('production', 'baseline'))
+        self.assertEqual(production['parameters']['production_artifact']['parameters'], artifact['parameters'])
+        self.assertNotEqual([r[5] for r in rows['p']], [r[5] for r in rows['b']])  # pace and defense move points
+
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
             backtest.run_backtest(self.history, self.records, self.folder.name + '/x', as_of='2026-01-10T00:00:00Z')

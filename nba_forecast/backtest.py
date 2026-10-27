@@ -178,8 +178,35 @@ def _by_day(items, time):
     return sorted(days.items())
 
 
+def _calendar(records):
+    """The season's games in the schedule shape ``schedule.game_context`` reads for rest and travel."""
+    return dict(games=[dict(game_id=r['game_id'], start_time=r['game_time'], status='final', home_team_id=r['home_team_id'],
+                            away_team_id=r['away_team_id'], venue=dict(timezone=r.get('venue_timezone'))) for r in records])
+
+
+def _production_forecast(snapshot, history, artifact, team_games, calendar):
+    """Production's path (``candidate.forecast_candidate``) with the inputs ``enhancements.prepare`` would give it.
+
+    The pace and defense environment comes from the team games of earlier dates
+    (labelled a historical reconstruction), the rest and travel context from the
+    season calendar, the parameters and fitted context model from ``artifact``.
+    Interval calibration stays the replay's own walk-forward one.
+    """
+    from .candidate import forecast_candidate
+    from .game_environment import build_environment
+    from .schedule import game_context
+    game = snapshot['games'][0]
+    environment = build_environment(team_games, game, game['start_time'], context=dict(evidence_kind='historical_reconstruction'),
+                                    parameters=artifact['parameters'].get('environment_parameters'))
+    enhancement = dict(model_version=artifact['model_version'], model_key=artifact['model_key'], known_at=artifact['known_at'],
+                       parameters=artifact['parameters'], context_model=artifact.get('context_model'), calibration=None,
+                       environment=environment, excluded_history_game_ids=artifact.get('excluded_history_game_ids', []))
+    return forecast_candidate(dict(snapshot, model_enhancements=enhancement,
+                                   schedule_context=game_context(calendar, game['game_id'])), history)
+
+
 def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None,
-           previous_history=(), previous_records=()):
+           previous_history=(), previous_records=(), artifact=None):
     """Forecast each evaluation game from earlier game days only.
 
     ``injuries`` maps game IDs to their anchor report (``injury_history``); a
@@ -187,7 +214,9 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     season's box scores and finals (``previous_history``, ``previous_records``)
     seed the player history, the team ratings' last-season prior and the margin
     dispersion as production's multi-season history does, so with
-    ``warmup_fraction=0`` the season is scored from opening night.
+    ``warmup_fraction=0`` the season is scored from opening night. With a model
+    ``artifact`` each game is forecast on production's path
+    (``_production_forecast``) instead of the baseline.
     """
     home_of = {r['game_id']: r['home_team_id'] for r in (*previous_records, *records)}
 
@@ -209,6 +238,9 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     margin_days = [(d, [_final_margin(g) for g in batch]) for d, batch in previous_days]
     # (day, final sample) for the team ratings; ratings and dispersion read at most the production window.
     finals = [(d, _final_sample(g)) for d, batch in previous_days for g in batch]
+    # (day, team-game record) for the production path's pace and defense environment.
+    record_days = [(d, g) for d, batch in previous_days for g in batch]
+    calendar = _calendar(records) if artifact else None
     rating_cache = {}
     residual_days = []  # (day, signed standardized residuals, game IDs) of earlier played forecasts.
     interval_cache = {}
@@ -238,7 +270,11 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                                 reported_unavailable={k: v for k, v in unavailable.items() if v},
                                 roster=dict(players=roster, observed_at=as_of, source_url=rows[0]['source_url'],
                                             complete=False, team_ids=[g['home_team_id'], g['away_team_id']]))
-                result = _baseline_forecast(snapshot, history_before)
+                if artifact:
+                    result = _production_forecast(snapshot, history_before, artifact,
+                                                  [g for d, g in record_days if d < day], calendar)
+                else:
+                    result = _baseline_forecast(snapshot, history_before)
                 if day not in interval_cache:
                     earlier = [(z, gids) for d, z, gids in residual_days if d < day]
                     signed = [v for z, _ in earlier for v in z]
@@ -314,6 +350,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     reported_out[pid].append((day, game['game_id']))
         final_margin = _final_margin(game)
         finals.append((day, _final_sample(game)))
+        record_days.append((day, game))
         if margin_days and margin_days[-1][0] == day:
             margin_days[-1][1].append(final_margin)
         else:
@@ -714,8 +751,11 @@ def _subset(rows, game_ids):
                 teams=[r for r in rows['teams'] if r[0] in game_ids], games=[r for r in rows['games'] if r[0] in game_ids])
 
 
-def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None):
+def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None,
+                artifact=None):
     """Replay each season on its own and score them together; write and return the scoreboard.
+
+    With a model ``artifact`` every season replays production's path (``replay``).
 
     Each season is a dict of ``history``, ``records`` and optional ``sources``,
     ``market``, ``injuries`` and the previous season's ``previous_history`` and
@@ -740,7 +780,7 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         replayed = replay(season['history'], season['records'], as_of, warmup_fraction=warmup_fraction, limit=limit,
                           progress=progress, injuries=season.get('injuries'),
                           previous_history=season.get('previous_history') or (),
-                          previous_records=season.get('previous_records') or ())
+                          previous_records=season.get('previous_records') or (), artifact=artifact)
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})
@@ -762,13 +802,17 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         parts.append(part)
     with_injuries = all(season.get('injuries') is not None for season in seasons)
     scoreboard = dict(
-        schema_version=1, version=VERSION, created_at=as_of, model_version=MODEL_VERSION,
+        schema_version=1, version=VERSION, created_at=as_of,
+        model_version=artifact['model_version'] if artifact else MODEL_VERSION,
+        model_path='production' if artifact else 'baseline',
         code_sha256=package_digest(Path(__file__).parent),
         sources=parts[0]['sources'] if len(parts) == 1 else [p['sources'] for p in parts],
         parameters=dict(warmup_fraction=warmup_fraction, limit=limit,
                         interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80,
                         **({'previous_season_seeded': [bool(s.get('previous_records')) for s in seasons]}
-                           if any(s.get('previous_records') for s in seasons) else {})),
+                           if any(s.get('previous_records') for s in seasons) else {}),
+                        **(dict(production_artifact=dict(model_version=artifact['model_version'], model_key=artifact['model_key'],
+                                                         parameters=artifact['parameters'])) if artifact else {})),
         games=dict(totals, skipped=dict(skipped)),
         metrics=summarize(rows['players'], rows['teams'], rows['games']),
         limitations=INJURY_LIMITATIONS if with_injuries else LIMITATIONS)
@@ -804,7 +848,7 @@ def format_scoreboard(board):
     """A short readable table for the terminal."""
     m = board['metrics']
     lines = []
-    lines.append(f"games evaluated {board['games']['evaluated']} of {board['games']['total']}  model {board['model_version']}  code {board['code_sha256'][:12]}")
+    lines.append(f"games evaluated {board['games']['evaluated']} of {board['games']['total']}  model {board['model_version']} ({board.get('model_path', 'baseline')} path)  code {board['code_sha256'][:12]}")
     lines.append(f"{'players (played)':18s} {'n':>6s} {'pts MAE':>8s} {'bias':>6s} {'min MAE':>8s} {'cov80':>6s} {'width':>6s}")
     for name, item in [('all', m['players']['all'])] + list(m['players']['by_expected_minutes'].items()):
         if item.get('n'):

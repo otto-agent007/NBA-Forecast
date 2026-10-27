@@ -122,6 +122,7 @@ def _parser():
     backtest.add_argument('--injuries', nargs='+', help='Anchor injury reports for the replayed games (datasets/injury-reports-*/statuses.json.gz), one per season')
     backtest.add_argument('--previous-history', nargs='+', help="Each season's previous season of box scores, seeding the history (one per season)")
     backtest.add_argument('--previous-team-games', nargs='+', help="Each season's previous season of team games, seeding the ratings (one per season)")
+    backtest.add_argument('--production-path', metavar='ARTIFACT', help="Replay production's path with this model artifact's parameters and context model (datasets/model-upgrade-2026-10-23/artifact.json.gz)")
     backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
@@ -254,7 +255,8 @@ def main(argv=None):
                                     previous_history=read_source(paths['previous_history']) if paths['previous_history'] else None,
                                     previous_records=read_source(paths['previous_team_games']) if paths['previous_team_games'] else None,
                                     sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
-            board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction,
+            artifact = read_source(args.production_path) if args.production_path else None
+            board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction, artifact=artifact,
                                 limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
             print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
             return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
