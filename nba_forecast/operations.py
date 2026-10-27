@@ -2,6 +2,7 @@
 from copy import deepcopy
 from contextlib import closing
 from datetime import datetime,timedelta,timezone
+from types import SimpleNamespace
 import json
 import hashlib
 from pathlib import Path
@@ -346,6 +347,90 @@ def _tick(folder,history,report):
     raw=folder/'raw'
     cache=folder/'finals'
     cache.mkdir(exist_ok=True)
+    _recover_runs(folder,db,state,report)
+    atomic_json(statepath,state)
+    from .player_sync import enrich_final_cache
+    enrich_final_cache(folder)
+    history=_merge_finals(history,cache)
+    prior_path=folder/'historical-priors.json'
+    if prior_path.exists():
+        book=json.loads(prior_path.read_text())
+        if book.get('boxscore_fields_version')!=1:
+            from .historical import expand_prior_fields
+            atomic_json(prior_path,expand_prior_fields(book,folder))
+    jobs=due_jobs(schedule,_now(),include_waiting=True)
+    by_id={g['game_id']:g for g in schedule['games']}
+    report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
+    upcoming=[by_id[j['game_id']] for j in jobs]
+    jobs=[j for j in jobs if not j.get('waiting')]
+    # The day's cross-check is informational; each forecast's preflight confirms its own game.
+    crosscheck=schedule.get('crosscheck',{})
+    report['schedule_unverified_games']=sorted(j['game_id'] for j in jobs if j['game_id'] in set(crosscheck.get('blocked_game_ids',[])))
+    report['warnings'].extend(dict(task='schedule_crosscheck',espn_id=event['espn_id'],
+        error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
+    active_model,model_digest=load_active(folder,_now())
+    # Market lines for upcoming games, at the forecast cadence; never a reason to fail the tick.
+    capture={}
+    try:
+        capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
+    except Exception as exc:
+        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
+    # A forecast is rebuilt when its evidence changes: the official report edition
+    # for the game, ESPN's injury list and the roster. These checks are cheap.
+    roster=_roster(folder,season,raw,jobs,report) if jobs else None
+    capture_cache={}
+    checks={}
+    for job in jobs:
+        try:
+            checks[job['game_id']]=fetch_injury_check(dict(season=season,games=[by_id[job['game_id']]],as_of=_now(),forecast_stage=job['stage']),raw,capture_cache=capture_cache)
+        except (ValueError,OSError) as exc:
+            checks[job['game_id']]=exc
+    reviews=_job_keys(folder,jobs,checks,capture,roster,active_model,model_digest)
+    # A job that failed is retried after a pause instead of every minute.
+    failed=state.setdefault('failed_jobs',{})
+    for key in [k for k,v in failed.items() if (parse_time(_now())-parse_time(v['at'])).total_seconds()>86400]:
+        del failed[key]
+    def deferred(job):
+        item=failed.get(job['key'])
+        pause=JOB_RETRY_SECONDS[1] if job['stage']=='final' else JOB_RETRY_SECONDS[0]
+        return bool(item) and (parse_time(_now())-parse_time(item['at'])).total_seconds()<pause
+    report['deferred_jobs']=[dict(game_id=j['game_id'],stage=j['stage'],failed_at=failed[j['key']]['at'])
+                             for j in jobs if j['key'] not in state['jobs'] and deferred(j)]
+    needed=[j for j in jobs if j['key'] not in state['jobs'] and not deferred(j)]
+    tick=SimpleNamespace(schedule=schedule,by_id=by_id,roster=roster,raw=raw,db=db,state=state,statepath=statepath,report=report,
+                         failed=failed,checks=checks,reviews=reviews,history=history,parsed_reports={},active_model=active_model,
+                         model_digest=model_digest)
+    for job in needed:
+        try:
+            _forecast_job(folder,job,tick)
+        except Exception as exc:
+            report['errors'].append(dict(task='forecast',game_id=job['game_id'],stage=job['stage'],error=f'{type(exc).__name__}: {exc}'))
+            failed[job['key']]=dict(at=_now(),reason=type(exc).__name__)
+    atomic_json(statepath,state)
+    # Prioritize pregame deadlines over downloads and postgame reporting.
+    if active_model:
+        from .outcome_sync import sync_finished_games
+        synced=sync_finished_games(folder,schedule,history,_now())
+        report['final_sync']=synced
+        report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
+        report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
+    _collect_finals(schedule,cache,raw,report)
+    # Complete/revise player boxes before evaluating the frozen forecasts.
+    if (folder/'roster.json').exists():
+        try:
+            from .player_sync import sync_player_data
+            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
+            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
+        except Exception as exc:
+            report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+    _evaluate_runs(folder,db,report)
+    _missed_finals(state,schedule,report)
+    atomic_json(statepath,state)
+    _refresh_derived(folder,db,schedule,active_model,model_digest,report)
+
+
+def _recover_runs(folder,db,state,report):
+    """Runs saved before a crash wrote their artifacts or their job key get both back."""
     # A run already recorded under its operation key with all three artifacts
     # needs nothing; only the others are opened.
     recorded=set(state['jobs'].values())
@@ -370,9 +455,10 @@ def _tick(folder,history,report):
         if key and key not in state['jobs']:
             state['jobs'][key]=run_id
             report['recovered_runs']+=1
-    atomic_json(statepath,state)
-    from .player_sync import enrich_final_cache
-    enrich_final_cache(folder)
+
+
+def _merge_finals(history,cache):
+    """The input history plus every captured final, the newest known_at winning per player-game."""
     combined={(r['game_id'],r['player_id']):r for r in history}
     for p in sorted(cache.glob('*.json')):
         rows=json.loads(p.read_text())
@@ -384,40 +470,12 @@ def _tick(folder,history,report):
                 combined[key]=row
     history=list(combined.values())
     validate_history(history)
-    prior_path=folder/'historical-priors.json'
-    if prior_path.exists():
-        book=json.loads(prior_path.read_text())
-        if book.get('boxscore_fields_version')!=1:
-            from .historical import expand_prior_fields
-            atomic_json(prior_path,expand_prior_fields(book,folder))
-    jobs=due_jobs(schedule,_now(),include_waiting=True)
-    by_id={g['game_id']:g for g in schedule['games']}
-    report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
-    upcoming=[by_id[j['game_id']] for j in jobs]
-    jobs=[j for j in jobs if not j.get('waiting')]
-    # The day's cross-check is informational; each forecast's preflight confirms its own game.
-    crosscheck=schedule.get('crosscheck',{})
-    report['schedule_unverified_games']=sorted(j['game_id'] for j in jobs if j['game_id'] in set(crosscheck.get('blocked_game_ids',[])))
-    report['warnings'].extend(dict(task='schedule_crosscheck',espn_id=event['espn_id'],
-        error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
+    return history
+
+
+def _job_keys(folder,jobs,checks,capture,roster,active_model,model_digest):
+    """Extend each job key with everything a forecast is built from; return the games' reviews."""
     reviews={}
-    active_model,model_digest=load_active(folder,_now())
-    # Market lines for upcoming games, at the forecast cadence; never a reason to fail the tick.
-    capture={}
-    try:
-        capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
-    except Exception as exc:
-        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
-    # A forecast is rebuilt when its evidence changes: the official report edition
-    # for the game, ESPN's injury list and the roster. These checks are cheap.
-    roster=_roster(folder,season,raw,jobs,report) if jobs else None
-    capture_cache={}
-    checks={}
-    for job in jobs:
-        try:
-            checks[job['game_id']]=fetch_injury_check(dict(season=season,games=[by_id[job['game_id']]],as_of=_now(),forecast_stage=job['stage']),raw,capture_cache=capture_cache)
-        except (ValueError,OSError) as exc:
-            checks[job['game_id']]=exc
     for job in jobs:
         version=active_model['model_version'] if active_model else MODEL_VERSION
         evidence=_evidence_key(checks.get(job['game_id']),(capture.get('evidence') or {}).get(job['game_id']),roster,job['stage'])
@@ -436,95 +494,82 @@ def _tick(folder,history,report):
             review=json.loads(path.read_text())
             reviews[job['game_id']]=review
             job['key']+=':review:'+hashlib.sha256(canonical(review)).hexdigest()
-    # A job that failed is retried after a pause instead of every minute.
-    failed=state.setdefault('failed_jobs',{})
-    for key in [k for k,v in failed.items() if (parse_time(_now())-parse_time(v['at'])).total_seconds()>86400]:
-        del failed[key]
-    def deferred(job):
-        item=failed.get(job['key'])
-        pause=JOB_RETRY_SECONDS[1] if job['stage']=='final' else JOB_RETRY_SECONDS[0]
-        return bool(item) and (parse_time(_now())-parse_time(item['at'])).total_seconds()<pause
-    report['deferred_jobs']=[dict(game_id=j['game_id'],stage=j['stage'],failed_at=failed[j['key']]['at'])
-                             for j in jobs if j['key'] not in state['jobs'] and deferred(j)]
-    needed=[j for j in jobs if j['key'] not in state['jobs'] and not deferred(j)]
-    parsed_reports={}  # earlier games' anchor reports, parsed once per tick
-    for job in needed:
-        try:
-            game=by_id[job['game_id']]
-            snapshot=dict(schema_version=1,season=schedule['season'],as_of=_now(),roster=deepcopy(roster),games=[game],
-                          forecast_stage=job['stage'],operation_key=job['key'],schedule_version=schedule['version'],
-                          schedule_context=game_context(schedule,game['game_id']))
-            try:
-                check=checks[job['game_id']]
-                if isinstance(check,Exception):
-                    raise check
-                snapshot['as_of']=_now()
-                snapshot['injury_check']=check
-                record_check(folder,check,job['stage'])
-                for item in check['games']:
-                    evidence=item['latest_report'] or item.get('anchor_report')
-                    if evidence and roster is not None:
-                        text=pdf_text(raw/(evidence['sha256']+'.pdf'),evidence['sha256'])
-                        parsed=parse_report(text,schedule,roster,evidence)
-                        snapshot=apply_report(snapshot,parsed,allow_not_listed=True)
-                        report['warnings'].extend(dict(forecast_game_id=job['game_id'],**i) for i in parsed['issues'])
-            except (ValueError,OSError) as exc:
-                if job['stage']=='final':
-                    raise
-                report['warnings'].append(dict(game_id=job['game_id'],error=str(exc),action='Preliminary availability remains unresolved.'))
-            if roster is None:
-                raise ValueError('No roster observed within 48 hours; injury checkpoint retained, forecast withheld')
-            snapshot['as_of']=_now()
-            if job['game_id'] in reviews:
-                snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
-                report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
-            usable=eligible_history(snapshot,history)
-            snapshot['reported_unavailable']=reported_unavailable(folder,schedule,roster,usable,game,parsed_reports)
-            prior_path=folder/'historical-priors.json'
-            if prior_path.exists():
-                book=json.loads(prior_path.read_text())
-                teams={game['home_team_id'],game['away_team_id']}
-                player_ids={p['player_id'] for p in roster['players'] if p['team_id'] in teams}
-                snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
-            if active_model:
-                snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
-            snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable)
-            if uses_refinements(snapshot):
-                from .role_context import prepare_role_context
-                from .shot_quality import prepare_shot_quality
-                snapshot['role_context']=prepare_role_context(folder,snapshot,usable)
-                snapshot['shot_quality']=prepare_shot_quality(folder,snapshot,usable)
-            profiles=build_profiles(snapshot,usable)
-            verification=run_preflight(snapshot,usable,profiles,folder)
-            if verification['status']!='passed':
-                report['errors'].append(dict(task='preflight',game_id=job['game_id'],issues=verification['issues']))
-                if any(i['code']=='tipoff_changed' for i in verification['issues']):
-                    request_calendar_check(folder,'tipoff_changed:'+job['game_id'])
-                failed[job['key']]=dict(at=_now(),reason='preflight')
-                continue
-            snapshot['preflight']=verification
-            profiles=build_profiles(snapshot,usable)
-            prediction=forecast(snapshot,usable)
-            run_id=save_run(db,snapshot,usable,prediction)
-            # The immutable operation_key in the run is authoritative if interrupted here.
-            state['jobs'][job['key']]=run_id
-            atomic_json(statepath,state)
-            output=folder/'runs'/run_id
-            atomic_json(output/'profiles.json',profiles)
-            atomic_json(output/'forecast.json',prediction)
-            atomic_json(output/'snapshot.json',snapshot)
-            report['created_runs']+=1
-        except Exception as exc:
-            report['errors'].append(dict(task='forecast',game_id=job['game_id'],stage=job['stage'],error=f'{type(exc).__name__}: {exc}'))
-            failed[job['key']]=dict(at=_now(),reason=type(exc).__name__)
-    atomic_json(statepath,state)
-    # Prioritize pregame deadlines over downloads and postgame reporting.
+    return reviews
+
+
+def _forecast_job(folder,job,tick):
+    """Build, verify, forecast and save one job; ``tick`` carries this tick's shared state."""
+    schedule,by_id,roster,raw,report=tick.schedule,tick.by_id,tick.roster,tick.raw,tick.report
+    checks,reviews,history,parsed_reports=tick.checks,tick.reviews,tick.history,tick.parsed_reports
+    active_model,model_digest,db,state,statepath,failed=tick.active_model,tick.model_digest,tick.db,tick.state,tick.statepath,tick.failed
+    game=by_id[job['game_id']]
+    snapshot=dict(schema_version=1,season=schedule['season'],as_of=_now(),roster=deepcopy(roster),games=[game],
+                  forecast_stage=job['stage'],operation_key=job['key'],schedule_version=schedule['version'],
+                  schedule_context=game_context(schedule,game['game_id']))
+    try:
+        check=checks[job['game_id']]
+        if isinstance(check,Exception):
+            raise check
+        snapshot['as_of']=_now()
+        snapshot['injury_check']=check
+        record_check(folder,check,job['stage'])
+        for item in check['games']:
+            evidence=item['latest_report'] or item.get('anchor_report')
+            if evidence and roster is not None:
+                text=pdf_text(raw/(evidence['sha256']+'.pdf'),evidence['sha256'])
+                parsed=parse_report(text,schedule,roster,evidence)
+                snapshot=apply_report(snapshot,parsed,allow_not_listed=True)
+                report['warnings'].extend(dict(forecast_game_id=job['game_id'],**i) for i in parsed['issues'])
+    except (ValueError,OSError) as exc:
+        if job['stage']=='final':
+            raise
+        report['warnings'].append(dict(game_id=job['game_id'],error=str(exc),action='Preliminary availability remains unresolved.'))
+    if roster is None:
+        raise ValueError('No roster observed within 48 hours; injury checkpoint retained, forecast withheld')
+    snapshot['as_of']=_now()
+    if job['game_id'] in reviews:
+        snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
+        report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
+    usable=eligible_history(snapshot,history)
+    snapshot['reported_unavailable']=reported_unavailable(folder,schedule,roster,usable,game,parsed_reports)
+    prior_path=folder/'historical-priors.json'
+    if prior_path.exists():
+        book=json.loads(prior_path.read_text())
+        teams={game['home_team_id'],game['away_team_id']}
+        player_ids={p['player_id'] for p in roster['players'] if p['team_id'] in teams}
+        snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
     if active_model:
-        from .outcome_sync import sync_finished_games
-        synced=sync_finished_games(folder,schedule,history,_now())
-        report['final_sync']=synced
-        report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
-        report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
+        snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
+    snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable)
+    if uses_refinements(snapshot):
+        from .role_context import prepare_role_context
+        from .shot_quality import prepare_shot_quality
+        snapshot['role_context']=prepare_role_context(folder,snapshot,usable)
+        snapshot['shot_quality']=prepare_shot_quality(folder,snapshot,usable)
+    profiles=build_profiles(snapshot,usable)
+    verification=run_preflight(snapshot,usable,profiles,folder)
+    if verification['status']!='passed':
+        report['errors'].append(dict(task='preflight',game_id=job['game_id'],issues=verification['issues']))
+        if any(i['code']=='tipoff_changed' for i in verification['issues']):
+            request_calendar_check(folder,'tipoff_changed:'+job['game_id'])
+        failed[job['key']]=dict(at=_now(),reason='preflight')
+        return
+    snapshot['preflight']=verification
+    profiles=build_profiles(snapshot,usable)
+    prediction=forecast(snapshot,usable)
+    run_id=save_run(db,snapshot,usable,prediction)
+    # The immutable operation_key in the run is authoritative if interrupted here.
+    state['jobs'][job['key']]=run_id
+    atomic_json(statepath,state)
+    output=folder/'runs'/run_id
+    atomic_json(output/'profiles.json',profiles)
+    atomic_json(output/'forecast.json',prediction)
+    atomic_json(output/'snapshot.json',snapshot)
+    report['created_runs']+=1
+
+
+def _collect_finals(schedule,cache,raw,report):
+    """Capture the official box score of every final game not yet cached."""
     for game in schedule['games']:
         if game['status']!='final':
             continue
@@ -538,15 +583,10 @@ def _tick(folder,history,report):
             atomic_json(path,rows)
         except Exception as exc:
             report['errors'].append(dict(task='final_boxscore',game_id=game['game_id'],error=f'{type(exc).__name__}: {exc}'))
-    # Complete/revise player boxes before evaluating the frozen forecasts.
-    if (folder/'roster.json').exists():
-        try:
-            from .player_sync import sync_player_data
-            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
-            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
-        except Exception as exc:
-            report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
-    _evaluate_runs(folder,db,report)
+
+
+def _missed_finals(state,schedule,report):
+    """Games that tipped since operations began without a final-stage run are missed, not an old season."""
     # Only flag games occurring after operations were first started, not an entire
     # historical season as missed. Unknown/postponed start times cannot be due.
     state.setdefault('tracking_started_at',report['started_at'])
@@ -556,8 +596,6 @@ def _tick(folder,history,report):
             key=f"{game['game_id']}:{start}:final"
             if not any(k==key or k.startswith(key+':') for k in state['jobs']):
                 report['missed_final_games'].append(game['game_id'])
-    atomic_json(statepath,state)
-    _refresh_derived(folder,db,schedule,active_model,model_digest,report)
 
 
 def _evaluate_runs(folder,db,report):
