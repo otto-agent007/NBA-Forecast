@@ -120,6 +120,8 @@ def _parser():
     backtest.add_argument('--limit', type=int, help='Only the last N evaluation games (smoke runs)')
     backtest.add_argument('--market', nargs='+', help='Closing lines for the replayed games (datasets/market-closing-*/closing-lines.json.gz), one per season')
     backtest.add_argument('--injuries', nargs='+', help='Anchor injury reports for the replayed games (datasets/injury-reports-*/statuses.json.gz), one per season')
+    backtest.add_argument('--previous-history', nargs='+', help="Each season's previous season of box scores, seeding the history (one per season)")
+    backtest.add_argument('--previous-team-games', nargs='+', help="Each season's previous season of team games, seeding the ratings (one per season)")
     backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
@@ -234,17 +236,23 @@ def main(argv=None):
             from .market_history import read_lines
             from .injury_history import read_statuses
             count = len(args.history)
-            for name in ('team_games', 'market', 'injuries'):
+            if (args.previous_history is None)!=(args.previous_team_games is None):
+                raise ValueError('--previous-history and --previous-team-games go together')
+            for name in ('team_games', 'market', 'injuries', 'previous_history', 'previous_team_games'):
                 if getattr(args, name) is not None and len(getattr(args, name)) != count:
                     raise ValueError(f'--{name.replace("_", "-")} needs one file per --history season')
             seasons = []
             for i in range(count):
                 paths = dict(history=args.history[i], team_games=args.team_games[i],
                              market=args.market[i] if args.market else None,
-                             injuries=args.injuries[i] if args.injuries else None)
+                             injuries=args.injuries[i] if args.injuries else None,
+                             previous_history=args.previous_history[i] if args.previous_history else None,
+                             previous_team_games=args.previous_team_games[i] if args.previous_team_games else None)
                 seasons.append(dict(history=read_source(paths['history']), records=read_source(paths['team_games']),
                                     market=read_lines(paths['market']) if paths['market'] else None,
                                     injuries=read_statuses(paths['injuries']) if paths['injuries'] else None,
+                                    previous_history=read_source(paths['previous_history']) if paths['previous_history'] else None,
+                                    previous_records=read_source(paths['previous_team_games']) if paths['previous_team_games'] else None,
                                     sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
             board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction,
                                 limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))

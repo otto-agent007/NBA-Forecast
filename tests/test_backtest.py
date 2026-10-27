@@ -274,6 +274,38 @@ class BacktestTests(unittest.TestCase):
         self.assertIn('season 2024-25:', text)
         self.assertIn('(pooled over seasons)', text)
 
+    def test_the_previous_season_seeds_opening_night(self):
+        from nba_forecast import margins
+        def earlier(value):
+            return value.replace('2026-', '2025-', 1)
+        history = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
+                        known_at=earlier(r['known_at'])) for r in self.history]
+        records = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
+                        known_at=earlier(r['known_at'])) for r in self.records]
+        later = [dict(r, season='2025-26') for r in self.records]
+        with tempfile.TemporaryDirectory() as d:
+            cold = backtest.run_seasons([dict(history=self.history, records=later)], Path(d) / 'cold',
+                                        warmup_fraction=0., as_of=AS_OF)
+            seeded = backtest.run_seasons([dict(history=self.history, records=later, previous_history=history,
+                                                previous_records=records)], Path(d) / 'seeded', warmup_fraction=0., as_of=AS_OF)
+            rows = {k: backtest.read_json(Path(d) / k / 'rows.json.gz') for k in ('cold', 'seeded')}
+        first = {r['game_id'] for r in later if r['game_time'] == later[0]['game_time']}
+        self.assertFalse(first & {g[0] for g in rows['cold']['games']})  # nothing to forecast opening night from
+        self.assertEqual(first, first & {g[0] for g in rows['seeded']['games']})
+        self.assertEqual(seeded['games']['evaluated'], 48)
+        self.assertEqual(seeded['parameters']['previous_season_seeded'], [True])
+        self.assertNotIn('previous_season_seeded', cold['parameters'])
+        # Opening night blends the player sum with last season's home edge and shrunk ratings.
+        samples = [backtest._final_sample(g) for g in records]
+        ratings = margins.team_ratings(samples, later[0]['game_time'])
+        self.assertTrue(all(r['games'] == 0 and r['prior'] for r in ratings.values()))
+        edge = sum(s['home_points'] - s['away_points'] for s in samples) / len(samples)
+        teams = {(t[0], t[1]): t[3] for t in rows['seeded']['teams']}
+        for gid, home, away, location, *_ in rows['seeded']['games']:
+            if gid in first:
+                expected, _ = margins.blended_location(teams[gid, home] - teams[gid, away], edge, ratings, home, away)
+                self.assertAlmostEqual(location, expected)
+
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):
             backtest.run_backtest(self.history, self.records, self.folder.name + '/x', as_of='2026-01-10T00:00:00Z')
