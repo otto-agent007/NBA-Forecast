@@ -2,14 +2,17 @@
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
-from datetime import datetime, timezone
-from .data import normalize_boxscore
+from datetime import datetime, timedelta, timezone
+from .data import _fetch, boxscore_url, normalize_boxscore
 from .shots import normalize_shots, playbyplay_url
 from .schedule import atomic_json
 from .validation import parse_time
 
-VERSION = 'postgame-1.0'
+VERSION = 'postgame-1.1'
+# A blocked or incomplete feed is retried after five minutes, doubling to six hours.
+SOURCE_RETRY_SECONDS = (300, 21600)
 
 
 def classify_game(points):
@@ -76,6 +79,9 @@ def analyze_game(payload, boxscore, known_at, forecast=None):
     periods=set()
     ft={str(g[s]['teamId']):0 for s in ('homeTeam','awayTeam')}
     players={r['player_id']:r for r in rows}
+    # A period can start with a new lineup and no substitution event, so the last
+    # recorded exit alone does not show that a player never came back.
+    acted={}
     for a in actions:
         n=a['actionNumber']
         if n in seen:
@@ -93,6 +99,8 @@ def analyze_game(payload, boxscore, known_at, forecast=None):
         if (h,w)!=last_score or a['actionType']=='period':
             points.append(dict(elapsed=t,margin=h-w,home=h,away=w,period=a['period'],clock=a['clock'],action_number=n))
             last_score=(h,w)
+        if str(a.get('personId')) in players:
+            acted[str(a['personId'])]=t
         if a['actionType']=='freethrow' and a.get('shotResult')=='Made':
             ft[str(a['teamId'])]+=1
         if a['actionType']=='substitution':
@@ -129,19 +137,17 @@ def analyze_game(payload, boxscore, known_at, forecast=None):
             notes.append('No automatic role change inferred. Review repeated minutes and opportunity evidence.')
         if len(notes)>1 or 'possible blowout' in notes[0] or 'Entered during' in notes[0]:
             review.append(dict(player_id=pid,name=row['name'],question='Does this game provide evidence of a persistent role change?',evidence=notes,status='needs_review',automatic_adjustment=False))
-        takes.append(dict(**row,prediction=preds.get(pid),feedback=feedback,substitutions=pe,takeaways=notes,last_recorded_exit=last if last and last['direction']=='out' else None))
+        takes.append(dict(**row,prediction=preds.get(pid),feedback=feedback,substitutions=pe,takeaways=notes,last_recorded_exit=last if last and last['direction']=='out' else None,
+            last_action_elapsed=acted.get(pid)))
     first=next((p for p in points if p['period']==1 and abs(p['margin'])>=20),None)
     team_stats={str(g[side]['teamId']):{k:g[side]['statistics'].get(k) for k in ('fieldGoalsMade','fieldGoalsAttempted','threePointersMade','threePointersAttempted','freeThrowsMade','freeThrowsAttempted','turnoversTotal','reboundsOffensive','pointsFastBreak','pointsFromTurnovers','benchPoints')} for side in ('homeTeam','awayTeam')}
     return dict(team_stats=team_stats,schema_version=1,analysis_version=VERSION,game_id=gid,game_time=g['gameTimeUTC'],known_at=known_at,home=dict(id=str(g['homeTeam']['teamId']),code=g['homeTeam']['teamTricode'],score=g['homeTeam']['score']),away=dict(id=str(g['awayTeam']['teamId']),code=g['awayTeam']['teamTricode'],score=g['awayTeam']['score']),duration=end,timeline=points,substitutions=events,players=takes,review_queue=review,opening_large_lead=first,forecast_run_id=(forecast or {}).get('run_id'),**shape,coverage=dict(shots_reconciled=verified['coverage']['reconciled'],final_score_reconciled=True,rotation='Recorded substitution events only; complete on-court stints are not inferred.'),policy='All actual outcomes count. Descriptive thresholds are not win probabilities. No automatic model updates.')
 
 
-def build_postgames(directory):
-    """Read only hash-verified archives; no additional API calls or ledger writes."""
-    from .dashboard import dashboard_data
-    folder=Path(directory)
+def _archived(raw):
+    """Latest archived LiveData box score and play-by-play provenance, keyed by (game, kind)."""
     sources={}
-    errors=[]
-    for path in sorted((folder/'raw').glob('*.provenance.json')):
+    for path in sorted(Path(raw).glob('*.provenance.json')):
         meta=json.loads(path.read_text())
         url=meta.get('source_url','')
         match=re.search(r'/liveData/(boxscore|playbyplay)/\1_(002\d{7})\.json$',url)
@@ -151,6 +157,77 @@ def build_postgames(directory):
         key=(gid,kind)
         if key not in sources or parse_time(meta['retrieved_at'])>parse_time(sources[key]['retrieved_at']):
             sources[key]=meta
+    return sources
+
+
+def _payload(raw,meta):
+    data=(Path(raw)/(meta['sha256']+'.json')).read_bytes()
+    if hashlib.sha256(data).hexdigest()!=meta['sha256']:
+        raise ValueError('Archive hash mismatch')
+    return json.loads(data)
+
+
+def collect_sources(directory,schedule,now,*,max_games=1,budget_seconds=40):
+    """Archive the LiveData box score and play-by-play of finished games for build_postgames.
+
+    The shot sync completes every game from the official game page and never asks
+    for these feeds. Bounded per tick (newest games first, then the oldest retry);
+    a game is complete once its archived pair passes the postgame reconciliation,
+    so a feed fetched before it was final is fetched again.
+    """
+    folder=Path(directory)
+    raw=folder/'raw'
+    path=folder/'postgame'/'sources.json'
+    state=json.loads(path.read_text()) if path.exists() else {}
+    archived=_archived(raw)
+    # The saved calendar can still call a finished game scheduled; a cached final cannot.
+    games=[g for g in schedule.get('games',[]) if g.get('start_time') and (folder/'finals'/(g['game_id']+'.json')).exists()]
+    queue=[]
+    for game in games:
+        item=state.get(game['game_id'],{})
+        if item.get('status')=='complete' or (item.get('next_retry_at') and parse_time(now)<parse_time(item['next_retry_at'])):
+            continue
+        attempted=item.get('attempts',0)>0
+        queue.append(((1,parse_time(item['last_attempt_at']).timestamp()) if attempted else (0,-parse_time(game['start_time']).timestamp()),game['game_id']))
+    started=time.monotonic()
+    fetched=0
+    errors=[]
+    for _,gid in sorted(queue):
+        item=state.get(gid,{})
+        pair=[archived.get((gid,kind)) for kind in ('playbyplay','boxscore')]
+        try:
+            if all(pair) and not item.get('attempts'):
+                payloads=[_payload(raw,meta) for meta in pair]
+                known=max((meta['retrieved_at'] for meta in pair),key=parse_time)
+            else:
+                if fetched>=max_games or time.monotonic()-started>budget_seconds:
+                    continue
+                fetched+=1
+                item['attempts']=item.get('attempts',0)+1
+                item['last_attempt_at']=now
+                responses=[_fetch(url,raw) for url in (playbyplay_url(gid),boxscore_url(gid))]
+                payloads=[json.loads(body) for body,_ in responses]
+                known=max((observed for _,observed in responses),key=parse_time)
+            analyze_game(*payloads,known)
+            state[gid]=dict(status='complete',attempts=item.get('attempts',0),verified_at=now,known_at=known)
+        except (ValueError,KeyError,TypeError,OSError) as exc:
+            # An archived pair that fails is fetched again on the next attempt.
+            item.setdefault('attempts',1)
+            item.setdefault('last_attempt_at',now)
+            wait=min(SOURCE_RETRY_SECONDS[0]*2**(item['attempts']-1),SOURCE_RETRY_SECONDS[1])
+            state[gid]=dict(item,status='pending',reason=str(exc),next_retry_at=(parse_time(now)+timedelta(seconds=wait)).isoformat())
+            errors.append(dict(game_id=gid,error=str(exc)))
+    atomic_json(path,state)
+    complete=sum(state.get(g['game_id'],{}).get('status')=='complete' for g in games)
+    return dict(final_games=len(games),complete=complete,pending=len(games)-complete,fetched=fetched,errors=errors)
+
+
+def build_postgames(directory):
+    """Read only hash-verified archives; no additional API calls or ledger writes."""
+    from .dashboard import dashboard_data
+    folder=Path(directory)
+    sources=_archived(folder/'raw')
+    errors=[]
     data=dashboard_data(folder)
     games={g['game_id']:g for g in data['games']}
     output=folder/'postgame'
@@ -161,7 +238,6 @@ def build_postgames(directory):
             continue
         try:
             evidence=[sources[(gid,k)] for k in ('playbyplay','boxscore')]
-            payloads=[]
             signature=hashlib.sha256(json.dumps(dict(version=VERSION,evidence=evidence,forecast=game.get('forecast')),sort_keys=True).encode()).hexdigest()
             saved=output/(gid+'.json')
             if saved.exists():
@@ -169,11 +245,7 @@ def build_postgames(directory):
                 if old.get('input_signature')==signature:
                     count+=1
                     continue
-            for m in evidence:
-                raw=(folder/'raw'/(m['sha256']+'.json')).read_bytes()
-                if hashlib.sha256(raw).hexdigest()!=m['sha256']:
-                    raise ValueError('Archive hash mismatch')
-                payloads.append(json.loads(raw))
+            payloads=[_payload(folder/'raw',m) for m in evidence]
             known=max((m['retrieved_at'] for m in evidence),key=parse_time)
             result=analyze_game(*payloads,known,game.get('forecast'))
             result['provenance']=evidence

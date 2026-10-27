@@ -428,6 +428,13 @@ def _tick(folder,history,report):
             report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+    # LiveData play-by-play for the postgame recaps and the daily review's exit and blowout labels.
+    try:
+        from .postgame import collect_sources
+        report['postgame_sources']=collect_sources(folder,schedule,_now())
+        report['warnings'].extend(dict(task='postgame_sources',**e) for e in report['postgame_sources']['errors'])
+    except Exception as exc:
+        report['errors'].append(dict(task='postgame_sources',error=f'{type(exc).__name__}: {exc}'))
     _evaluate_runs(folder,db,report)
     _missed_finals(state,schedule,report)
     atomic_json(statepath,state)
