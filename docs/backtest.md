@@ -226,6 +226,54 @@ to decide. In WAS @ CHA every player's minutes were the same on both paths; the
 team-level factors took the player sum from CHA +8.1 to +13.7 (close +2.5,
 actual +7).
 
+## Production path
+
+The gate replays `model._baseline_forecast`. Production runs
+`candidate.forecast_candidate`, which adds the redistribution of absent
+players' minutes to teammates, pace and defense factors with team volume
+budgets, and the fitted rest and travel context. `--production-path ARTIFACT`
+replays that path: each game gets the pace and defense environment built from
+the team games of earlier dates (a labelled historical reconstruction), the
+rest and travel context from the season calendar, and the artifact's
+parameters and fitted context model. `datasets/model-upgrade-2026-10-23/artifact.json.gz`
+carries the same parameters and context model as the live 0.6.0 artifact.
+Add `--production-path datasets/model-upgrade-2026-10-23/artifact.json.gz` to
+the gate command. Live-only inputs are still absent: recap role context, shot
+profiles, aggregate historical priors. The context model was fitted on
+2025-26, so that season is in-sample for it.
+
+First run, 2026-10-27, against `datasets/backtest-2026-10-26-absence` (the
+baseline path), ± two standard errors:
+
+| Metric | Production path minus baseline | Verdict |
+|---|---|---|
+| Player points MAE | −0.021 ± 0.005 | within the materiality floor |
+| Minutes MAE | −0.016 ± 0.005 | within the floor |
+| Team points MAE | +0.32 ± 0.16 | worse |
+| Team-points bias | −1.23 → −3.11 | worse |
+| Margin MAE | −0.018 ± 0.090 | within noise |
+| Winner Brier | −0.0020 ± 0.0018 | improved |
+
+Each layer switched off, against the full production path:
+
+| Off | Player points | Team points | Team-points bias | Winner Brier |
+|---|---|---|---|---|
+| Minutes redistribution | +0.031, worse | −0.34, improved | −3.11 → −0.15 | within noise |
+| Pace factor | within noise | within noise | within noise | within noise |
+| Defense factor | within noise | +0.38, worse | −3.34 | +0.0032, worse |
+| Rest and travel | within noise | +0.08, worse | −3.51, worse | within noise |
+
+The redistribution moves minutes to the right players but takes about three
+points off each team's projected total. The 24 live games of 2026-10-24..27
+rerun both ways show the same pattern (team-points bias −0.84 baseline, −2.79
+production). The defense factor earns its place; pace at strength 0.25 does
+nothing measurable.
+
+`rotation_allocation.redistribute` inferred the season from `as_of`, which in a
+replay is the day it runs, so it found no history for 2023-24 and 2024-25 and
+moved no minutes there; it now takes the forecast's season, which is the same
+season live.
+
 ## Two seasons
 
 The second season, 2024-25 (`datasets/espn-season-2024-25/`), comes from ESPN game
