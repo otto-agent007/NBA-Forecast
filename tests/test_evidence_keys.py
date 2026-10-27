@@ -34,6 +34,7 @@ class EvidenceKeyTests(unittest.TestCase):
         self.enterContext(patch('nba_forecast.operations.capture_daily', return_value={'state': 'waiting'}))
         self.enterContext(patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])))
         self.enterContext(patch('nba_forecast.operations.capture_game_lines', return_value=dict(evidence={})))
+        self.enterContext(patch('nba_forecast.operations.capture_kalshi_lines', return_value=dict(captured=[], unchanged=[], skipped=[], errors=[])))
         self.preflight = self.enterContext(patch('nba_forecast.operations.run_preflight', return_value=dict(status='passed', issues=[])))
         self.injuries = self.enterContext(patch('nba_forecast.operations.fetch_injury_check', return_value=check('a' * 64)))
 

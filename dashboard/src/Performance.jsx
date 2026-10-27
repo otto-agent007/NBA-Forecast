@@ -11,6 +11,7 @@ function MarketReport({ report }) {
       <h3>Against the closing line · {s.games} games</h3>
       <div className="metric-band">
         {[["Margin error: model", s.margin_abs_error?.model], ["Margin error: market", s.margin_abs_error?.market],
+          ...(s.margin_abs_error?.kalshi != null ? [[`Margin error: Kalshi at tip (${s.margin_abs_error.kalshi_n})`, s.margin_abs_error.kalshi]] : []),
           ["Total error: model", s.total_abs_error?.model], ["Total error: market", s.total_abs_error?.market]].map(([label, value]) => (
           <div key={label}><span>{label}</span><strong>{number(value)}</strong></div>
         ))}

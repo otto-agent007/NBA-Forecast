@@ -33,7 +33,7 @@ export function MarketLines({ game }) {
           </p>
         );
       })}
-      <small>Archived from ESPN’s game summary at the forecast cadence; the last capture before tipoff is the closing line. An edge is the model minus the market, not a recommendation.</small>
+      <small>Archived from ESPN’s game summary and Kalshi’s markets at the forecast cadence; the last capture before tipoff is the closing line. Kalshi’s line is where its traded probabilities cross one half. An edge is the model minus the market, not a recommendation.</small>
     </div>
   );
 }

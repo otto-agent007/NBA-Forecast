@@ -211,6 +211,17 @@ the record of model leans at several edge thresholds, and winner Brier scores.
 Leans on a small sample are not an edge. Player props are not captured; ESPN
 does not publish them.
 
+Since 2026-10-27 each tick also captures Kalshi's game markets as a second
+source (`nba_forecast/kalshi_lines.py`, `market/kalshi/GAME_ID.jsonl`, raw
+responses under `market/kalshi/raw/`): the home winner market's bid-ask mid as
+a win probability, and the spread and total as the strikes where the traded
+probabilities cross one half, interpolated. It runs at the same cadence plus
+every minute in the last five before tip, because an exchange's last price is
+the real close. The dashboard lists Kalshi beside the sportsbook, and
+`market/report.json` carries `kalshi_margin`, `kalshi_abs_error` and a Kalshi
+winner Brier. Measured on 2026-10-27 over 23 games, ESPN's sportsbook line sat a
+median 0.33 points from Kalshi at tip (`scripts/research/line_lag.py`).
+
 ## Preforecast cross-check
 
 Before the automated tick or a `forecast --mode live` call executes the model,

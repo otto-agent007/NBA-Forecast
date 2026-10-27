@@ -27,6 +27,7 @@ from .shot_profiles import prepare_shot_profiles
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY
 from .market_lines import capture_game_lines,market_report
+from .kalshi_lines import capture_kalshi_lines
 from .reference import archive_daily_references
 
 
@@ -375,6 +376,10 @@ def _tick(folder,history,report):
         capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
     except Exception as exc:
         report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
+    try:
+        report['kalshi_lines']=capture_kalshi_lines(folder,upcoming,_now())
+    except Exception as exc:
+        report['warnings'].append(dict(task='kalshi_lines',error=f'{type(exc).__name__}: {exc}'))
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.
     roster=_roster(folder,season,raw,jobs,report) if jobs else None
