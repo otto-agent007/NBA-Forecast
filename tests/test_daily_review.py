@@ -436,13 +436,18 @@ class RecurrenceTests(unittest.TestCase):
 
     def test_likely_player_sitting_twice_in_a_week(self):
         from nba_forecast.daily_review import build_recurrence
-        self.night('2026-10-20',[('C',0,'did_not_play',.8)],[])
-        self.night('2026-10-24',[('C',0,'did_not_play',.6)],[])
-        self.night('2026-10-28',[('C',0,'did_not_play',.7)],[])
-        items=[q for q in build_recurrence(self.folder)['queue'] if q['code']=='recurring_dnp']
-        self.assertEqual([[e['date'] for e in q['evidence']] for q in items],[['2026-10-24','2026-10-28']])
-        team=build_recurrence(self.folder)['teams'][0]
-        self.assertAlmostEqual(team['expected_minutes_lost'],(.8+.6+.7)*20)
+        self.night('2026-10-20',[('C',0,'did_not_play',.9),('D',0,'did_not_play',.52)],[])
+        self.night('2026-10-24',[('C',0,'did_not_play',.9),('D',0,'did_not_play',.52)],[])
+        self.night('2026-10-26',[('C',20,'within_noise',.9),('D',20,'within_noise',.52)],[])
+        self.night('2026-10-28',[('C',0,'did_not_play',.95),('D',0,'did_not_play',.52)],[])
+        result=build_recurrence(self.folder)
+        items=[q for q in result['queue'] if q['code']=='recurring_dnp']
+        self.assertEqual([(q['player_id'],[e['date'] for e in q['evidence']]) for q in items],[('C',['2026-10-24','2026-10-28'])],'D sitting at 0.52 is expected')
+        self.assertAlmostEqual(items[0]['chance'],.1*.1*.95+2*.1*.9*.05+.1*.1*.05)
+        d=next(p for p in result['players'] if p['player_id']=='D')
+        self.assertAlmostEqual(d['dnp_chance_this_week'],.48*.48*.52+.48*.48*.48+2*.48*.52*.48)
+        team=result['teams'][0]
+        self.assertAlmostEqual(team['expected_minutes_lost'],(.9+.9+.95+.52*3)*20)
 
 
 class RecurrenceRebuildTests(NightFixture):

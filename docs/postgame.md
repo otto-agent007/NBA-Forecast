@@ -81,7 +81,8 @@ same-sign minutes misses of 6+ (noise-class nights skipped); per team, the
 team-total streak of same-sign misses of 5+ and expected minutes lost to DNPs.
 Its queue (`recurring_minutes` at three straight nights, `recurring_team_total` at
 three, `recurring_dnp` for a player at probability 0.5+ sitting twice in seven
-days) is what is worth turning into one gated experiment. It is rebuilt whenever
+days when the forecasts gave that many DNPs over the week at most a 5% chance) is
+what is worth turning into one gated experiment. It is rebuilt whenever
 a night changes, and the dashboard shows it as **Repeating**.
 
 After collecting final boxscores and player/shot data:

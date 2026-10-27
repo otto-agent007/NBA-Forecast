@@ -363,7 +363,8 @@ def _questions(games,summary):
     attempts=[p for p in volume if p.get('miss_class') not in NOISE][:10]
     explained=sorted({(p['game_id'],p['player_id']):p for p in large+volume if p.get('miss_class') in NOISE}.values(),key=lambda p:abs(p['feedback']['points_error']),reverse=True)
     queue=[]
-    squeezed=[p for p in candidates if p['forecast_status']=='projected' and p['predicted']['minutes']==0 and p['actual']['minutes']>=5 and p['rotation']['scale']==0 and (p['rotation']['protected_minutes'] or 0)>=240]
+    squeezed=[p for p in candidates if p['forecast_status']=='projected' and p['predicted']['minutes']==0 and p['actual']['minutes']>=5 and p['rotation']['scale']==0 and (p['rotation']['protected_minutes'] or 0)>=240
+              and p.get('miss_class') not in NOISE]
     if squeezed:
         queue.append(dict(code='bench_squeezed',priority='high',title='Correct rotation protection that erases active bench roles',
         evidence=[_compact(p) for p in squeezed],action='Protected roles exceed the entire team budget. Test current-game starter evidence and recent participation so supported reserves are not forced to zero by stale protected roles.'))
@@ -594,6 +595,14 @@ def _streak(appearances,key,floor):
     return dict(length=len(run),direction=('over' if run[0][key]>0 else 'under') if run else None,nights=[a['date'] for a in run])
 
 
+def _tail(probabilities,observed):
+    """Chance of at least ``observed`` DNPs when each appearance is played with its probability."""
+    counts=[1.]
+    for q in probabilities:
+        counts=[a*q+b*(1-q) for a,b in zip(counts+[0.],[0.]+counts)]
+    return sum(counts[observed:])
+
+
 def build_recurrence(directory,nights=14):
     """Thread the saved nightly reviews (never the ledger): which misses repeat across nights.
 
@@ -630,17 +639,21 @@ def build_recurrence(directory,nights=14):
     queue=[]
     for pid,rows in sorted(players.items()):
         streak=_streak(rows,'minutes_error',STREAK_MINUTES)
-        sat=[r for r in rows if not r['played'] and (r['participation_probability'] or 0)>=.5 and r['date']>=week]
+        recent=[r for r in rows if r['date']>=week and r['participation_probability'] is not None]
+        sat=[r for r in recent if not r['played'] and r['participation_probability']>=.5]
+        # A reserve at 0.52 sits twice in three games a quarter of the time; only a count the forecasts made unlikely repeats.
+        chance=_tail([r['participation_probability'] for r in recent],sum(not r['played'] for r in recent)) if len(sat)>=2 else None
         player_rows.append(dict(player_id=pid,name=rows[-1]['name'],team_id=rows[-1]['team_id'],team=rows[-1]['team'],nights=len(rows),
             mean_minutes_error=fmean(r['minutes_error'] for r in rows),mean_points_error=fmean(r['points_error'] for r in rows),
-            classes=dict(sorted(Counter(r['miss_class'] for r in rows if r['miss_class']).items())),minutes_streak=streak,likely_sat_this_week=len(sat)))
+            classes=dict(sorted(Counter(r['miss_class'] for r in rows if r['miss_class']).items())),minutes_streak=streak,likely_sat_this_week=len(sat),
+            dnp_chance_this_week=chance))
         if streak['length']>=3:
             queue.append(dict(code='recurring_minutes',player_id=pid,name=rows[-1]['name'],team=rows[-1]['team'],
                 title=f"{rows[-1]['name']}: minutes {streak['direction']} by {STREAK_MINUTES}+ on {streak['length']} straight nights",
                 evidence=[r for r in rows if r['date'] in streak['nights']]))
-        if len(sat)>=2:
-            queue.append(dict(code='recurring_dnp',player_id=pid,name=rows[-1]['name'],team=rows[-1]['team'],
-                title=f"{rows[-1]['name']}: sat out {len(sat)} times this week at probability 0.5 or more",evidence=sat))
+        if chance is not None and chance<=.05:
+            queue.append(dict(code='recurring_dnp',player_id=pid,name=rows[-1]['name'],team=rows[-1]['team'],chance=chance,
+                title=f"{rows[-1]['name']}: sat out {len(sat)} times this week at probability 0.5 or more ({chance:.1%} chance)",evidence=sat))
     team_rows=[]
     for tid,team in sorted(teams.items()):
         totals=team['totals']
@@ -659,7 +672,7 @@ def build_recurrence(directory,nights=14):
         players=player_rows,teams=team_rows,queue=queue,
         signed_error_convention='actual minus forecast; over means the actual exceeded the forecast',
         policy=f'Final-stage forecasts in the saved nightly reviews. A minutes streak counts nights missed by {STREAK_MINUTES}+ minutes the same way and skips nights a noise class explains; '
-            f'a team-total streak counts complete regulation totals missed by {STREAK_POINTS}+ points the same way. A likely DNP is a player at probability 0.5 or more who sat out in the last seven days.')
+            f'a team-total streak counts complete regulation totals missed by {STREAK_POINTS}+ points the same way. A repeated DNP is a player who sat out twice or more in the last seven days at probability 0.5 or more, when the forecasts gave that many DNPs over the week at most a 5% chance.')
     result['input_signature']=hashlib.sha256(canonical(result)).hexdigest()
     return result
 
