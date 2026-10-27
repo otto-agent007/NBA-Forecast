@@ -174,7 +174,8 @@ python -m nba_forecast backtest \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
   --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
-  --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M)
+  --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
+  --reference datasets/backtest-2026-10-27-early-season
 python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 ```
 
@@ -184,8 +185,9 @@ python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 the replay is unchanged: on 2026-10-27 the gate reproduced every row of
 `datasets/backtest-2026-10-26-absence`.
 
-First run, 2026-10-27, model 0.4.8 baseline path, all 3,674 games with T-minus-30
-reports and closing lines (ESPN, Betfair and ESPN BET closes as in the gate):
+Reference `datasets/backtest-2026-10-27-early-season/`, 2026-10-27, model 0.4.8
+baseline path, 3,676 games; the 3,674 with T-minus-30 reports and closing lines
+(the gate's closes) by window:
 
 | Window | Games | Model margin MAE | Close | Gap | Team-points bias |
 |---|---|---|---|---|---|
