@@ -185,7 +185,6 @@ def collect_sources(directory,schedule,now,*,max_games=1,budget_seconds=40):
     raw=folder/'raw'
     path=folder/'postgame'/'sources.json'
     state=json.loads(path.read_text()) if path.exists() else {}
-    archived=_archived(raw)
     # The saved calendar can still call a finished game scheduled; a cached final cannot.
     games=[g for g in schedule.get('games',[]) if g.get('start_time') and (folder/'finals'/(g['game_id']+'.json')).exists()]
     queue=[]
@@ -198,6 +197,7 @@ def collect_sources(directory,schedule,now,*,max_games=1,budget_seconds=40):
     started=time.monotonic()
     fetched=0
     errors=[]
+    archived=_archived(raw) if queue else {}
     for _,gid in sorted(queue):
         item=state.get(gid,{})
         pair=[archived.get((gid,kind)) for kind in ('playbyplay','boxscore')]
