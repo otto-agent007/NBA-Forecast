@@ -208,6 +208,10 @@ last capture before tipoff is the closing line. `market/report.json` compares
 each finished game's latest pregame forecast with its closing line: the
 model's and the market's absolute error against the final margin and total,
 the record of model leans at several edge thresholds, and winner Brier scores.
+The model margin is the published one, the margin forecast's location (the
+player sum blended with the team rating), with `player_sum_margin` beside it;
+before 2026-10-27 the report scored the player sum, which on that week's games
+read 12.15 against the published margin's 11.38.
 Leans on a small sample are not an edge. Player props are not captured; ESPN
 does not publish them.
 
