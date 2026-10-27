@@ -1,10 +1,10 @@
-# NBA-Forecast
+# Commands, demo and input formats
 
-A reproducible first version of the player forecasting lab. It ingests official
+The command-line reference for the forecasting pipeline: it ingests official
 regular-season boxscores, covers the entire supplied active roster, forecasts
 scoring through minutes and opportunities, and keeps an immutable prediction and
-evaluation ledger. **This is an initial statistical baseline, not a validated
-betting model.**
+evaluation ledger. For what the project is today and how production runs, start
+at the repository `README.md`; this page lists the commands and their inputs.
 
 Python 3.11+; standard library only. Run from the repository root; no installation,
 API key, paid model, or network connection is needed for the offline tests/demo.

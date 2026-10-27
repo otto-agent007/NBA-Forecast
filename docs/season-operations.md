@@ -414,6 +414,23 @@ User services need an active user manager; configure lingering on the host if
 runs must survive logout. These templates are not automatically installed by
 fetch-schedule or tick. A temporary chat workspace is not a 24/7 deployment.
 
+The units run a pinned copy of the package under
+`data/operations/production/runner-releases/<digest>/`, never the working tree.
+After a change is merged, deploy it with one command from the repository root:
+
+```bash
+python3 -m nba_forecast.deploy --directory data/operations/production --dry-run
+python3 -m nba_forecast.deploy --directory data/operations/production
+```
+
+It pins the release, builds the refined model artifact bound to that package
+digest from the active model's parent, backs up and repoints the activation,
+rewrites `WorkingDirectory` in both user units, reloads systemd and restarts the
+dashboard, and writes `production/deployed.json` with the commit, package digest,
+release and artifact. Run it again and it changes nothing. The next tick
+re-forecasts every pregame game under the new artifact and refits the
+prospective interval calibration, which is bound to the model key.
+
 `last-tick.json`, append-only `ticks.jsonl`, service exit status and journald
 surface failures and missed final windows. Configure your host monitor to flag
 nonzero exit status and a stale heartbeat (no finished tick for 10 minutes).

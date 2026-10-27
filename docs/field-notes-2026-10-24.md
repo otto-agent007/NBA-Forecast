@@ -24,17 +24,14 @@ this holds the reasons, the numbers and the traps. Read `AGENTS.md` first.
   (`WorkingDirectory`), never from the working tree. The dashboard's static
   assets, however, are served straight from `dashboard/dist` in the repo
   (`--assets`), so `npm run build` changes the live page without a restart.
-- Deploy recipe after a commit: `python3 -m nba_forecast.runner_release
-  --directory <prod>/runner-releases` prints the release path; from that
-  directory `python3 -m nba_forecast.refinement_upgrade --directory <prod>
-  --base-artifact e25bec66… --output data/review-candidates/<name>/artifact.json`
-  builds the 0.6.0 artifact bound to the package digest; write
-  `<prod>/model-upgrade-active.json` `{artifact_sha256, activated_at}` (back
-  the previous one up under `<prod>/activation-backups/<sha>/`), check with
-  `enhancements.load_active`, then `sed` the `WorkingDirectory` of both units,
-  `systemctl --user daemon-reload`, restart only the dashboard. The next tick
-  re-forecasts every pregame game (about 2.5 minutes of CPU once; idle ticks
-  cost 3.5 s).
+- Deploy after a merge: `python3 -m nba_forecast.deploy --directory <prod>`
+  (since 2026-10-26; `--dry-run` first). It pins the release, builds the 0.6.0
+  artifact bound to the package digest, backs up and repoints the activation,
+  rewrites both units' `WorkingDirectory`, reloads systemd, restarts the
+  dashboard and records the commit in `<prod>/deployed.json`. Production ran
+  the code of 2026-10-25 for a day because this used to be a hand recipe. The
+  next tick re-forecasts every pregame game (about 2.5 minutes of CPU once;
+  idle ticks cost 3.5 s).
 - Forecast jobs are keyed by evidence (`:evidence:<digest>` of the injury
   report edition, ESPN injury list and roster), not by time. A model
   activation re-forecasts pregame games on the next tick; games that have
