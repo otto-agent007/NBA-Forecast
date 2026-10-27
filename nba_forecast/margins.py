@@ -65,8 +65,9 @@ ABSENCE_MINIMUM_MINUTES = PARAMETERS['absence_minimum_minutes']
 
 
 def _season(time):
+    """The season a game time belongs to, by its starting year; July starts the next one, as in operations."""
     moment = parse_time(time)
-    return moment.year if moment.month >= 8 else moment.year - 1
+    return moment.year if moment.month >= 7 else moment.year - 1
 
 
 def team_ratings(samples, as_of):

@@ -110,6 +110,25 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(board['comparison']['points']['n'], board['metrics']['players']['all']['n'])
         self.assertIn('vs reference', backtest.format_scoreboard(board))
 
+    def test_a_limited_replay_reports_the_interval_score_without_gating_it(self):
+        rows = backtest.read_json(self.output / 'rows.json.gz')
+        wider = json.loads(json.dumps(rows))
+        upper = backtest.PLAYER_FIELDS.index('points_upper80')
+        for r in wider['players']:
+            if r[upper] is not None:
+                r[upper] += 10  # a worse interval score and nothing else
+        gated = backtest.compare(wider, rows)
+        self.assertEqual((gated['interval_score']['verdict'], gated['verdict']), ('worse', 'worse'))
+        reported = backtest.compare(wider, rows, ungated=backtest.LIMIT_UNGATED)
+        self.assertEqual((reported['interval_score']['verdict'], reported['verdict']), ('worse', 'within_noise'))
+        self.assertFalse(reported['interval_score']['gated'])
+        self.assertEqual(list(reported['ungated']), ['interval_score'])
+        with tempfile.TemporaryDirectory() as d:
+            board = backtest.run_backtest(self.history, self.records, Path(d) / 'l', warmup_fraction=.5,
+                                          as_of=AS_OF, reference=self.output, limit=6)
+        self.assertFalse(board['comparison']['interval_score']['gated'])
+        self.assertIn('not gated: limited replay', backtest.format_scoreboard(board))
+
     def test_margin_probabilities_are_scored_and_compared(self):
         with unittest.mock.patch.object(backtest, 'MARGIN_PRIOR_MIN_GAMES', 10), tempfile.TemporaryDirectory() as d:
             board = backtest.run_backtest(self.history, self.records, Path(d) / 'p', warmup_fraction=.5, as_of=AS_OF)
@@ -259,6 +278,49 @@ class BacktestTests(unittest.TestCase):
             backtest.run_backtest(self.history, self.records, self.folder.name + '/x', as_of='2026-01-10T00:00:00Z')
         with self.assertRaisesRegex(ValueError, 'not empty'):
             backtest.run_backtest(self.history, self.records, self.output, as_of=AS_OF)
+
+
+class MaterialityTests(unittest.TestCase):
+    def test_a_change_below_the_floor_is_noise_however_many_rows_agree(self):
+        rng = random.Random(6)
+        reference = {f'G{i:05d}:p': 5. for i in range(20000)}
+        current = {k: v * 1.002 + rng.gauss(0, .001) for k, v in reference.items()}  # 0.2% worse, tiny noise
+        without = backtest._paired(current, reference, materiality=0)
+        with_floor = backtest._paired(current, reference)
+        self.assertEqual(without['verdict'], 'worse')
+        self.assertEqual(with_floor['verdict'], 'within_noise')
+        self.assertAlmostEqual(with_floor['materiality_floor'], backtest.MATERIALITY * 5.)
+        self.assertGreater(with_floor['materiality_floor'], 2 * with_floor['se'])
+        larger = {k: v * 1.01 for k, v in reference.items()}  # 1% is material
+        self.assertEqual(backtest._paired(larger, reference)['verdict'], 'worse')
+        self.assertEqual(backtest._paired(reference, larger)['verdict'], 'improved')
+
+
+class EncompassingTests(unittest.TestCase):
+    def test_the_slope_error_is_clustered_by_date_and_never_below_ols(self):
+        rng = random.Random(8)
+        game_rows, records, lines = [], [], {}
+        for day in range(1, 31):
+            shock = rng.gauss(0, 6)  # every game that day shares a miss of the close
+            lean = rng.gauss(0, 3)  # and the model's disagreement with it is shared too (the day's news)
+            for n in range(5):
+                gid = f'D{day:02d}{n}'
+                market = rng.gauss(0, 8)
+                model = market + lean + rng.gauss(0, 1.5)
+                actual = market + shock + .1 * (model - market) + rng.gauss(0, 1)
+                game_rows.append([gid, f'H{n}', f'A{n}', model, round(actual), 15., .5])
+                records.append(dict(game_id=gid, game_time=f'2026-01-{day:02d}T23:00:00Z', season='2025-26',
+                                    home_team_id=f'H{n}', away_team_id=f'A{n}',
+                                    team_stats={f'H{n}': dict(pts=110), f'A{n}': dict(pts=110 - round(actual))}))
+                lines[gid] = dict(home_spread=-market, total=None, home_moneyline=None, away_moneyline=None)
+        e = backtest.market_metrics(game_rows, [], records, lines)['encompassing']
+        self.assertEqual(e['clusters'], 30)
+        self.assertGreater(e['se'], 1.5 * e['se_ols'])
+        self.assertGreaterEqual(e['se'], e['se_ols'])
+        # One game per date: the clustered error is the robust one, still never below OLS.
+        spread = [dict(r, game_time=f'2026-0{1 + i // 150}-{1 + i % 28:02d}T{i % 24:02d}:00:00Z') for i, r in enumerate(records)]
+        single = backtest.market_metrics(game_rows, [], spread, lines)['encompassing']
+        self.assertGreaterEqual(single['se'], single['se_ols'])
 
 
 class ClusteredStandardErrorTests(unittest.TestCase):

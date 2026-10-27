@@ -24,7 +24,12 @@ season also reports its own metrics, market comparison and verdict under
 `seasons`. The gate is the pooled verdict; a season-level `worse` under a pooled
 pass must be explained. It takes about eleven minutes. `--limit N` replays only
 the last N evaluation games of each season (CI uses 400); `--json` prints the
-full scoreboard. The exit code is 3 when the pooled verdict is `worse`.
+full scoreboard. The exit code is 3 when the pooled verdict is `worse`. A
+limited replay reports the 80% interval score but does not gate on it: the
+walk-forward interval calibration starts cold at the first replayed game where
+the full reference's was warm, so on identical code the two differ there (CI on
+2026-10-26 read +0.017 ± 0.028 with every other metric exactly zero). The full
+replay gates it.
 
 ## What it does
 
@@ -60,7 +65,15 @@ team points and margin: a bias more than two standard errors from zero that
 shrinks by at least one standard error is `improved`; one that appears or grows
 by at least one standard error is `worse`. Bias matters on
 its own for pricing, and a bias fix barely moves absolute error when game
-noise is fifteen points. The overall verdict is `worse` if any metric is
+noise is fifteen points. A change also has to be material: `improved` and `worse` need the
+mean paired change to exceed a floor of 0.5% of the reference level
+(`backtest.MATERIALITY`) as well as two standard errors, because two standard
+errors on 55,000 player-games resolve effects of a few hundredths of a percent
+and ten metrics are gated at once. On the committed references the floor would
+have changed two verdicts: the newcomers change's `worse` on minutes
+(+0.009, 0.2%) and the status-rates change's `improved` on T-minus-30 points
+(−0.0011, 0.02%), both to `within_noise`; every merged change's headline
+improvement clears it. The overall verdict is `worse` if any metric is
 worse, else `improved` if any is improved.
 
 `--market datasets/market-closing-2025-26/closing-lines.json.gz` adds

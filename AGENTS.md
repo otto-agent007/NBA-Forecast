@@ -29,7 +29,10 @@ participation or reported statuses must also pass the preliminary replay
 error, the 80% interval score, participation or winner Brier, or on points,
 team-point or margin bias, means the change is not merged. `within_noise` is acceptable only for a change whose
 purpose is not accuracy (a simplification, a bug fix, an operational fix); say
-so. `improved` is the bar for a new model feature. A change that improves the
+so. `improved` is the bar for a new model feature. A verdict needs the change to
+exceed two clustered standard errors and a materiality floor of 0.5% of the
+reference level; CI's `--limit 400` smoke run reports the interval score without
+gating it (`docs/backtest.md`). A change that improves the
 backtest is then also expected to show up in the live `performance.json`
 benchmarks after enough games; both are reported, neither is hidden.
 
