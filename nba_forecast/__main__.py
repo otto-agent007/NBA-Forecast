@@ -192,7 +192,7 @@ def main(argv=None):
         elif args.command == 'dashboard':
             from .dashboard import dashboard_data,serve_dashboard
             if args.output:
-                value=dashboard_data(args.directory)
+                value=dashboard_data(args.directory,compact=True)
                 value['source_mode']='static_capture'
             else:
                 if not 1<=args.port<=65535:raise ValueError('invalid port')

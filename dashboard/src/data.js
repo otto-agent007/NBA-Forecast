@@ -40,12 +40,6 @@ export const number = (value) =>
   typeof value === "number" && Number.isFinite(value)
     ? Number(value.toFixed(1)).toString()
     : "—";
-export const initialName = (name) =>
-  name
-    .split(/\s+/)
-    .map((x) => x[0])
-    .slice(0, 2)
-    .join("");
 export const gameDay = (game) =>
   game.start_time
     ? dateKey(game.start_time)

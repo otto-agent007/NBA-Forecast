@@ -4,7 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from nba_forecast.dashboard import dashboard_data, _current_schedule
+from nba_forecast import dashboard
+from nba_forecast.dashboard import dashboard_data, dashboard_payload, player_payload, _current_schedule
 from nba_forecast.store import save_run
 from tests.test_store import inputs,NOW
 
@@ -149,3 +150,56 @@ class DashboardTests(unittest.TestCase):
                 rid=save_run(folder/'forecast.sqlite',s,h,f)
                 save_run(folder/'forecast.sqlite',s,h,f,mode='replay')
             self.assertEqual(dashboard_data(d)['games'][0]['forecast']['run_id'],rid)
+
+    def test_scoring_a_run_does_not_rebuild_the_views_and_a_new_run_does(self):
+        from copy import deepcopy
+        from datetime import timedelta
+        from nba_forecast.store import evaluate_run
+        from tests.test_store import actual, LATER
+        s,h,f=inputs()
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);(folder/'schedule').mkdir();(folder/'players').mkdir()
+            (folder/'schedule/latest.json').write_text(json.dumps({'season':s['season'],'games':s['games']}))
+            (folder/'players/P1.json').write_text(json.dumps(dict(player_id='P1',name='Player 1',season='2026-27')))
+            with patch('nba_forecast.store._now',return_value=NOW):rid=save_run(folder/'forecast.sqlite',s,h,f)
+            with patch.object(dashboard,'_decode_run',wraps=dashboard._decode_run) as decode:
+                self.assertEqual(dashboard_data(d)['games'][0]['forecast']['run_id'],rid)
+                with patch('nba_forecast.store._now',return_value=LATER):
+                    evaluate_run(folder/'forecast.sqlite',rid,[actual('P1'),actual('P2')])
+                self.assertEqual(dashboard_data(d)['games'][0]['forecast']['run_id'],rid)
+                self.assertEqual(decode.call_count,1,'scoring changes the ledger file, not its forecasts')
+                later=deepcopy(s);later['as_of']='2026-10-22T12:30:00Z'
+                with patch('nba_forecast.store._now',return_value=NOW+timedelta(minutes=30)):
+                    second=save_run(folder/'forecast.sqlite',later,h,dict(f,as_of=later['as_of']))
+                self.assertEqual(dashboard_data(d)['games'][0]['forecast']['run_id'],second)
+                self.assertEqual(decode.call_count,2,'only the new run is decoded')
+            history=dashboard._selected_predictions(folder/'forecast.sqlite','2026-27','P1')
+            self.assertEqual([item['run_id'] for item in history.values()],[second])
+            self.assertNotIn('components',history['G1']['prediction'])
+            self.assertEqual(history['G1']['prediction']['points_mean'],20)
+            with self.assertRaises(ValueError):player_payload(d,'../forecast.sqlite')
+
+    def test_the_page_payload_is_compact_and_revalidates(self):
+        s,h,f=inputs()
+        for p in f['predictions']:
+            if p['status']=='projected':
+                p['components']=dict(history=dict(game_ids=['x']*50),uncertainty=dict(method='m'),
+                                     game_environment=dict(pace_factor=1.01,audit=dict(big=list(range(100)))))
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d);(folder/'schedule').mkdir()
+            (folder/'schedule/latest.json').write_text(json.dumps({'season':s['season'],'games':s['games']}))
+            (folder/'performance.json').write_text(json.dumps(dict(groups=[dict(season='2026-27',metrics={},matched=[1,2,3],selected_forecasts=[1])])))
+            with patch('nba_forecast.store._now',return_value=NOW):save_run(folder/'forecast.sqlite',s,h,f)
+            etag,body=dashboard_payload(d)
+            self.assertEqual((etag,body),dashboard_payload(d),'nothing changed: the same ETag and the same generated_at')
+            value=json.loads(body);game=value['games'][0]
+            self.assertNotIn('forecast',game)
+            self.assertEqual(game['forecast_stage'],'preliminary')
+            components=game['forecasts']['preliminary']['predictions'][0]['components']
+            self.assertEqual(components,dict(uncertainty=dict(method='m'),game_environment=dict(pace_factor=1.01)))
+            self.assertEqual(value['performance']['groups'][0],dict(season='2026-27',metrics={}))
+            self.assertTrue(value['generated_at'])
+            # Python callers keep the full view and the opening forecast itself.
+            full=dashboard_data(d)['games'][0]
+            self.assertIn('history',full['forecast']['predictions'][0]['components'])
+            self.assertIs(full['forecast'],full['forecasts'][full['forecast_stage']])

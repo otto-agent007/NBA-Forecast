@@ -1,4 +1,5 @@
 import React from "react";
+import { ZONE } from "./data";
 
 const points = (value) => typeof value === "number" && Number.isFinite(value)
   ? new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value)
@@ -28,7 +29,7 @@ export function MarketLines({ game }) {
             ML {odds(item.latest?.moneyline?.home?.current_odds)} / {odds(item.latest?.moneyline?.away?.current_odds)}
             {modelMargin != null && typeof spread === "number" && <> · model margin {signed(modelMargin)} ({game.home_tricode}), edge {signed(modelMargin + spread)}</>}
             {modelTotal != null && typeof total === "number" && <> · model total {modelTotal.toFixed(1)}, edge {signed(modelTotal - total)}</>}
-            <small> captured {new Date(item.latest_captured_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small>
+            <small> captured {new Date(item.latest_captured_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: ZONE })}</small>
           </p>
         );
       })}

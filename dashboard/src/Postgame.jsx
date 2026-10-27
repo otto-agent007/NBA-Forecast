@@ -16,11 +16,17 @@ export default function Postgame({ game, refreshRevision = 0 }) {
     [error, setError] = useState(""),
     [team, setTeam] = useState("all"),
     [selected, setSelected] = useState("");
+  const shown = useRef(null);
+  shown.current = data;
+  // A new game starts over; a refresh of the same game keeps what is shown
+  // until the new recap arrives, and keeps the chosen team and player.
   useEffect(() => {
     setData(null);
     setError("");
     setTeam("all");
     setSelected("");
+  }, [game?.game_id]);
+  useEffect(() => {
     if (!game) return;
     const abort = new AbortController();
     const snapshot =
@@ -36,10 +42,13 @@ export default function Postgame({ game, refreshRevision = 0 }) {
         return r.json();
       })
       .then((next) => {
-        if (!abort.signal.aborted) setData(next);
+        if (!abort.signal.aborted) {
+          setData(next);
+          setError("");
+        }
       })
       .catch((e) => {
-        if (e.name !== "AbortError") setError(e.message);
+        if (e.name !== "AbortError" && !shown.current) setError(e.message);
       });
     return () => abort.abort();
   }, [game?.game_id, refreshRevision]);

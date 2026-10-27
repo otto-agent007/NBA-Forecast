@@ -30,7 +30,7 @@ export default function MarginForecast({ game }) {
           <div><span>NO</span><strong data-testid="margin-no">{marginPercent(probability.no)}</strong></div></div>
         <div className="margin-bar" aria-hidden="true"><span style={{ width: `${probability.yes * 100}%` }} /></div>
         <p className="tiny">NO includes a margin equal to the line. A negative margin means the selected team loses.</p>
-      </div> : <p role="status">Enter a number from −50 to 50. A valid saved distribution is required.</p>}
+      </div> : <p role="status">Enter a number between {Math.max(-50, (distribution.supported_line_range?.minimum ?? -50) + 0.5)} and {Math.min(50, (distribution.supported_line_range?.maximum ?? 50) - 0.5)}. A valid saved distribution is required.</p>}
       <details><summary>Forecast evidence</summary>
         <p>{distribution.sample_count ?? 0} historical games inform the initial uncertainty estimate. {calibrated
           ? `${distribution.calibration_audit?.training_games ?? 0} saved pregame games fitted the correction; ${distribution.calibration_audit?.validation_games ?? 0} later games passed the validation gate. Future accuracy is still uncertain.`
