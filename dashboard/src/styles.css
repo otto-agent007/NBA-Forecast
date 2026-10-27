@@ -1809,6 +1809,8 @@ pre {
 .daily-review li { margin-bottom: 14px; line-height: 1.5; }
 .daily-review details { margin-top: 12px; }
 .daily-review h4 { margin-top: 24px; }
+.daily-review .group-row td { background: #f7f9fc; }
+.daily-review .group-row small { color: #657183; }
 
 /* Text for assistive technology only. */
 .sr-only {

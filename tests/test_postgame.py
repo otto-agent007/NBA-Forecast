@@ -64,3 +64,110 @@ class VerifiedPostgameTests(unittest.TestCase):
                 next(e for e in a if e['actionType']=='substitution')['personId']=999999
             with self.subTest(kind=kind),self.assertRaises(ValueError):
                 self.analyze(p)
+    def test_actions_resent_after_the_game_end_go_back_in_place(self):
+        import copy
+        p=copy.deepcopy(self.fixture['pbp'])
+        actions=p['game']['actions']
+        moved=[actions.pop(100),actions.pop(100)]
+        actions.extend(moved)
+        report=self.analyze(p)
+        expected=self.analyze()
+        self.assertEqual((report['timeline'],report['substitutions']),(expected['timeline'],expected['substitutions']))
+        broken=copy.deepcopy(self.fixture['pbp'])
+        broken['game']['actions'].insert(50,broken['game']['actions'].pop(100))
+        with self.assertRaisesRegex(ValueError,'Nonchronological'):
+            self.analyze(broken)
+    def test_closing_marker_labelled_overtime_is_ignored_only_at_the_final_score(self):
+        import copy
+        p=copy.deepcopy(self.fixture['pbp'])
+        last=p['game']['actions'][-1]
+        marker=dict(last,actionNumber=last['actionNumber']+4,actionType='game',subType='end',period=5,clock='PT00M00.00S')
+        p['game']['actions'].append(marker)
+        self.assertEqual(self.analyze(p)['home']['score'],127)
+        marker['scoreHome']=str(int(marker['scoreHome'])+1)
+        with self.assertRaises(ValueError):
+            self.analyze(p)
+
+class PostgameSourceTests(unittest.TestCase):
+    """The tick archives LiveData box score and play-by-play so build_postgames can run."""
+    def setUp(self):
+        import json,tempfile
+        from pathlib import Path
+        self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.fixture=json.loads((Path(__file__).parent/'fixtures/postgame-lakers.json').read_text())
+        self.gid=self.fixture['box']['game']['gameId']
+        self.game=dict(game_id=self.gid,status='scheduled',start_time=self.fixture['box']['game']['gameTimeUTC'])
+        self.schedule=dict(season='2026-27',games=[self.game,dict(game_id='0022600006',status='scheduled',start_time='2026-10-23T02:00:00Z')])
+        (self.folder/'finals').mkdir()
+        (self.folder/'finals'/(self.gid+'.json')).write_text('[]')
+        self.calls=[]
+        self.fail=None
+
+    def fetch(self,url,raw):
+        import json
+        from nba_forecast.data import archive_payload
+        self.calls.append(url)
+        if self.fail:
+            raise ValueError(self.fail)
+        body=json.dumps(self.fixture['pbp' if 'playbyplay' in url else 'box']).encode()
+        archive_payload(body,url,'2026-10-22T06:00:00+00:00',raw)
+        return body,'2026-10-22T06:00:00+00:00'
+
+    def collect(self,now='2026-10-22T06:00:00+00:00',**kwargs):
+        from unittest.mock import patch
+        from nba_forecast.postgame import collect_sources
+        with patch('nba_forecast.postgame._fetch',side_effect=self.fetch):
+            return collect_sources(self.folder,self.schedule,now,**kwargs)
+
+    def test_finished_game_is_archived_once_and_build_postgames_reads_it(self):
+        from unittest.mock import patch
+        from nba_forecast.postgame import build_postgames
+        first=self.collect()
+        self.assertEqual((first['fetched'],first['complete'],first['pending']),(1,1,0))
+        self.assertEqual(len(self.calls),2,'box score and play-by-play, nothing for the game without a final')
+        second=self.collect()
+        self.assertEqual((second['fetched'],second['complete']),(0,1))
+        self.assertEqual(len(self.calls),2)
+        with patch('nba_forecast.dashboard.dashboard_data',return_value=dict(games=[dict(game_id=self.gid)])):
+            index=build_postgames(self.folder)
+        self.assertEqual((index['games'],index['errors']),(1,[]))
+        import json
+        saved=json.loads((self.folder/'postgame'/(self.gid+'.json')).read_text())
+        self.assertEqual(saved['pattern'],'Late blowout')
+
+    def test_existing_archives_are_verified_without_fetching(self):
+        self.collect()
+        (self.folder/'postgame/sources.json').unlink()
+        self.calls.clear()
+        result=self.collect()
+        self.assertEqual((result['fetched'],result['complete'],self.calls),(0,1,[]))
+
+    def test_blocked_feed_is_a_retried_warning_not_a_failure(self):
+        self.fail='NBA source returned HTTP 403'
+        result=self.collect()
+        self.assertEqual((result['pending'],len(result['errors'])),(1,1))
+        self.assertIn('403',result['errors'][0]['error'])
+        self.calls.clear()
+        self.assertEqual(self.collect(now='2026-10-22T06:04:00+00:00')['fetched'],0,'waits for the retry time')
+        self.fail=None
+        later=self.collect(now='2026-10-22T06:06:00+00:00')
+        self.assertEqual((later['fetched'],later['complete']),(1,1))
+
+    def test_incomplete_archive_is_fetched_again(self):
+        import copy
+        complete=self.fixture['pbp']
+        self.fixture['pbp']=copy.deepcopy(complete)
+        self.fixture['pbp']['game']['actions']=self.fixture['pbp']['game']['actions'][:-40]
+        self.assertEqual(self.collect()['pending'],1)
+        self.fixture['pbp']=complete
+        self.assertEqual(self.collect(now='2026-10-22T06:10:00+00:00')['complete'],1)
+
+    def test_fetches_are_bounded_per_tick(self):
+        extra=[dict(game_id=f'00226000{n}',status='final',start_time=f'2026-10-2{n-10}T02:00:00Z') for n in (11,12,13)]
+        self.schedule['games']+=extra
+        for game in extra:
+            (self.folder/'finals'/(game['game_id']+'.json')).write_text('[]')
+        self.fail='offline'
+        result=self.collect(max_games=2)
+        self.assertEqual(result['fetched'],2)
+        self.assertEqual(self.calls[0],'https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_0022600013.json','newest game first')

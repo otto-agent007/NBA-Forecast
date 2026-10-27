@@ -2,8 +2,8 @@
 
 ## Daily forecast review
 
-The persistent runner builds today's and yesterday's Pacific-date reviews after
-final-result collection. The **Performance** tab shows the selected date's review:
+The persistent runner rebuilds the last four Pacific-date reviews (today and the
+three nights before) after final-result collection. The **Performance** tab shows the selected date's review:
 each game's actual score, saved preliminary/final totals, player and minutes error,
 range coverage, paired stage comparison and evidence-backed improvement questions.
 Final boxes are enough for these comparisons; detailed play-by-play coverage is
@@ -27,16 +27,63 @@ in projected-player error, and out forecasts have separate metrics.
 Reports live in `daily-reviews/YYYY-MM-DD.json`; content-hash revisions preserve
 the earlier review. The index watches final and postgame evidence plus schedule
 identity for previously reviewed dates. A later ingested correction regenerates
-that older date even after it leaves the current two-day window. This does not
+that older date even after it leaves the current four-night window. This does not
 add unbounded historical provider polling. Unchanged reports keep their timestamp.
 
 Review priorities distinguish participation, overfull protected rotations, minutes,
 attempts, and interval coverage. Components are accounting decompositions;
-small forecast attempt denominators can produce unstable terms. Do not infer
-shooting luck, injury, foul trouble or coaching decisions without supporting
-evidence. The report also flags identities reported for multiple teams on one
-date. New validated outcomes enter the existing history/calibration process;
-model formula changes still require tests and multi-game evaluation.
+small forecast attempt denominators can produce unstable terms. The report also
+flags identities reported for multiple teams on one date. New validated outcomes
+enter the existing history/calibration process; model formula changes still
+require tests and multi-game evaluation.
+
+### Signal from noise
+
+Every projected player with a final row carries a `miss_class` and its
+`miss_evidence`, first match wins:
+
+| Class | Rule | Group |
+| --- | --- | --- |
+| `did_not_play` | DNP or zero minutes | model |
+| `early_exit` | at most half the projected minutes, at most 20, and 6+ short, with evidence: a recap injury exit or a listing (out, doubtful, questionable) in the team's next frozen forecast, or a starter's last recorded exit with no later action, before the final two minutes and any garbage time, not fouled out | noise |
+| `exit_unexplained` | the same short night for a starter with no evidence; a reserve's goes on to the tests below | unexplained |
+| `blowout` | a sustained-lead window in the play-by-play, with a starter 6+ minutes under or a reserve 6+ over | noise |
+| `blowout_assumed` | the same minutes test on a final margin of 20+ when no play-by-play exists | noise |
+| `foul_trouble` | five or more fouls and 6+ minutes under | noise |
+| `role_shift` | minutes off by 8+ (`role_shift_repeated` when the team's two previous games missed the same way by 4+) | model |
+| `volume` | minutes within 5, attempts off by 5+ | model |
+| `shooting_variance` | minutes within 5, attempts within 3 | noise |
+| `within_noise` | everything else | noise |
+
+`miss_classes` gives each class's and group's share of the night's absolute
+points and minutes error. The `minutes` and `attempts` queue items list only
+model-class and unexplained misses; noise-class ones go to `explained_misses`.
+The labels read outcomes only (the final box, the play-by-play, later reports);
+they never change what is scored.
+
+`participation` weighs DNPs by the forecasts' own probabilities:
+`expected_minutes_lost` (probability times minutes over projected players who sat)
+against `expected_dnp_minutes` (what the forecasts expected to lose), the
+participation Brier against its expectation, and z-scores for the played count
+and the Brier. The `participation` queue item fires when either z-score is 2 or
+more; `participation_low` when far more players entered than expected. The raw
+`projected_dnp` count stays beside them.
+
+Each game with a verified final carries `market`: the model's margin and total
+(the market report's rows), the ESPN close, the Kalshi close and the actual. The
+top-level `market` gives the night's margin MAE for each and, for every game the
+model lost to the close by three points or more, each team's error with the
+signed points of model-class misses, noise-class misses and unprojected players.
+
+`daily-reviews/recurrence.json` threads the last 14 saved nights (never the
+ledger): per player, mean signed errors, counts by class and the current streak of
+same-sign minutes misses of 6+ (noise-class nights skipped); per team, the
+team-total streak of same-sign misses of 5+ and expected minutes lost to DNPs.
+Its queue (`recurring_minutes` at three straight nights, `recurring_team_total` at
+three, `recurring_dnp` for a player at probability 0.5+ sitting twice in seven
+days when the forecasts gave that many DNPs over the week at most a 5% chance) is
+what is worth turning into one gated experiment. It is rebuilt whenever
+a night changes, and the dashboard shows it as **Repeating**.
 
 After collecting final boxscores and player/shot data:
 
@@ -48,9 +95,12 @@ python -m nba_forecast dashboard --directory data/operations/production
 
 Select a completed game's date and the **Postgame** tab. Select a matchup, filter
 by team, and click any player for recorded substitutions and takeaways. `tick`
-also builds postgame reports after its bounded player/shot sync. Missing sources
-stay unavailable until captured. This adds no network requests beyond that sync,
-paid model calls, or automatic changes to forecasts. Unchanged input signatures
+archives the LiveData box score and play-by-play of every game with a cached
+final (`postgame.collect_sources`: one game per tick within 40 seconds, newest
+first, retried after 5 minutes doubling to 6 hours; `postgame/sources.json` keeps
+the queue) and then builds postgame reports. A game is complete once its archived
+pair passes the reconciliation below. Missing sources stay unavailable until
+captured. There are no paid model calls or automatic changes to forecasts. Unchanged input signatures
 reuse reports. Reports can be regenerated; pregame ledger records remain immutable.
 
 ## Evidence and descriptive rules

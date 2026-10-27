@@ -310,7 +310,8 @@ def dashboard_data(directory,*,compact=False):
                 runner=read_optional(folder/'last-tick.json',None),
                 performance=performance,benchmarks=read_optional(folder/'benchmarks.json',None),player_data=player_index,
                 injury_capture=read_optional(folder/'injuries/status.json',None),
-                market=read_optional(folder/'market/report.json',None),market_lines=market_lines)
+                market=read_optional(folder/'market/report.json',None),market_lines=market_lines,
+                daily_review_recurrence=read_optional(folder/'daily-reviews/recurrence.json',None))
 
 
 def dashboard_payload(directory):

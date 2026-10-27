@@ -304,6 +304,7 @@ class EvidenceTickTests(unittest.TestCase):
         self.enterContext(patch('nba_forecast.store._now',return_value=datetime.fromisoformat(NOW.replace('Z','+00:00'))))
         self.enterContext(patch('nba_forecast.player_sync.sync_player_data',return_value={'errors':[]}))
         self.enterContext(patch('nba_forecast.postgame.build_postgames',return_value={'errors':[]}))
+        self.enterContext(patch('nba_forecast.postgame.collect_sources',return_value={'errors':[]}))
 
     def test_blocked_preflight_prevents_model_execution_and_ledger_save(self):
         with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.operations.run_preflight',return_value={
