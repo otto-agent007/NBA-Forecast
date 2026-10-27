@@ -32,7 +32,8 @@ class FullBoxModelTests(unittest.TestCase):
             self.assertIsNone(p['expected_'+stat])
         self.assertIsNone(p['expected_fg3_pct'])
         self.assertIsNone(p['expected_ft_pct'])
-        snap=snapshot([player(status='out')]); result=forecast(snap,[])
+        snap=snapshot([player(status='out')])
+        result=forecast(snap,[])
         out=result['predictions'][0]
         self.assertEqual(out['expected_pf'],0)
         self.assertIsNone(out['expected_fg_pct'])
@@ -47,17 +48,22 @@ class FullBoxModelTests(unittest.TestCase):
             self.assertEqual(before['expected_'+stat],after['expected_'+stat])
 
     def test_ledger_rejects_inconsistent_full_box(self):
-        snap=snapshot();base=forecast(snap,[row(reb=8,oreb=2,dreb=6,pf=3,plus_minus=-8)])
+        snap=snapshot()
+        base=forecast(snap,[row(reb=8,oreb=2,dreb=6,pf=3,plus_minus=-8)])
         for key,value in [('expected_fgm',99),('expected_oreb',99),('expected_fg_pct',2),('expected_plus_minus',float('nan')),('expected_pf',7)]:
-            result=copy.deepcopy(base);result['predictions'][0][key]=value
-            with self.assertRaises(ValueError,msg=key):_validate_forecast(snap,result)
+            result=copy.deepcopy(base)
+            result['predictions'][0][key]=value
+            with self.assertRaises(ValueError,msg=key):
+                _validate_forecast(snap,result)
         legacy=_baseline_forecast(snap,[row()])
         _validate_forecast(snap,legacy)
         legacy['predictions'][0]['expected_fgm']=999
-        with self.assertRaises(ValueError):_validate_forecast(snap,legacy)
+        with self.assertRaises(ValueError):
+            _validate_forecast(snap,legacy)
 
     def test_feedback_scores_full_box_without_percentage_minute_decomposition(self):
-        snap=snapshot();result=forecast(snap,[row(pf=3,plus_minus=-8)])
+        snap=snapshot()
+        result=forecast(snap,[row(pf=3,plus_minus=-8)])
         actual=row(game_id='next',pf=4,plus_minus=5)
         run=dict(run_id='run',mode='replay',scope='subset',created_at=snap['as_of'],as_of=snap['as_of'])
         report=_report(run,result,[actual],1,snap['as_of'])
@@ -72,7 +78,9 @@ class FullBoxModelTests(unittest.TestCase):
         made=expected_makes([2,1,10],[.9,.9,.99],15.5)
         self.assertTrue(all(0<=m<=a for m,a in zip(made,[2,1,10])))
         self.assertAlmostEqual(sum(m*v for m,v in zip(made,[2,3,1])),15.5)
-        with self.assertRaises(ValueError):expected_makes([1,0,0],[.5,.3,.8],3)
+        with self.assertRaises(ValueError):
+            expected_makes([1,0,0],[.5,.3,.8],3)
 
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

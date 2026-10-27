@@ -42,10 +42,13 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual((r['source_url'], r['sha256']), (URL, 'b' * 64))
 
     def test_legacy_payload_uses_the_favorite_spread(self):
-        payload = summary(); entry = payload['pickcenter'][0]
+        payload = summary()
+        entry = payload['pickcenter'][0]
         for key in ('pointSpread', 'total', 'moneyline'):
             entry.pop(key)
-        entry['homeTeamOdds']['favorite'] = False; entry['awayTeamOdds']['favorite'] = True; entry['spread'] = -3.0
+        entry['homeTeamOdds']['favorite'] = False
+        entry['awayTeamOdds']['favorite'] = True
+        entry['spread'] = -3.0
         r = M.extract_game_lines(payload, GAME, '2026-27', META)[0]
         self.assertEqual((r['lines']['spread']['home']['current_line'], r['lines']['spread']['away']['current_line']), (3.0, -3.0))
         self.assertEqual(r['lines']['total']['over']['current_line'], 220.5)
@@ -131,7 +134,8 @@ class ArchiveTests(unittest.TestCase):
 class ReportTests(unittest.TestCase):
     def test_report_scores_leans_and_head_to_head_error(self):
         with tempfile.TemporaryDirectory() as d:
-            folder = Path(d); (folder / 'finals').mkdir()
+            folder = Path(d)
+            (folder / 'finals').mkdir()
             M.record_game_lines(folder, M.extract_game_lines(summary(), GAME, '2026-27', META), '2026-10-23T21:00:30Z')
             finals = [dict(game_id=GAME['game_id'], team_id='H', pts=60), dict(game_id=GAME['game_id'], team_id='H', pts=55),
                       dict(game_id=GAME['game_id'], team_id='A', pts=50), dict(game_id=GAME['game_id'], team_id='A', pts=58)]
@@ -140,7 +144,8 @@ class ReportTests(unittest.TestCase):
                 dict(team_id='H', side='home', points_mean=114), dict(team_id='A', side='away', points_mean=110)]),
                 margin_forecast=dict(home_win_probability=.6))}
             report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z', selected=selected)
-        row = report['games'][0]; s = report['summary']
+        row = report['games'][0]
+        s = report['summary']
         # Home won 115-108: margin +7 against a -2.5 spread (home covered), total 223 over 220.5.
         self.assertEqual((row['model_margin'], row['market_margin'], row['spread_edge'], row['home_covered']), (4, 2.5, 1.5, True))
         self.assertEqual((row['total_edge'], row['went_over']), (3.5, True))

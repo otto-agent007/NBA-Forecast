@@ -16,7 +16,8 @@ class ContextEffectsTests(unittest.TestCase):
         return rows
 
     def test_effects_are_fitted_and_keep_future_known_outcomes_out(self):
-        rows=self.samples();future=dict(rows[0],game_id='future',known_at='2027-01-01T00:00:00Z',actual_points=1.)
+        rows=self.samples()
+        future=dict(rows[0],game_id='future',known_at='2027-01-01T00:00:00Z',actual_points=1.)
         a=fit_context(rows,as_of='2026-10-23T21:00:00Z',minimum_games=100,ridge=.001)
         b=fit_context(rows+[future],as_of='2026-10-23T21:00:00Z',minimum_games=100,ridge=.001)
         self.assertEqual(a['coefficients'],b['coefficients'])

@@ -9,7 +9,9 @@ from nba_forecast.runner_release import pin_release
 class RunnerReleaseTests(unittest.TestCase):
     def test_running_package_is_unchanged_when_worktree_modules_change(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d);package=root/'source/nba_forecast';package.mkdir(parents=True)
+            root=Path(d)
+            package=root/'source/nba_forecast'
+            package.mkdir(parents=True)
             (package/'__init__.py').write_text('')
             (package/'model.py').write_text('VERSION=1\n')
             (package/'late_import.py').write_text('VERSION=1\n')
@@ -22,8 +24,12 @@ class RunnerReleaseTests(unittest.TestCase):
 
     def test_existing_release_is_verified_before_reuse(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d);package=root/'source';package.mkdir();(package/'__init__.py').write_text('')
+            root=Path(d)
+            package=root/'source'
+            package.mkdir()
+            (package/'__init__.py').write_text('')
             release=pin_release(package,root/'releases')
             self.assertEqual(pin_release(package,root/'releases'),release)
             (release/'nba_forecast/__init__.py').write_text('corrupt')
-            with self.assertRaises(ValueError):pin_release(package,root/'releases')
+            with self.assertRaises(ValueError):
+                pin_release(package,root/'releases')

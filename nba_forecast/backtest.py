@@ -247,9 +247,12 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     if projected:
                         t = totals[p['team_id']]
                         weight = 1.0 if probability is None else probability
-                        t['projected'] += weight * p['points_mean']; t['count'] += 1; t['covered'] += a['pts']
+                        t['projected'] += weight * p['points_mean']
+                        t['count'] += 1
+                        t['covered'] += a['pts']
                 if residual_days and residual_days[-1][0] == day:
-                    residual_days[-1][1].extend(residuals); residual_days[-1][2].add(game['game_id'])
+                    residual_days[-1][1].extend(residuals)
+                    residual_days[-1][2].add(game['game_id'])
                 else:
                     residual_days.append((day, residuals, {game['game_id']}))
                 # Team points as production publishes them (totals.game_totals): the weighted player sum
@@ -588,8 +591,10 @@ def _point_differential_margins(records, game_ids, min_games=10):
             if gid in game_ids and h[1] >= min_games and a[1] >= min_games and home_margins[season]:
                 margins[gid] = fmean(home_margins[season]) + h[0] / h[1] - a[0] / a[1]
         for gid, home, away, margin in games:
-            totals[(season, home)][0] += margin; totals[(season, home)][1] += 1
-            totals[(season, away)][0] -= margin; totals[(season, away)][1] += 1
+            totals[(season, home)][0] += margin
+            totals[(season, home)][1] += 1
+            totals[(season, away)][0] -= margin
+            totals[(season, away)][1] += 1
             home_margins[season].append(margin)
     return margins
 
@@ -710,7 +715,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})
-        totals['total'] += replayed['total_games']; totals['evaluated'] += replayed['evaluated_games']
+        totals['total'] += replayed['total_games']
+        totals['evaluated'] += replayed['evaluated_games']
         for k, v in replayed['skipped'].items():
             skipped[k] += v
         seasons_seen = Counter(r['season'] for r in season['records'])
@@ -765,7 +771,8 @@ def sha256_of(path):
 
 def format_scoreboard(board):
     """A short readable table for the terminal."""
-    m = board['metrics'];lines = []
+    m = board['metrics']
+    lines = []
     lines.append(f"games evaluated {board['games']['evaluated']} of {board['games']['total']}  model {board['model_version']}  code {board['code_sha256'][:12]}")
     lines.append(f"{'players (played)':18s} {'n':>6s} {'pts MAE':>8s} {'bias':>6s} {'min MAE':>8s} {'cov80':>6s} {'width':>6s}")
     for name, item in [('all', m['players']['all'])] + list(m['players']['by_expected_minutes'].items()):
@@ -799,7 +806,8 @@ def format_scoreboard(board):
             brier = f"{item['winner_brier']:.4f}" if item.get('winner_brier') is not None else '  -   '
             return f"  {name:24s} margin MAE {item['margin_mae']:6.2f}  winners {item['winner_accuracy']:.1%}  Brier {brier}"
         lines.append(f"market (same {mk['n']} games, closing line):")
-        lines.append(row('model', mk['model']));lines.append(row('closing line', mk['market']))
+        lines.append(row('model', mk['model']))
+        lines.append(row('closing line', mk['market']))
         nv = mk.get('naive_point_differential')
         if nv:
             lines.append(row(f"point differential (n={nv['n']})", nv) + f"  (model on those {nv['model_margin_mae']:.2f})")

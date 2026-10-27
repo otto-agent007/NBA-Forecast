@@ -120,7 +120,8 @@ class MarginSourceTests(unittest.TestCase):
 
     def test_future_known_and_duplicate_games_cannot_supply_support(self):
         source = records()
-        future = deepcopy(source[0]); future['game_id'] = 'future'
+        future = deepcopy(source[0])
+        future['game_id'] = 'future'
         future['known_at'] = '2026-03-01T00:00:00Z'
         value = margins.prepare_margin_inputs(source + [future], AS_OF, MODEL_KEY)
         self.assertEqual(value['sample_count'], 100)
@@ -142,7 +143,8 @@ class MarginSourceTests(unittest.TestCase):
         ]
         for alter in alterations:
             with self.subTest(alter=alter):
-                source = records(); alter(source[0])
+                source = records()
+                alter(source[0])
                 value = margins.prepare_margin_inputs(source, AS_OF, MODEL_KEY)
                 self.assertEqual(value['sample_count'], 99)
                 self.assertEqual(value['status'], 'unavailable')
@@ -155,7 +157,8 @@ class MarginSourceTests(unittest.TestCase):
         value = margins.prepare_margin_inputs(source, AS_OF, MODEL_KEY)
         self.assertEqual(value['status'], 'unavailable')
         for key in ('', None, True):
-            with self.assertRaises(ValueError): margins.prepare_margin_inputs(records(), AS_OF, key)
+            with self.assertRaises(ValueError):
+                margins.prepare_margin_inputs(records(), AS_OF, key)
 
 
 class MarginForecastTests(unittest.TestCase):
@@ -206,9 +209,12 @@ class MarginForecastTests(unittest.TestCase):
     def test_partial_or_missing_team_withholds_probabilities(self):
         for missing in ('minutes', 'team', 'unknown'):
             snapshot, result = forecast_inputs()
-            if missing == 'minutes': result['predictions'][0]['expected_minutes'] = 47.9
-            if missing == 'team': result['predictions'] = result['predictions'][:5]
-            if missing == 'unknown': result['predictions'].append(dict(game_id='next', team_id='H',
+            if missing == 'minutes':
+                result['predictions'][0]['expected_minutes'] = 47.9
+            if missing == 'team':
+                result['predictions'] = result['predictions'][:5]
+            if missing == 'unknown':
+                result['predictions'].append(dict(game_id='next', team_id='H',
                 player_id='Q', status='needs_review', points_mean=None, expected_minutes=None))
             with self.subTest(missing=missing):
                 value = margins.build_margin_forecasts(snapshot, result)[0]
@@ -238,11 +244,16 @@ class MarginForecastTests(unittest.TestCase):
     def test_missing_mismatched_tampered_and_future_inputs_are_unavailable(self):
         for defect in ('missing', 'model', 'tamper', 'future', 'late_game'):
             snapshot, result = forecast_inputs()
-            if defect == 'missing': snapshot['model_enhancements'].pop('margin_inputs')
-            if defect == 'model': result['model_key'] = 'different'
-            if defect == 'tamper': snapshot['model_enhancements']['margin_inputs']['standard_deviation'] *= .1
-            if defect == 'future': snapshot['model_enhancements']['margin_inputs'] = margins.prepare_margin_inputs(records(), '2026-02-03T00:00:00Z', MODEL_KEY)
-            if defect == 'late_game': snapshot['games'][0]['start_time'] = '2026-01-31T00:00:00Z'
+            if defect == 'missing':
+                snapshot['model_enhancements'].pop('margin_inputs')
+            if defect == 'model':
+                result['model_key'] = 'different'
+            if defect == 'tamper':
+                snapshot['model_enhancements']['margin_inputs']['standard_deviation'] *= .1
+            if defect == 'future':
+                snapshot['model_enhancements']['margin_inputs'] = margins.prepare_margin_inputs(records(), '2026-02-03T00:00:00Z', MODEL_KEY)
+            if defect == 'late_game':
+                snapshot['games'][0]['start_time'] = '2026-01-31T00:00:00Z'
             with self.subTest(defect=defect):
                 self.assertEqual(margins.build_margin_forecasts(snapshot, result)[0]['status'], 'unavailable')
 
@@ -317,14 +328,20 @@ class MarginEventTests(unittest.TestCase):
         for line in (float('nan'), float('inf'), True, '', 'NaN', None):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 margins.probability_above(small_distribution(), 'H', line)
-        with self.assertRaises(ValueError): margins.probability_above(small_distribution(), 'X', 7)
+        with self.assertRaises(ValueError):
+            margins.probability_above(small_distribution(), 'X', 7)
         for defect in ('tie', 'duplicate', 'negative', 'sum', 'scope'):
             value = small_distribution()
-            if defect == 'tie': value['pmf'][0]['margin'] = 0
-            if defect == 'duplicate': value['pmf'][0]['margin'] = -1
-            if defect == 'negative': value['pmf'][0]['probability'] = -.1
-            if defect == 'sum': value['pmf'][0]['probability'] = .2
-            if defect == 'scope': value['settlement'] = 'regulation'
+            if defect == 'tie':
+                value['pmf'][0]['margin'] = 0
+            if defect == 'duplicate':
+                value['pmf'][0]['margin'] = -1
+            if defect == 'negative':
+                value['pmf'][0]['probability'] = -.1
+            if defect == 'sum':
+                value['pmf'][0]['probability'] = .2
+            if defect == 'scope':
+                value['settlement'] = 'regulation'
             with self.subTest(defect=defect), self.assertRaises(ValueError):
                 margins.probability_above(value, 'H', 7)
 

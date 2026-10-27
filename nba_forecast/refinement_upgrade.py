@@ -20,7 +20,8 @@ from .validation import parse_time
 def build_artifact(base, parent_digest, as_of):
     if base.get('model_version')!=LEGACY_ENHANCED_VERSION:
         raise ValueError('Refinement upgrade requires the established 0.5.0 base artifact')
-    if parse_time(base['known_at'])>parse_time(as_of):raise ValueError('Base model is future-known')
+    if parse_time(base['known_at'])>parse_time(as_of):
+        raise ValueError('Base model is future-known')
     if not isinstance(parent_digest,str) or not re.fullmatch('[a-f0-9]{64}',parent_digest):
         raise ValueError('Parent artifact hash is invalid')
     configuration=dict(model_version=REFINED_VERSION, parent_artifact_sha256=parent_digest,
@@ -45,15 +46,19 @@ def main():
     parser.add_argument('--base-artifact',help='Archived 0.5.0 parent SHA256 when preparing another reviewed code release')
     args=parser.parse_args()
     output=Path(args.output)
-    if output.exists():parser.error('Output already exists; preserve the prior candidate')
+    if output.exists():
+        parser.error('Output already exists; preserve the prior candidate')
     now=datetime.now(timezone.utc).isoformat()
     if args.base_artifact:
-        digest=args.base_artifact;base=_read(args.directory,digest,now)
+        digest=args.base_artifact
+        base=_read(args.directory,digest,now)
     else:
         base,digest=load_active(args.directory,now)
         if base and base['model_version']==REFINED_VERSION:
-            digest=base['parent_artifact_sha256'];base=_read(args.directory,digest,now)
-    if base is None:parser.error('No active base model')
+            digest=base['parent_artifact_sha256']
+            base=_read(args.directory,digest,now)
+    if base is None:
+        parser.error('No active base model')
     artifact=build_artifact(base,digest,now)
     installed=install_artifact(args.directory,artifact)
     atomic_json(output,artifact)
@@ -61,4 +66,5 @@ def main():
         model_key=artifact['model_key'],runner_package_sha256=artifact['runner_package_sha256'],activated=False)))
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    main()

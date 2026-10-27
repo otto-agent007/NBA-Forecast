@@ -31,17 +31,26 @@ class ResearchGameDataTests(unittest.TestCase):
     def test_missing_counts_scores_duplicate_rows_and_wrong_dates_are_rejected(self):
         rows,_,summary,meta=fixture()
         variants=[]
-        missing=copy.deepcopy(summary);missing['boxscore']['teams'][0]['statistics'].pop(2);variants.append((rows,missing))
-        wrong=copy.deepcopy(summary);wrong['header']['competitions'][0]['competitors'][0]['score']='111';variants.append((rows,wrong))
-        wrong=copy.deepcopy(summary);wrong['header']['competitions'][0]['date']='2025-10-23T01:00Z';variants.append((rows,wrong))
+        missing=copy.deepcopy(summary)
+        missing['boxscore']['teams'][0]['statistics'].pop(2)
+        variants.append((rows,missing))
+        wrong=copy.deepcopy(summary)
+        wrong['header']['competitions'][0]['competitors'][0]['score']='111'
+        variants.append((rows,wrong))
+        wrong=copy.deepcopy(summary)
+        wrong['header']['competitions'][0]['date']='2025-10-23T01:00Z'
+        variants.append((rows,wrong))
         variants.append((rows+[rows[0]],summary))
         for history,payload in variants:
-            with self.subTest(payload=payload),self.assertRaises(ValueError):data.join_summary(history,payload,{'H':'H','A':'A'},meta)
+            with self.subTest(payload=payload),self.assertRaises(ValueError):
+                data.join_summary(history,payload,{'H':'H','A':'A'},meta)
 
     def test_collection_is_bounded_and_manifest_records_unmatched_game(self):
-        rows,board,summary,meta=fixture();calls=[]
+        rows,board,summary,meta=fixture()
+        calls=[]
         def fetch(url,*args,**kwargs):
-            calls.append(url);return (board if 'scoreboard?' in url else summary),meta
+            calls.append(url)
+            return (board if 'scoreboard?' in url else summary),meta
         with tempfile.TemporaryDirectory() as folder:
             records,manifest=data.collect_team_games(rows,{'H':'H','A':'A'},folder,workers=2,fetch=fetch)
             self.assertEqual(manifest['matched_games'],1)
@@ -57,18 +66,23 @@ class ResearchIntegrityTests(unittest.TestCase):
     def test_incomplete_minutes_and_nonfinal_summaries_are_rejected(self):
         rows,_,summary,meta=fixture()
         rows[0]['minutes']=230
-        with self.assertRaisesRegex(ValueError,'minutes'):data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
-        rows,_,summary,meta=fixture();summary['header']['competitions'][0]['status']['type']['completed']=False
-        with self.assertRaisesRegex(ValueError,'final'):data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
+        with self.assertRaisesRegex(ValueError,'minutes'):
+            data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
+        rows,_,summary,meta=fixture()
+        summary['header']['competitions'][0]['status']['type']['completed']=False
+        with self.assertRaisesRegex(ValueError,'final'):
+            data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
 
     def test_same_team_on_both_summary_sides_is_rejected(self):
         rows,_,summary,meta=fixture()
         summary['header']['competitions'][0]['competitors'][1]=copy.deepcopy(summary['header']['competitions'][0]['competitors'][0])
         summary['header']['competitions'][0]['competitors'][1]['homeAway']='away'
-        with self.assertRaisesRegex(ValueError,'pair'):data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
+        with self.assertRaisesRegex(ValueError,'pair'):
+            data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
 
     def test_actual_latest_observation_is_never_backdated(self):
-        rows,_,summary,meta=fixture();rows[0]['known_at']='2026-12-01T00:00:00Z'
+        rows,_,summary,meta=fixture()
+        rows[0]['known_at']='2026-12-01T00:00:00Z'
         result=data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
         self.assertEqual(result['known_at'],'2026-12-01T00:00:00Z')
 
@@ -86,8 +100,11 @@ class ResearchTurnoverTests(unittest.TestCase):
         for value in (None,'16'):
             rows,_,summary,meta=fixture()
             stats=summary['boxscore']['teams'][0]['statistics']
-            if value is None:summary['boxscore']['teams'][0]['statistics']=[s for s in stats if s['name']!='totalTurnovers']
+            if value is None:
+                summary['boxscore']['teams'][0]['statistics']=[s for s in stats if s['name']!='totalTurnovers']
             else:
                 for s in stats:
-                    if s['name']=='totalTurnovers':s['displayValue']=value
-            with self.assertRaisesRegex(ValueError,'turnover'):data.join_summary(rows,summary,{'H':'H','A':'A'},meta)
+                    if s['name']=='totalTurnovers':
+                        s['displayValue']=value
+            with self.assertRaisesRegex(ValueError,'turnover'):
+                data.join_summary(rows,summary,{'H':'H','A':'A'},meta)

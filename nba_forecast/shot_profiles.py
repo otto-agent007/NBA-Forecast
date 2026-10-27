@@ -91,9 +91,12 @@ def _read_raw(directory,metadata,gid):
     if not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):
         raise ValueError('Shot raw evidence hash is invalid')
     url=metadata['source_url']
-    if url==full_boxscore_url(gid):suffix='.html'
-    elif url in (playbyplay_url(gid),boxscore_url(gid)):suffix='.json'
-    else:raise ValueError('Shot raw source URL does not match this NBA game')
+    if url==full_boxscore_url(gid):
+        suffix='.html'
+    elif url in (playbyplay_url(gid),boxscore_url(gid)):
+        suffix='.json'
+    else:
+        raise ValueError('Shot raw source URL does not match this NBA game')
     path=Path(directory)/'raw'/(digest+suffix)
     raw=path.read_bytes()
     if len(raw)>MAX_BYTES or hashlib.sha256(raw).hexdigest()!=digest:
@@ -144,7 +147,8 @@ def _replay(directory,source,history,context):
         # Home/away are explicitly identified by the official page. History
         # independently binds the game, tipoff, person, team, and opponent IDs.
         from .data import _NextDataParser
-        parser=_NextDataParser();parser.feed(raw.decode('utf-8'))
+        parser=_NextDataParser()
+        parser.feed(raw.decode('utf-8'))
         embedded=json.loads(''.join(parser.parts))['props']['pageProps']['game']
         game=dict(game_id=gid,start_time=history[0]['game_time'],season_type='Regular Season',
                   home_team_id=str(embedded['homeTeam']['teamId']),away_team_id=str(embedded['awayTeam']['teamId']))
@@ -157,7 +161,8 @@ def _replay(directory,source,history,context):
         pbp_url,box_url=playbyplay_url(gid),boxscore_url(gid)
         if set(raw_sources)!={pbp_url,box_url}:
             raise ValueError('Shot replay requires paired official play-by-play and final boxscore')
-        raw,pbp_meta=raw_sources[pbp_url];boxraw,box_meta=raw_sources[box_url]
+        raw,pbp_meta=raw_sources[pbp_url]
+        boxraw,box_meta=raw_sources[box_url]
         known=max((pbp_meta['retrieved_at'],box_meta['retrieved_at']),key=parse_time)
         box=json.loads(boxraw)
         home,away=(str(box['game'][side+'Team']['teamId']) for side in ('home','away'))
@@ -190,14 +195,19 @@ def _replay(directory,source,history,context):
 
 
 def _zone(shot):
-    points=shot['points'];x,y=shot['x'],shot['y']
-    if x is None or y is None:return f'unlocated_{points}pt'
+    points=shot['points']
+    x,y=shot['x'],shot['y']
+    if x is None or y is None:
+        return f'unlocated_{points}pt'
     distance=math.hypot(x,y)
     if points==2:
-        if distance<=40:return 'near_basket_2pt'
-        if abs(x)<=80 and -52.5<=y<=137.5:return 'paint_2pt'
+        if distance<=40:
+            return 'near_basket_2pt'
+        if abs(x)<=80 and -52.5<=y<=137.5:
+            return 'paint_2pt'
         return 'midrange_2pt'
-    if abs(x)>=220 and y<=87.5:return 'left_corner_3pt' if x<0 else 'right_corner_3pt'
+    if abs(x)>=220 and y<=87.5:
+        return 'left_corner_3pt' if x<0 else 'right_corner_3pt'
     return 'long_range_3pt' if distance>350 else 'above_break_3pt'
 
 
@@ -213,7 +223,8 @@ def _assemble(snapshot,context,records):
                 players[pid]['games']+=1
                 players[pid]['game_ids'].append(manifest['game_id'])
         for shot in replay['shots']:
-            if shot['player_id'] not in players:continue
+            if shot['player_id'] not in players:
+                continue
             player=players[shot['player_id']]
             name=_zone(shot)
             zone=player['zones'].setdefault(name,dict(zone=name,label=LABELS[name],points=shot['points'],
@@ -224,7 +235,8 @@ def _assemble(snapshot,context,records):
                 target['located_attempts']+=int(shot['x'] is not None and shot['y'] is not None)
     result=[]
     for pid in sorted(players):
-        player=players[pid];player['zones']=[player['zones'][k] for k in sorted(player['zones'])]
+        player=players[pid]
+        player['zones']=[player['zones'][k] for k in sorted(player['zones'])]
         player['game_ids'].sort()
         result.append(player)
     return dict(schema_version=VERSION,prepared_at=snapshot['as_of'],season=snapshot['season'],method=METHOD,
@@ -253,22 +265,29 @@ def _prepared_snapshot(snapshot,supplied):
 
 def prepare_shot_profiles(directory,snapshot,history):
     """Capture successful eligible shot collections in immutable evidence files."""
-    context=_context(snapshot,history);records=[]
+    context=_context(snapshot,history)
+    records=[]
     for path in sorted((Path(directory)/'shots').glob('*.json')):
-        raw=path.read_bytes();source=json.loads(raw)
-        if source.get('missing_reason') or not _eligible(source,context):continue
+        raw=path.read_bytes()
+        source=json.loads(raw)
+        if source.get('missing_reason') or not _eligible(source,context):
+            continue
         gid=source['game_id']
-        if path.stem!=gid:raise ValueError('Shot collection filename and game identity disagree')
+        if path.stem!=gid:
+            raise ValueError('Shot collection filename and game identity disagree')
         rows=context['history'].get(gid,[])
-        if not any(r['player_id'] in context['roster'] for r in rows):continue
+        if not any(r['player_id'] in context['roster'] for r in rows):
+            continue
         replay,raw_sources,known=_replay(directory,source,rows,context)
         digest=hashlib.sha256(raw).hexdigest()
         archived=Path(directory)/'shot-evidence'/(digest+'.json')
         archived.parent.mkdir(parents=True,exist_ok=True)
         if archived.exists():
-            if archived.read_bytes()!=raw:raise ValueError('Immutable shot evidence archive hash differs')
+            if archived.read_bytes()!=raw:
+                raise ValueError('Immutable shot evidence archive hash differs')
         else:
-            with archived.open('xb') as stream:stream.write(raw)
+            with archived.open('xb') as stream:
+                stream.write(raw)
         records.append((_manifest(source,digest,raw_sources,known),replay))
     return _assemble(snapshot,context,records)
 
@@ -276,20 +295,27 @@ def prepare_shot_profiles(directory,snapshot,history):
 def verify_shot_profiles(snapshot,history,directory):
     """Rebuild captured input from immutable files and replay its raw evidence."""
     supplied=snapshot.get('shot_profiles')
-    if supplied is None:return
+    if supplied is None:
+        return
     prepared_snapshot=_prepared_snapshot(snapshot,supplied)
-    context=_context(prepared_snapshot,history);records=[];seen=set()
+    context=_context(prepared_snapshot,history)
+    records=[]
+    seen=set()
     for manifest in supplied['sources']:
-        gid=manifest['game_id'];digest=manifest['sha256']
-        if gid in seen:raise ValueError('Duplicate shot profile source game')
+        gid=manifest['game_id']
+        digest=manifest['sha256']
+        if gid in seen:
+            raise ValueError('Duplicate shot profile source game')
         seen.add(gid)
         if (not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest)
                 or parse_time(manifest['known_at'])>context['cutoff']):
             raise ValueError('Shot profile source hash or cutoff is invalid')
         raw=(Path(directory)/'shot-evidence'/(digest+'.json')).read_bytes()
-        if hashlib.sha256(raw).hexdigest()!=digest:raise ValueError('Shot evidence archive hash mismatch')
+        if hashlib.sha256(raw).hexdigest()!=digest:
+            raise ValueError('Shot evidence archive hash mismatch')
         source=json.loads(raw)
-        if source['game_id']!=gid:raise ValueError('Shot profile source game differs from archive')
+        if source['game_id']!=gid:
+            raise ValueError('Shot profile source game differs from archive')
         rows=context['history'].get(gid,[])
         if not any(r['player_id'] in context['roster'] for r in rows):
             raise ValueError('Shot profile source has no eligible slate player history')
@@ -303,13 +329,15 @@ def verify_shot_profiles(snapshot,history,directory):
 def apply_shot_profiles(result,snapshot):
     """Allocate existing expected 2PA/3PA; leave every scoring estimate unchanged."""
     supplied=snapshot.get('shot_profiles')
-    if supplied is None:return result
+    if supplied is None:
+        return result
     _prepared_snapshot(snapshot,supplied)
     profiles={p['player_id']:p for p in supplied['players']}
     output=copy.deepcopy(result)
     for row in output['predictions']:
         row['modeled_shot_profile']=None
-        if row['status'] not in ('projected','out'):continue
+        if row['status'] not in ('projected','out'):
+            continue
         observed=profiles.get(row['player_id'])
         if observed is None or observed['team_id']!=row['team_id']:
             raise ValueError('Projected player lacks a matching prepared shot profile')

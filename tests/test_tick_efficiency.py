@@ -23,7 +23,8 @@ def at(clock,seconds=0):
 
 class EvaluationTests(unittest.TestCase):
     def setUp(self):
-        self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()));self.db=self.folder/'forecast.sqlite'
+        self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.db=self.folder/'forecast.sqlite'
         snapshot,past,forecast=inputs()
         with patch('nba_forecast.store._now',return_value=SAVED):
             self.run_id=store.save_run(self.db,snapshot,past,forecast)
@@ -53,7 +54,8 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(self.revisions(),2)
 
     def test_a_revision_written_elsewhere_rescores_the_run(self):
-        self.finals([actual()]);self.evaluate()
+        self.finals([actual()])
+        self.evaluate()
         store.evaluate_run(self.db,self.run_id,[actual('P2')])
         self.assertEqual(self.evaluate()['evaluated_runs'],1)
 
@@ -67,13 +69,16 @@ class DerivedReportTests(unittest.TestCase):
     def setUp(self):
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.schedule=dict(season='2026-27',games=[dict(game_id='G1',start_time='2026-10-22T18:00:00Z')])
-        self.builds=0;self.clock='2026-10-22T20:00:00+00:00'
+        self.builds=0
+        self.clock='2026-10-22T20:00:00+00:00'
 
     def build(self,folder,db,schedule,active_model,model_digest,report):
         self.builds+=1
         for name in ('performance.json','benchmarks.json','daily-reviews/index.json','market/report.json'):
-            (folder/name).parent.mkdir(parents=True,exist_ok=True);(folder/name).write_text('{}')
-        report['daily_review']=dict(build=self.builds);report['errors'].append(dict(task='daily_review',date='x'))
+            (folder/name).parent.mkdir(parents=True,exist_ok=True)
+            (folder/name).write_text('{}')
+        report['daily_review']=dict(build=self.builds)
+        report['errors'].append(dict(task='daily_review',date='x'))
 
     def refresh(self,**extra):
         report=dict(errors=[],warnings=[],**extra)
@@ -83,7 +88,8 @@ class DerivedReportTests(unittest.TestCase):
         return report
 
     def test_unchanged_inputs_reuse_reports_errors_and_summaries(self):
-        first=self.refresh();second=self.refresh()
+        first=self.refresh()
+        second=self.refresh()
         self.assertEqual(self.builds,1)
         self.assertEqual(second['derived_reports']['status'],'unchanged')
         self.assertEqual(second['daily_review'],first['daily_review'])
@@ -91,27 +97,39 @@ class DerivedReportTests(unittest.TestCase):
 
     def test_new_evidence_missing_output_age_or_recovery_rebuilds(self):
         self.refresh()
-        (self.folder/'finals').mkdir();(self.folder/'finals/G1.json').write_text('[]');self.refresh()
-        (self.folder/'performance.json').unlink();self.refresh()
-        self.clock=at(self.clock,operations.DERIVED_REFRESH_SECONDS+1);self.refresh()
+        (self.folder/'finals').mkdir()
+        (self.folder/'finals/G1.json').write_text('[]')
+        self.refresh()
+        (self.folder/'performance.json').unlink()
+        self.refresh()
+        self.clock=at(self.clock,operations.DERIVED_REFRESH_SECONDS+1)
+        self.refresh()
         self.refresh(recovered_artifacts=1)
-        self.schedule['games'][0]['start_time']='2026-10-22T19:00:00Z';self.refresh()
+        self.schedule['games'][0]['start_time']='2026-10-22T19:00:00Z'
+        self.refresh()
         self.assertEqual(self.builds,6)
-        self.refresh();self.assertEqual(self.builds,6)
+        self.refresh()
+        self.assertEqual(self.builds,6)
 
     def test_only_game_archives_and_changed_finals_bytes_rebuild(self):
-        raw=self.folder/'raw';raw.mkdir();(self.folder/'finals').mkdir()
-        (self.folder/'finals/G1.json').write_text('[]');self.refresh()
+        raw=self.folder/'raw'
+        raw.mkdir()
+        (self.folder/'finals').mkdir()
+        (self.folder/'finals/G1.json').write_text('[]')
+        self.refresh()
         (raw/'a.provenance.json').write_text(json.dumps(dict(source_url='https://www.nba.com/team/1/roster')))
-        (self.folder/'finals/G1.json').write_text('[]');self.refresh()
+        (self.folder/'finals/G1.json').write_text('[]')
+        self.refresh()
         self.assertEqual(self.builds,1)
         (raw/'b.provenance.json').write_text(json.dumps(dict(
             source_url='https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_0022600001.json')))
-        self.refresh();self.assertEqual(self.builds,2)
+        self.refresh()
+        self.assertEqual(self.builds,2)
 
     def test_cross_check_metadata_alone_does_not_rebuild(self):
         self.refresh()
-        self.schedule['games'][0]['schedule_corroboration']=dict(observed_at=self.clock);self.refresh()
+        self.schedule['games'][0]['schedule_corroboration']=dict(observed_at=self.clock)
+        self.refresh()
         self.assertEqual(self.builds,1)
 
 
@@ -124,9 +142,11 @@ class DailyCalendarTests(unittest.TestCase):
 
     def calendar(self,clock,nba=None,espn=None):
         """clock is Pacific wall time; returns (schedule version, NBA calls, ESPN calls, report)."""
-        report=dict(warnings=[]);when=datetime.fromisoformat(clock).replace(tzinfo=operations.PACIFIC).astimezone(timezone.utc).isoformat()
+        report=dict(warnings=[])
+        when=datetime.fromisoformat(clock).replace(tzinfo=operations.PACIFIC).astimezone(timezone.utc).isoformat()
         def secondary(*args):
-            if isinstance(espn,Exception):raise espn
+            if isinstance(espn,Exception):
+                raise espn
             (self.folder/'schedule/secondary/verified-latest.json').write_text(json.dumps(self.verified))
             return self.verified
         with patch('nba_forecast.operations._now',return_value=when),patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])),\
@@ -158,7 +178,8 @@ class DailyCalendarTests(unittest.TestCase):
         self.assertEqual(self.calendar('2026-10-24T09:16:00')[:2],('saved',0))
 
     def test_backoff_is_capped(self):
-        state=dict(consecutive_failures=20);(self.folder/'schedule/fetch-state.json').write_text(json.dumps(state))
+        state=dict(consecutive_failures=20)
+        (self.folder/'schedule/fetch-state.json').write_text(json.dumps(state))
         self.calendar('2026-10-24T09:00:00',nba=ValueError('403'),espn=ValueError('down'))
         saved=json.loads((self.folder/'schedule/fetch-state.json').read_text())
         self.assertEqual(saved['next_attempt_at'],at('2026-10-24T16:00:00+00:00',operations.CALENDAR_RETRY_SECONDS[1]))
@@ -173,9 +194,13 @@ class DailyCalendarTests(unittest.TestCase):
 class FailedJobTests(unittest.TestCase):
     def test_a_failed_job_waits_for_its_next_slot_and_a_moved_tipoff_requests_a_check(self):
         from tests.test_store import inputs
-        schedule=normalize_season(payload([game()]),NOW);schedule['version']='v1'
-        roster=inputs()[0]['roster'];roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
-        for p,t in zip(roster['players'],roster['team_ids']):p['team_id']=t;p['status']='unknown'
+        schedule=normalize_season(payload([game()]),NOW)
+        schedule['version']='v1'
+        roster=inputs()[0]['roster']
+        roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
+        for p,t in zip(roster['players'],roster['team_ids']):
+            p['team_id']=t
+            p['status']='unknown'
         roster['observed_at']=NOW
         blocked=dict(status='blocked',issues=[dict(code='tipoff_changed',detail='moved',team_id=None)])
         with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations.fetch_schedule',return_value=schedule),\
@@ -184,21 +209,25 @@ class FailedJobTests(unittest.TestCase):
              patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}),patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])),\
              patch('nba_forecast.operations.run_preflight',return_value=blocked) as preflight:
             def tick(seconds):
-                with patch('nba_forecast.operations._now',return_value=at(NOW,seconds)):return operations.run_tick(d,[])
+                with patch('nba_forecast.operations._now',return_value=at(NOW,seconds)):
+                    return operations.run_tick(d,[])
             first=tick(0)
             self.assertEqual(preflight.call_count,1)
             self.assertIn('refresh_requested_at',json.loads((Path(d)/'schedule/fetch-state.json').read_text()))
             second=tick(60)
             self.assertEqual(preflight.call_count,1)
             self.assertEqual([j['game_id'] for j in second['deferred_jobs']],['0022600001'])
-            tick(900);self.assertEqual(preflight.call_count,2)
+            tick(900)
+            self.assertEqual(preflight.call_count,2)
 
 
 class DashboardCacheTests(unittest.TestCase):
     def setUp(self):
-        dashboard._VIEWS.clear();dashboard._PREDICTIONS.clear()
+        dashboard._VIEWS.clear()
+        dashboard._PREDICTIONS.clear()
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
-        snapshot,_,_=inputs();(self.folder/'schedule').mkdir()
+        snapshot,_,_=inputs()
+        (self.folder/'schedule').mkdir()
         (self.folder/'schedule/latest.json').write_text(json.dumps(dict(season=snapshot['season'],games=snapshot['games'])))
         self.save()
 
@@ -208,14 +237,15 @@ class DashboardCacheTests(unittest.TestCase):
             return store.save_run(self.folder/'forecast.sqlite',snapshot,past,forecast)
 
     def test_forecast_views_are_decoded_once_per_ledger_state(self):
-        with patch('nba_forecast.dashboard._build_forecast_views',wraps=dashboard._build_forecast_views) as build:
+        with patch('nba_forecast.dashboard._decode_run',wraps=dashboard._decode_run) as build:
             first=dashboard.dashboard_data(self.folder)
             first['games'][0]['forecast']['predictions'].clear()
             second=dashboard.dashboard_data(self.folder)
             self.assertEqual(build.call_count,1)
             self.assertEqual(len(second['games'][0]['forecast']['predictions']),2)
             latest=self.save()
-            db=self.folder/'forecast.sqlite';stat=db.stat()
+            db=self.folder/'forecast.sqlite'
+            stat=db.stat()
             os.utime(db,ns=(stat.st_atime_ns,stat.st_mtime_ns+1))
             self.assertEqual(dashboard.dashboard_data(self.folder)['games'][0]['forecast']['run_id'],latest)
             self.assertEqual(build.call_count,2)
@@ -225,7 +255,8 @@ class DashboardCacheTests(unittest.TestCase):
         first=dashboard._selected_predictions(db,'2026-27','P1')
         first['G1']['prediction'].clear()
         self.assertEqual(dashboard._selected_predictions(db,'2026-27','P1')['G1']['prediction']['player_id'],'P1')
-        latest=self.save();stat=db.stat()
+        latest=self.save()
+        stat=db.stat()
         os.utime(db,ns=(stat.st_atime_ns,stat.st_mtime_ns+1))
         self.assertEqual(dashboard._selected_predictions(db,'2026-27','P1')['G1']['run_id'],latest)
         self.assertEqual(dashboard._selected_predictions(db,'2026-27','P30'),{})
@@ -234,11 +265,14 @@ class DashboardCacheTests(unittest.TestCase):
 class BenchmarkTests(unittest.TestCase):
     def test_precomputed_performance_gives_the_same_report(self):
         with tempfile.TemporaryDirectory() as d:
-            db=Path(d)/'forecast.sqlite';past=[dict(actual(),game_id='previous',game_time='2026-10-20T18:00:00Z',known_at='2026-10-20T21:00:00Z')]
+            db=Path(d)/'forecast.sqlite'
+            past=[dict(actual(),game_id='previous',game_time='2026-10-20T18:00:00Z',known_at='2026-10-20T21:00:00Z')]
             for _ in range(2):
                 snapshot,_,forecast=inputs()
-                with patch('nba_forecast.store._now',return_value=SAVED):rid=store.save_run(db,snapshot,past,forecast)
-            with patch('nba_forecast.store._now',return_value=LATER):store.evaluate_run(db,rid,[actual(),actual('P2')])
+                with patch('nba_forecast.store._now',return_value=SAVED):
+                    rid=store.save_run(db,snapshot,past,forecast)
+            with patch('nba_forecast.store._now',return_value=LATER):
+                store.evaluate_run(db,rid,[actual(),actual('P2')])
             self.assertEqual(benchmark_report(db,store.performance_report(db)),benchmark_report(db))
 
 

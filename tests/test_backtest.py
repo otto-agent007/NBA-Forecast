@@ -144,7 +144,8 @@ class BacktestTests(unittest.TestCase):
         self.assertIn('margin probabilities', backtest.format_scoreboard(board))
         same = backtest.compare(rows, rows)
         self.assertEqual((same['winner']['n'], same['winner']['mean']), (24, 0))
-        legacy = dict(rows); legacy.pop('games')
+        legacy = dict(rows)
+        legacy.pop('games')
         # Scored with the current prior scale on its team-total location, which the
         # current run's team-rating blend moves.
         legacy_winner = backtest.compare(rows, legacy)['winner']

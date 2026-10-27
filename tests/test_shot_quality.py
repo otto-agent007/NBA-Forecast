@@ -42,7 +42,8 @@ class ShotQualityTests(unittest.TestCase):
 
     def install_target(self, index, *, location=(0, 20), made=3, missing=False):
         attempts = [(*location, j < made) for j in range(6)]
-        if missing: attempts = [(None, None, made) for _, _, made in attempts]
+        if missing:
+            attempts = [(None, None, made) for _, _, made in attempts]
         self.install_game(index, [('7', '1', attempts), ('8', '1', []), ('9', '2', [])])
 
     def install_game(self, index, people, *, home='1', away='2', season='2026-27'):
@@ -102,7 +103,8 @@ class ShotQualityTests(unittest.TestCase):
         self.assertEqual(audit['status'], 'applied')
         self.assertEqual(original, before)
         for key in original['two_point']:
-            if key != 'percentage': self.assertEqual(near['two_point'][key], original['two_point'][key])
+            if key != 'percentage':
+                self.assertEqual(near['two_point'][key], original['two_point'][key])
         self.assertEqual(near['three_point'], original['three_point'])
         self.assertEqual(near['free_throw'], original['free_throw'])
         self.install_target(1, location=(180, 100))
@@ -142,7 +144,8 @@ class ShotQualityTests(unittest.TestCase):
         self.assertEqual(len(prepared['sources']), 3)
         self.assertEqual(prepared['coverage']['located_attempts'], 212)
         shot_quality.verify_shot_quality(self.snapshot, self.history, self.directory)
-        for path in (self.directory/'shots').glob('*.json'): path.unlink()
+        for path in (self.directory/'shots').glob('*.json'):
+            path.unlink()
         shot_quality.verify_shot_quality(self.snapshot, self.history, self.directory)
         corrupt = copy.deepcopy(prepared)
         corrupt['pool'][0]['makes'] += 1
@@ -190,10 +193,14 @@ class ShotQualityTests(unittest.TestCase):
         for bad in ('nan', 'team', 'count', 'duplicate'):
             with self.subTest(bad=bad):
                 self.snapshot['shot_quality'] = copy.deepcopy(prepared)
-                if bad == 'nan': self.snapshot['shot_quality']['pool'][0]['makes'] = float('nan')
-                if bad == 'team': self.snapshot['shot_quality']['players'][0]['team_id'] = '3'
-                if bad == 'count': self.snapshot['shot_quality']['pool'][0]['attempts'] = -1
-                if bad == 'duplicate': self.snapshot['shot_quality']['players'].append(copy.deepcopy(prepared['players'][0]))
+                if bad == 'nan':
+                    self.snapshot['shot_quality']['pool'][0]['makes'] = float('nan')
+                if bad == 'team':
+                    self.snapshot['shot_quality']['players'][0]['team_id'] = '3'
+                if bad == 'count':
+                    self.snapshot['shot_quality']['pool'][0]['attempts'] = -1
+                if bad == 'duplicate':
+                    self.snapshot['shot_quality']['players'].append(copy.deepcopy(prepared['players'][0]))
                 with self.assertRaises(ValueError):
                     shot_quality.adjust_shooting(base, self.snapshot, '7')
 

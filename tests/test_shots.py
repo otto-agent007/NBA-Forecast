@@ -62,15 +62,21 @@ class ShotTests(unittest.TestCase):
         self.assertIsNone(out['shots'][1]['x'])
     def test_reject_bad_evidence(self):
         for mutate in (lambda p:p['game']['actions'].pop(),lambda p:p['game']['actions'].append(copy.deepcopy(p['game']['actions'][0])),lambda p:p['game']['actions'][0].update(teamId=3),lambda p:p['game'].update(gameId='0022600002')):
-            p=copy.deepcopy(self.pbp);mutate(p)
-            with self.assertRaises(ValueError):normalize_shots(p,self.box,self.time)
-        with self.assertRaises(ValueError):normalize_shots(self.pbp,self.box,'2026-10-19T00:00:00Z')
+            p=copy.deepcopy(self.pbp)
+            mutate(p)
+            with self.assertRaises(ValueError):
+                normalize_shots(p,self.box,self.time)
+        with self.assertRaises(ValueError):
+            normalize_shots(self.pbp,self.box,'2026-10-19T00:00:00Z')
         self.box['game']['gameStatus']=2
-        with self.assertRaises(ValueError):normalize_shots(self.pbp,self.box,self.time)
-        with self.assertRaises(ValueError):playbyplay_url('0012600001')
+        with self.assertRaises(ValueError):
+            normalize_shots(self.pbp,self.box,self.time)
+        with self.assertRaises(ValueError):
+            playbyplay_url('0012600001')
     def test_source_failure_reason_preserved(self):
         with patch('nba_forecast.shots._fetch',side_effect=ValueError('NBA source returned HTTP 403')):
-            with self.assertRaisesRegex(ValueError,'HTTP 403'):fetch_game_shots('0022600001','unused')
+            with self.assertRaisesRegex(ValueError,'HTTP 403'):
+                fetch_game_shots('0022600001','unused')
 
 
 class OfficialPageShotTests(unittest.TestCase):
@@ -108,15 +114,24 @@ class OfficialPageShotTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.page,self.game,self.meta,self.rows=page_fixture()
                 actions=self.page['playByPlay']['actions']
-                if change=='truncated': actions.pop(0)
-                elif change=='duplicate': actions.append(copy.deepcopy(actions[0]))
-                elif change=='unknown': actions[0]['personId']=100
-                elif change=='point_value': actions[0]['shotValue']=1
-                elif change=='source': self.meta['source_url']='https://www.nba.com/game/0022600002/box-score'
-                elif change=='final': self.page['game']['gameStatus']=2
-                elif change=='periods': actions.pop()
-                else: self.rows.pop(1)
-                with self.assertRaises(ValueError): self.normalize()
+                if change=='truncated':
+                    actions.pop(0)
+                elif change=='duplicate':
+                    actions.append(copy.deepcopy(actions[0]))
+                elif change=='unknown':
+                    actions[0]['personId']=100
+                elif change=='point_value':
+                    actions[0]['shotValue']=1
+                elif change=='source':
+                    self.meta['source_url']='https://www.nba.com/game/0022600002/box-score'
+                elif change=='final':
+                    self.page['game']['gameStatus']=2
+                elif change=='periods':
+                    actions.pop()
+                else:
+                    self.rows.pop(1)
+                with self.assertRaises(ValueError):
+                    self.normalize()
 
     def test_missing_or_sentinel_coordinates_remain_unlocated(self):
         self.page['playByPlay']['actions'][0].update(xLegacy=-214748340, yLegacy=-214748365)

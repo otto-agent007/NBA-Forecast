@@ -215,7 +215,8 @@ def normalize_boxscore(payload, source_url, known_at):
                            minutes_source_value=stats["minutes"])
                 row.update(shooting_percentages(row))
                 if 'starter' in player:
-                    if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
+                    if player['starter'] not in ('0','1'):
+                        raise ValueError('invalid starter evidence')
                     row['starter']=player['starter']=='1'
                 row['home']=side=='homeTeam'
                 rows.append(row)
@@ -281,7 +282,8 @@ def normalize_roster(players, observed_at, season):
 
 
 def fetch_roster(season, *, cache_dir=DEFAULT_CACHE):
-    try:raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
+    try:
+        raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
     except (ValueError,OSError):
         from .roster_refresh import fetch_team_rosters
         return fetch_team_rosters(season,cache_dir)

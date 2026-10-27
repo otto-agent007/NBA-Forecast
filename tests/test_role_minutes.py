@@ -44,12 +44,14 @@ class RoleMinutesTests(unittest.TestCase):
         self.assertEqual(p['components']['opportunities']['role_current_team_game_ids'],[])
 
     def test_current_team_role_profile_matches_forecast_and_future_games_are_excluded(self):
-        s=snapshot();data=[row(i,team='OLD',minutes=12) for i in range(8)]+[current(minutes=33)]
+        s=snapshot()
+        data=[row(i,team='OLD',minutes=12) for i in range(8)]+[current(minutes=33)]
         profile=build_profiles(s,data)['players'][0]
         p=forecast(s,data)['predictions'][0]
         self.assertAlmostEqual(profile['expected_minutes_baseline'],p['expected_minutes'])
         self.assertAlmostEqual(p['expected_minutes'],33)
-        future=deepcopy(data[-1]);future.update(game_id='future',minutes=48,known_at='2099-01-01T00:00:00Z')
+        future=deepcopy(data[-1])
+        future.update(game_id='future',minutes=48,known_at='2099-01-01T00:00:00Z')
         self.assertAlmostEqual(forecast(s,data+[future])['predictions'][0]['expected_minutes'],p['expected_minutes'])
 
     def test_repeated_current_season_dnps_still_raise_role_review_and_reduce_minutes(self):

@@ -18,7 +18,8 @@ def _reject_constant(value):
 
 def read_json(path):
     raw=Path(path).read_bytes()
-    if str(path).endswith('.gz'): raw=gzip.decompress(raw)
+    if str(path).endswith('.gz'):
+        raw=gzip.decompress(raw)
     return json.loads(raw.decode('utf-8'), parse_constant=_reject_constant)
 
 
@@ -167,11 +168,13 @@ def main(argv=None):
                 from .model import forecast
                 from .store import save_run
                 if args.mode == 'live':
-                    if args.scope != 'league':raise ValueError('live runs require league scope')
+                    if args.scope != 'league':
+                        raise ValueError('live runs require league scope')
                     from .preflight import run_preflight
                     from .profiles import build_profiles
                     check=run_preflight(snapshot,history,build_profiles(snapshot,history),Path(args.db).parent,cache_dir=args.cache_dir)
-                    if check['status']!='passed':raise ValueError('preflight blocked: '+ '; '.join(i['detail'] for i in check['issues']))
+                    if check['status']!='passed':
+                        raise ValueError('preflight blocked: '+ '; '.join(i['detail'] for i in check['issues']))
                     snapshot['preflight']=check
                 result = forecast(snapshot, history)
                 run_id = save_run(args.db, snapshot, history, result, mode=args.mode, scope=args.scope)
@@ -195,7 +198,8 @@ def main(argv=None):
                 value=dashboard_data(args.directory,compact=True)
                 value['source_mode']='static_capture'
             else:
-                if not 1<=args.port<=65535:raise ValueError('invalid port')
+                if not 1<=args.port<=65535:
+                    raise ValueError('invalid port')
                 serve_dashboard(args.directory,args.assets,args.port)
                 return 0
         elif args.command == 'fetch-schedule':
@@ -206,7 +210,8 @@ def main(argv=None):
             value=build_profiles(read_json(args.snapshot),_rows(args.history))
         elif args.command == 'apply-injuries':
             from .injury_parser import pdf_text,parse_report,apply_report
-            snapshot=read_json(args.snapshot);schedule=read_json(args.schedule)
+            snapshot=read_json(args.snapshot)
+            schedule=read_json(args.schedule)
             check=read_json(args.injury_check)
             snapshot['as_of']=datetime.now(timezone.utc).isoformat()
             snapshot['injury_check']=check
@@ -250,8 +255,10 @@ def main(argv=None):
             from .store import dedupe_histories
             folder=Path(args.directory)
             with (folder/'tick.lock').open('a') as lock:
-                try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                except BlockingIOError as exc:raise ValueError('a tick is running; retry when it finishes') from exc
+                try:
+                    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise ValueError('a tick is running; retry when it finishes') from exc
                 value=dedupe_histories(folder/'forecast.sqlite')
         elif args.command == 'backfill':
             from .backfill import backfill_seasons

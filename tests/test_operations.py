@@ -18,11 +18,13 @@ NOW='2026-10-21T16:00:00Z'
 class OperationsTests(unittest.TestCase):
     def test_secondary_calendar_recovers_cdn_denial_without_attention_warning(self):
         source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
-        source['version']='nba-source';verified=deepcopy(source)
+        source['version']='nba-source'
+        verified=deepcopy(source)
         verified['crosscheck']=dict(status='verified',verified_game_ids=['0022600001'],blocked_game_ids=[])
         clock='2026-10-24T15:59:00Z'
         with tempfile.TemporaryDirectory() as d:
-            folder=Path(d)/'schedule';folder.mkdir()
+            folder=Path(d)/'schedule'
+            folder.mkdir()
             (folder/'latest.json').write_text(json.dumps(source))
             with patch('nba_forecast.operations._now',return_value=clock),\
                  patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
@@ -36,11 +38,14 @@ class OperationsTests(unittest.TestCase):
 
     def test_unverified_due_calendar_game_is_noted_not_withheld(self):
         source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
-        source['version']='nba-source';verified=deepcopy(source)
+        source['version']='nba-source'
+        verified=deepcopy(source)
         verified['crosscheck']=dict(status='partial',verified_game_ids=[],blocked_game_ids=['0022600001'])
         clock='2026-10-24T16:00:00Z'
         with tempfile.TemporaryDirectory() as d:
-            folder=Path(d)/'schedule';folder.mkdir();(folder/'latest.json').write_text(json.dumps(source))
+            folder=Path(d)/'schedule'
+            folder.mkdir()
+            (folder/'latest.json').write_text(json.dumps(source))
             with patch('nba_forecast.operations._now',return_value=clock),\
                  patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
                  patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified),\
@@ -56,7 +61,9 @@ class OperationsTests(unittest.TestCase):
         source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
         source['version']='nba-source'
         with tempfile.TemporaryDirectory() as d:
-            folder=Path(d)/'schedule';folder.mkdir();(folder/'latest.json').write_text(json.dumps(source))
+            folder=Path(d)/'schedule'
+            folder.mkdir()
+            (folder/'latest.json').write_text(json.dumps(source))
             with patch('nba_forecast.operations._now',return_value='2026-10-24T16:00:00Z'),\
                  patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
                  patch('nba_forecast.operations.fetch_verified_secondary_schedule',side_effect=ValueError('ESPN unavailable')),\
@@ -71,11 +78,14 @@ class OperationsTests(unittest.TestCase):
 
     def test_unmatched_secondary_event_is_a_visible_warning(self):
         source=normalize_season(payload([game(start='2026-10-26T22:00:00Z')]),'2026-10-22T03:00:00Z')
-        source['version']='nba-source';verified=deepcopy(source)
+        source['version']='nba-source'
+        verified=deepcopy(source)
         verified['crosscheck']=dict(status='partial',verified_game_ids=[],blocked_game_ids=[],
                                    unmatched_secondary_events=[dict(espn_id='401909853')])
         with tempfile.TemporaryDirectory() as d:
-            folder=Path(d)/'schedule';folder.mkdir();(folder/'latest.json').write_text(json.dumps(source))
+            folder=Path(d)/'schedule'
+            folder.mkdir()
+            (folder/'latest.json').write_text(json.dumps(source))
             with patch('nba_forecast.operations._now',return_value='2026-10-24T16:00:00Z'),\
                  patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
                  patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified):
@@ -84,7 +94,8 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual([w['espn_id'] for w in result['warnings'] if w.get('task')=='schedule_crosscheck'],['401909853'])
 
     def test_tomorrow_jobs_wait_without_fetching_or_raising_attention(self):
-        schedule=normalize_season(payload([game(start='2026-10-22T22:00:00Z')]),NOW);schedule['version']='v1'
+        schedule=normalize_season(payload([game(start='2026-10-22T22:00:00Z')]),NOW)
+        schedule['version']='v1'
         clock='2026-10-21T23:00:00Z'
         with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations._now',return_value=clock),patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster') as roster:
             result=run_tick(d,[])
@@ -97,19 +108,24 @@ class OperationsTests(unittest.TestCase):
         self.enterContext(patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])))
         self.preflight=self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
     def test_duplicate_tick_and_crash_recovery_do_not_duplicate_run(self):
-        schedule=normalize_season(payload([game()]),NOW);schedule['version']='v1'
+        schedule=normalize_season(payload([game()]),NOW)
+        schedule['version']='v1'
         roster=inputs()[0]['roster']
         # Production roster validation is exercised by the ledger suite; this
         # test drives orchestration with explicit identities for all 30 teams.
         roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
-        for p,t in zip(roster['players'],roster['team_ids']):p['team_id']=t;p['status']='unknown'
+        for p,t in zip(roster['players'],roster['team_ids']):
+            p['team_id']=t
+            p['status']='unknown'
         roster['observed_at']=NOW
         with tempfile.TemporaryDirectory() as d, patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster',return_value=roster),patch('nba_forecast.operations._now',return_value=NOW),patch('nba_forecast.store._now',return_value=__import__('datetime').datetime.fromisoformat(NOW.replace('Z','+00:00'))),patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
-            first=run_tick(d,[]);self.assertEqual(first['created_runs'],1)
+            first=run_tick(d,[])
+            self.assertEqual(first['created_runs'],1)
             (Path(d)/'state.json').unlink()
             import shutil
             shutil.rmtree(Path(d)/'runs')
-            second=run_tick(d,[]);self.assertEqual(second['created_runs'],0)
+            second=run_tick(d,[])
+            self.assertEqual(second['created_runs'],0)
             self.assertEqual(second['recovered_runs'],1)
             self.assertEqual(len(list((Path(d)/'runs').glob('*/profiles.json'))),1)
     def test_lock_refuses_overlapping_tick(self):
@@ -117,11 +133,13 @@ class OperationsTests(unittest.TestCase):
             import fcntl
             with (Path(d)/'tick.lock').open('a') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                with self.assertRaises(ValueError):run_tick(d,[])
+                with self.assertRaises(ValueError):
+                    run_tick(d,[])
     def test_missing_schedule_is_visible_error(self):
         with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('unavailable')):
             r=run_tick(d,[])
-            self.assertEqual(r['status'],'error');self.assertTrue(r['errors'])
+            self.assertEqual(r['status'],'error')
+            self.assertTrue(r['errors'])
             self.assertEqual(run_tick(d,[])['status'],'error')
             self.assertEqual(self.daily.call_count,2,'daily collection must not depend on schedule access')
 
@@ -130,11 +148,13 @@ class OperationsTests(unittest.TestCase):
         snapshot,_,_=inputs()
         p=snapshot['roster']['players'][0]
         update=dict(player_id=p['player_id'],status='out',status_observed_at='2026-10-22T09:00:00Z',status_source_url='https://example.test/status')
-        with self.assertRaises(ValueError):apply_review(snapshot,{'game_id':'G1','availability':[update]})
+        with self.assertRaises(ValueError):
+            apply_review(snapshot,{'game_id':'G1','availability':[update]})
         update['status_observed_at']='2026-10-22T10:30:00Z'
         result=apply_review(snapshot,{'game_id':'G1','availability':[update]})
         self.assertEqual(result['roster']['players'][0]['status'],'out')
-        with self.assertRaises(ValueError):apply_review(snapshot,{'game_id':'G2','availability':[update]})
+        with self.assertRaises(ValueError):
+            apply_review(snapshot,{'game_id':'G2','availability':[update]})
 
     def test_process_death_releases_lock(self):
         import subprocess,sys
@@ -144,9 +164,13 @@ class OperationsTests(unittest.TestCase):
                 self.assertEqual(run_tick(d,[])['status'],'error')
 
     def test_missing_team_issue_is_logged_without_aborting_forecast(self):
-        schedule=normalize_season(payload([game()]),NOW);schedule['version']='v1'
-        roster=inputs()[0]['roster'];roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
-        for p,t in zip(roster['players'],roster['team_ids']):p['team_id']=t;p['status']='unknown'
+        schedule=normalize_season(payload([game()]),NOW)
+        schedule['version']='v1'
+        roster=inputs()[0]['roster']
+        roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
+        for p,t in zip(roster['players'],roster['team_ids']):
+            p['team_id']=t
+            p['status']='unknown'
         roster['observed_at']=NOW
         evidence=dict(published_at=NOW,retrieved_at=NOW,source_url='https://example.test/report',sha256='a'*64)
         check={'checked_at':NOW,'games':[{'game_id':'0022600001','start_time':schedule['games'][0]['start_time'],
@@ -159,14 +183,16 @@ class OperationsTests(unittest.TestCase):
 
     def test_review_newer_than_publication_can_override_later_download(self):
         from nba_forecast.operations import apply_review
-        snapshot,_,_=inputs();p=snapshot['roster']['players'][0]
+        snapshot,_,_=inputs()
+        p=snapshot['roster']['players'][0]
         p['status_published_at']='2026-10-22T09:00:00Z'
         update=dict(player_id=p['player_id'],status='out',status_observed_at='2026-10-22T09:30:00Z',status_source_url='https://example.test/status')
         self.assertEqual(apply_review(snapshot,{'game_id':'G1','availability':[update]})['roster']['players'][0]['status'],'out')
 
     def test_superseded_policy_still_rejects_invalid_review_evidence(self):
         from nba_forecast.operations import apply_review
-        snapshot,_,_=inputs();pid=snapshot['roster']['players'][0]['player_id']
+        snapshot,_,_=inputs()
+        pid=snapshot['roster']['players'][0]['player_id']
         original=deepcopy(snapshot)
         update=dict(player_id=pid,status='out',status_observed_at='2026-10-22T09:30:00Z',
                     status_published_at='2026-10-22T09:00:00Z',status_source_url='https://example.test/status')
@@ -183,7 +209,8 @@ class OperationsTests(unittest.TestCase):
 
     def test_expired_override_can_be_superseded_without_expiring_fresh_official_status(self):
         from nba_forecast.operations import apply_review
-        snapshot,_,_=inputs();pid=snapshot['roster']['players'][0]['player_id']
+        snapshot,_,_=inputs()
+        pid=snapshot['roster']['players'][0]['player_id']
         update=dict(player_id=pid,status='out',status_observed_at='2026-10-20T09:00:00Z',
                     status_source_url='https://example.test/status')
         result=apply_review(snapshot,dict(game_id='G1',availability=[update]),skip_superseded=True)
@@ -227,7 +254,8 @@ class EvidenceTickTests(unittest.TestCase):
         pointer.write_text(json.dumps(dict(artifact_sha256=old,activated_at=refined['known_at'])))
         rows=[]
         for i in range(112):
-            sample=margin_sample(i);sample['model_key']=refined['model_key']
+            sample=margin_sample(i)
+            sample['model_key']=refined['model_key']
             for field in ('game_time','forecast_created_at','actual_known_at'):
                 sample[field]=(datetime.fromisoformat(sample[field])-timedelta(days=61)).isoformat()
             rows.append(sample)
@@ -267,7 +295,8 @@ class EvidenceTickTests(unittest.TestCase):
         self.roster=inputs()[0]['roster']
         self.roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
         for player,team in zip(self.roster['players'],self.roster['team_ids']):
-            player['team_id']=team;player['status']='unknown'
+            player['team_id']=team
+            player['status']='unknown'
         self.roster['observed_at']=NOW
         self.pid=next(p['player_id'] for p in self.roster['players'] if p['team_id']=='1610612738')
         for name,value in (('fetch_schedule',self.schedule),('fetch_roster',self.roster),('_now',NOW)):
@@ -318,7 +347,8 @@ class EvidenceTickTests(unittest.TestCase):
                      season='2025-26',game_id='0022500001',game_time='2026-03-01T20:00:00Z',
                      known_at=imported_time,minutes=30)
         cached=dict(imported,known_at=cached_time,minutes=10)
-        cache=self.folder/'finals';cache.mkdir()
+        cache=self.folder/'finals'
+        cache.mkdir()
         (cache/'0022500001.json').write_text(json.dumps([cached]))
         with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
             result=run_tick(self.folder,[imported])
@@ -350,14 +380,16 @@ class EvidenceTickTests(unittest.TestCase):
                         source_url='https://example.test/role',reason='Reviewed restriction',reviewer='analyst',
                         minutes_delta=0,opportunity_multiplier=1,minutes_cap=15)
         review=dict(game_id='0022600001',availability=overrides,role_adjustments=[adjustment])
-        review_path=self.folder/'reviews/0022600001.json';review_path.parent.mkdir()
+        review_path=self.folder/'reviews/0022600001.json'
+        review_path.parent.mkdir()
         review_path.write_text(json.dumps(review))
         before=deepcopy(review)
         with patch('nba_forecast.operations.fetch_injury_check',return_value=check),patch('nba_forecast.operations.pdf_text',return_value='text'),patch('nba_forecast.operations.parse_report',return_value=parsed):
             result=run_tick(self.folder,[])
         self.assertEqual(result['created_runs'],1,result['errors'])
         self.assertFalse(result['errors'])
-        snapshot,_=self.saved();players={p['player_id']:p for p in snapshot['roster']['players']}
+        snapshot,_=self.saved()
+        players={p['player_id']:p for p in snapshot['roster']['players']}
         self.assertEqual(players[self.pid]['status'],'out')
         self.assertEqual(players[self.pid]['status_source_url'],evidence['source_url'])
         self.assertEqual(players[other]['status'],'available')

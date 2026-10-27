@@ -26,14 +26,17 @@ class InjuryTests(unittest.TestCase):
     def test_final_requires_captured_fresh_anchor_and_all_games(self):
         snapshot={'games':[GAME],'as_of':'2026-10-21T23:40:00Z'}
         check={'checked_at':'2026-10-21T23:35:00Z','games':checkpoints([GAME],report_links(BASE+'07_30PM.pdf','2026-10-21T23:35:00Z'),'2026-10-21T23:35:00Z')}
-        with self.assertRaises(ValueError): validate_final_check(snapshot,check)
+        with self.assertRaises(ValueError):
+            validate_final_check(snapshot,check)
         check['games'][0]['anchor_report'].update(sha256='a'*64,retrieved_at=check['checked_at'])
         validate_final_check(snapshot,check)
         check['games'][0]['checkpoint_at']='2026-10-20T23:30:00Z'
-        with self.assertRaises(ValueError):validate_final_check(snapshot,check)
+        with self.assertRaises(ValueError):
+            validate_final_check(snapshot,check)
 
     def test_model_final_api_cannot_bypass_checkpoint(self):
         from nba_forecast.model import forecast
         snapshot={'forecast_stage':'final','as_of':'2026-10-21T23:40:00Z',
                   'season':'2026-27','games':[],'roster':{'players':[]}}
-        with self.assertRaises(ValueError):forecast(snapshot,[])
+        with self.assertRaises(ValueError):
+            forecast(snapshot,[])

@@ -20,10 +20,13 @@ def check(sha):
 
 class EvidenceKeyTests(unittest.TestCase):
     def setUp(self):
-        schedule = normalize_season(payload([game()]), NOW); schedule['version'] = 'v1'
-        roster = inputs()[0]['roster']; roster['team_ids'] = [str(t) for t in range(1610612737, 1610612767)]
+        schedule = normalize_season(payload([game()]), NOW)
+        schedule['version'] = 'v1'
+        roster = inputs()[0]['roster']
+        roster['team_ids'] = [str(t) for t in range(1610612737, 1610612767)]
         for p, t in zip(roster['players'], roster['team_ids']):
-            p['team_id'] = t; p['status'] = 'unknown'
+            p['team_id'] = t
+            p['status'] = 'unknown'
         roster['observed_at'] = NOW
         self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(patch('nba_forecast.operations.fetch_schedule', return_value=schedule))
@@ -54,18 +57,26 @@ class EvidenceKeyTests(unittest.TestCase):
 
     def test_a_failed_job_is_retried_after_the_pause_not_every_minute(self):
         self.preflight.return_value = dict(status='blocked', issues=[dict(code='input_contract', detail='x', team_id=None)])
-        self.tick(0); self.tick(60); self.assertEqual(self.preflight.call_count, 1)
-        self.tick(900); self.assertEqual(self.preflight.call_count, 2)
+        self.tick(0)
+        self.tick(60)
+        self.assertEqual(self.preflight.call_count, 1)
+        self.tick(900)
+        self.assertEqual(self.preflight.call_count, 2)
 
     def test_unavailable_check_retries_every_fifteen_minutes(self):
         self.injuries.side_effect = ValueError('offline')
-        self.tick(0); self.tick(600); self.assertEqual(self.preflight.call_count, 1)
-        self.tick(900); self.assertEqual(self.preflight.call_count, 2)
+        self.tick(0)
+        self.tick(600)
+        self.assertEqual(self.preflight.call_count, 1)
+        self.tick(900)
+        self.assertEqual(self.preflight.call_count, 2)
 
     def test_roster_is_reused_for_preliminary_forecasts(self):
-        self.tick(0); self.tick(1000)
+        self.tick(0)
+        self.tick(1000)
         self.assertEqual(self.roster.call_count, 1)
-        self.tick(3 * 3600 + 1); self.assertEqual(self.roster.call_count, 2)
+        self.tick(3 * 3600 + 1)
+        self.assertEqual(self.roster.call_count, 2)
 
 
 if __name__ == '__main__':

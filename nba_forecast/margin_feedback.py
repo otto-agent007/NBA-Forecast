@@ -10,17 +10,23 @@ def score_margin(distribution, home_score, away_score):
         return dict(status='unavailable',reason='No supported margin distribution was saved.')
     if any(type(v) is not int or v<0 for v in (home_score,away_score)) or home_score==away_score:
         return dict(status='pending',reason='A verified non-tied final score is required.')
-    home=distribution['home_team_id'];actual=home_score-away_score
+    home=distribution['home_team_id']
+    actual=home_score-away_score
     win=probability_above(distribution,home,0)
-    if win['status']!='estimated':return dict(status='unavailable',reason=win['reason'])
+    if win['status']!='estimated':
+        return dict(status='unavailable',reason=win['reason'])
     thresholds=[]
     for line in (0,1.5,2.5,3.5,5.5,7.5,10.5):
         value=probability_above(distribution,home,line)
-        if value['status']!='estimated':continue
-        p=value['yes_probability'];outcome=actual>line
+        if value['status']!='estimated':
+            continue
+        p=value['yes_probability']
+        outcome=actual>line
         thresholds.append(dict(team_id=home,line=line,yes_probability=p,actual_yes=outcome,brier=(p-outcome)**2))
     masses={r['margin']:r['probability'] for r in distribution['pmf']}
-    low,high=min(masses),max(masses);cdf=0.;errors=[]
+    low,high=min(masses),max(masses)
+    cdf=0.
+    errors=[]
     for k in range(low,high):
         cdf+=masses.get(k,0.)
         errors.append((cdf-(actual<=k))**2)

@@ -27,13 +27,18 @@ SECONDARY_MAX_BYTES = 2 * 1024 * 1024
 
 def normalize_season(payload,observed_at):
     parse_time(observed_at)
-    source=payload['leagueSchedule'];season=source['seasonYear'];_season(season)
-    games=[];seen=set()
+    source=payload['leagueSchedule']
+    season=source['seasonYear']
+    _season(season)
+    games=[]
+    seen=set()
     for day in source['gameDates']:
         for g in day['games']:
             gid=g['gameId']
-            if not isinstance(gid,str):raise ValueError('invalid schedule game ID')
-            if not gid.startswith('002'):continue
+            if not isinstance(gid,str):
+                raise ValueError('invalid schedule game ID')
+            if not gid.startswith('002'):
+                continue
             if len(gid)!=10 or not gid.isdigit() or gid[3:5]!=season[2:4] or gid in seen:
                 raise ValueError('duplicate or wrong-season schedule game')
             seen.add(gid)
@@ -41,14 +46,19 @@ def normalize_season(payload,observed_at):
             for team in teams.values():
                 if team!='0' and team not in {str(t) for t in range(1610612737,1610612767)}:
                     raise ValueError('unknown NBA team')
-            if teams['home']==teams['away']!='0':raise ValueError('team opposes itself')
+            if teams['home']==teams['away']!='0':
+                raise ValueError('team opposes itself')
             status=g['gameStatus']
-            if type(status)!=int or status not in (1,2,3):raise ValueError('unknown game status')
-            text=g['gameStatusText'].strip();postponed=g.get('postponedStatus','N')
-            if postponed not in ('N','Y'):raise ValueError('unknown postponed status')
+            if type(status)!=int or status not in (1,2,3):
+                raise ValueError('unknown game status')
+            text=g['gameStatusText'].strip()
+            postponed=g.get('postponedStatus','N')
+            if postponed not in ('N','Y'):
+                raise ValueError('unknown postponed status')
             tbd='TBD' in text.upper() or '0' in teams.values() or not g.get('gameDateTimeUTC')
             start=None if tbd else parse_time(g['gameDateTimeUTC'])
-            city=g.get('arenaCity','');state=g.get('arenaState','')
+            city=g.get('arenaCity','')
+            state=g.get('arenaState','')
             zone=CITY_ZONES.get(city) or STATE_ZONES.get(state)
             state_name='postponed' if postponed=='Y' or 'POSTPON' in text.upper() else 'tbd' if tbd else {1:'scheduled',2:'live',3:'final'}[status]
             games.append(dict(game_id=gid,season_type='Regular Season',start_time=start.isoformat() if start else None,
@@ -68,17 +78,21 @@ def normalize_season(payload,observed_at):
 
 
 def save_schedule(payload,observed_at,directory):
-    result=normalize_season(payload,observed_at);folder=Path(directory)
+    result=normalize_season(payload,observed_at)
+    folder=Path(directory)
     raw_hash=hashlib.sha256(canonical(payload)).hexdigest()
     result['source_content_sha256']=raw_hash
     result['version']=hashlib.sha256(canonical(result)).hexdigest()
-    current=folder/'latest.json';old=json.loads(current.read_text()) if current.exists() else {'games':[]}
-    before={g['game_id']:g for g in old['games']};after={g['game_id']:g for g in result['games']}
+    current=folder/'latest.json'
+    old=json.loads(current.read_text()) if current.exists() else {'games':[]}
+    before={g['game_id']:g for g in old['games']}
+    after={g['game_id']:g for g in result['games']}
     result['previous_version']=old.get('version')
     result['changes']={'added':sorted(after.keys()-before.keys()),'removed':sorted(before.keys()-after.keys()),
                        'changed':sorted(k for k in before.keys()&after.keys() if before[k]!=after[k])}
     version=folder/'versions'/(result['version']+'.json')
-    if not version.exists():atomic_json(version,result)
+    if not version.exists():
+        atomic_json(version,result)
     atomic_json(current,result)
     return result
 
@@ -94,7 +108,8 @@ def secondary_url(day):
 
 def _secondary_observation(day,directory):
     """Fetch and archive exact ESPN daily bytes; this URL is fixed by date."""
-    url=secondary_url(day);opener=urllib.request.build_opener(_NoRedirects())
+    url=secondary_url(day)
+    opener=urllib.request.build_opener(_NoRedirects())
     try:
         with opener.open(urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0',
                           'Accept':'application/json'}),timeout=12) as response:
@@ -102,39 +117,56 @@ def _secondary_observation(day,directory):
     except (HTTPError,URLError,TimeoutError) as exc:
         raise ValueError('Secondary scoreboard unavailable: '+type(exc).__name__+
                          (' '+str(exc.code) if isinstance(exc,HTTPError) else '')) from exc
-    if len(raw)>SECONDARY_MAX_BYTES:raise ValueError('Secondary scoreboard exceeds size limit')
-    try:payload=json.loads(raw)
-    except (ValueError,UnicodeDecodeError) as exc:raise ValueError('Secondary scoreboard is not JSON') from exc
-    if not isinstance(payload,dict):raise ValueError('Secondary scoreboard must be an object')
-    observed=datetime.now(timezone.utc).isoformat();digest=hashlib.sha256(raw).hexdigest()
-    archive=Path(directory)/'raw';archive.mkdir(parents=True,exist_ok=True)
+    if len(raw)>SECONDARY_MAX_BYTES:
+        raise ValueError('Secondary scoreboard exceeds size limit')
+    try:
+        payload=json.loads(raw)
+    except (ValueError,UnicodeDecodeError) as exc:
+        raise ValueError('Secondary scoreboard is not JSON') from exc
+    if not isinstance(payload,dict):
+        raise ValueError('Secondary scoreboard must be an object')
+    observed=datetime.now(timezone.utc).isoformat()
+    digest=hashlib.sha256(raw).hexdigest()
+    archive=Path(directory)/'raw'
+    archive.mkdir(parents=True,exist_ok=True)
     archive_bytes(archive/(digest+'.json'),raw)
     meta=archive/(digest+'.provenance.json')
-    if not meta.exists():atomic_json(meta,dict(source_url=url,retrieved_at=observed,sha256=digest,bytes=len(raw)))
+    if not meta.exists():
+        atomic_json(meta,dict(source_url=url,retrieved_at=observed,sha256=digest,bytes=len(raw)))
     return dict(source_url=url,observed_at=observed,source_sha256=digest,payload=payload)
 
 
 def _secondary_event(event,season):
     try:
         target_year=int(season[:4])+1
-        if event['season']!={'year':target_year,'type':2,'slug':'regular-season'}:return None
+        if event['season']!={'year':target_year,'type':2,'slug':'regular-season'}:
+            return None
         start=parse_time(event['date'])
-        if len(event['competitions'])!=1:return None
-        if event['competitions'][0].get('timeValid') is False:return None
+        if len(event['competitions'])!=1:
+            return None
+        if event['competitions'][0].get('timeValid') is False:
+            return None
         players=event['competitions'][0]['competitors']
-        if len(players)!=2 or {p['homeAway'] for p in players}!={'home','away'}:return None
+        if len(players)!=2 or {p['homeAway'] for p in players}!={'home','away'}:
+            return None
         teams={p['homeAway']:SECONDARY_ALIASES.get(p['team']['abbreviation'],p['team']['abbreviation']) for p in players}
-        if not all(re.fullmatch('[A-Z]{2,3}',x) for x in teams.values()):return None
-        state=event['status']['type'];name=state['name']
+        if not all(re.fullmatch('[A-Z]{2,3}',x) for x in teams.values()):
+            return None
+        state=event['status']['type']
+        name=state['name']
         status={'STATUS_SCHEDULED':'scheduled','STATUS_POSTPONED':'postponed',
                 'STATUS_CANCELED':'cancelled','STATUS_CANCELLED':'cancelled',
                 'STATUS_FINAL':'final'}.get(name)
-        if status is None and state.get('state')=='in':status='live'
-        if status is None:return None
+        if status is None and state.get('state')=='in':
+            status='live'
+        if status is None:
+            return None
         eid=str(event['id'])
-        if not re.fullmatch('[0-9]+',eid):return None
+        if not re.fullmatch('[0-9]+',eid):
+            return None
         return dict(espn_id=eid,start=start,home=teams['home'],away=teams['away'],status=status)
-    except (KeyError,ValueError,TypeError,IndexError):return None
+    except (KeyError,ValueError,TypeError,IndexError):
+        return None
 
 
 def verify_secondary_schedule(cached,observations,as_of):
@@ -142,38 +174,53 @@ def verify_secondary_schedule(cached,observations,as_of):
     cutoff=parse_time(as_of)
     if not observations or not cached.get('version') or not cached.get('games'):
         raise ValueError('A versioned NBA calendar and secondary observations are required')
-    events=[];sources=[];invalid=0
+    events=[]
+    sources=[]
+    invalid=0
     for item in observations:
         known=parse_time(item['observed_at'])
         if not 0 <= (cutoff-known).total_seconds() <= 300:
             raise ValueError('Secondary observation is future-known or stale')
         if not re.fullmatch(re.escape(SECONDARY_HOST)+r'\?dates=\d{8}',item['source_url']):
             raise ValueError('Unexpected secondary URL')
-        if not re.fullmatch('[0-9a-f]{64}',item['source_sha256']):raise ValueError('Invalid secondary digest')
+        if not re.fullmatch('[0-9a-f]{64}',item['source_sha256']):
+            raise ValueError('Invalid secondary digest')
         if not isinstance(item['payload'],dict) or not isinstance(item['payload'].get('events'),list):
             raise ValueError('Invalid secondary events')
         sources.append({k:item[k] for k in ('source_url','observed_at','source_sha256')})
         for raw in item['payload']['events']:
             event=_secondary_event(raw,cached['season'])
-            if event is None:invalid+=1
-            else:event.update(source_url=item['source_url'],observed_at=item['observed_at'],
-                              source_sha256=item['source_sha256']);events.append(event)
-    result=deepcopy(cached);verified=[];blocked=[];changes=[];unmatched=[]
+            if event is None:
+                invalid+=1
+            else:
+                event.update(source_url=item['source_url'],observed_at=item['observed_at'],
+                              source_sha256=item['source_sha256'])
+                events.append(event)
+    result=deepcopy(cached)
+    verified=[]
+    blocked=[]
+    changes=[]
+    unmatched=[]
     # Start with the secondary slate. A game moved *into* the next 24 hours
     # would never be seen by a loop limited to old NBA tipoffs.
     candidates={}
     for event in events:
-        if not cutoff-timedelta(hours=12)<event['start']<=cutoff+timedelta(hours=48):continue
+        if not cutoff-timedelta(hours=12)<event['start']<=cutoff+timedelta(hours=48):
+            continue
         possible=[]
         finished=event['status'] in ('final','live')
         for game in result['games']:
             if game.get('status') not in (('scheduled','postponed','tbd','live','final') if finished
-                                             else ('scheduled','postponed','tbd')) or not game.get('start_time'):continue
-            if (game.get('home_tricode'),game.get('away_tricode'))!=(event['home'],event['away']):continue
+                                             else ('scheduled','postponed','tbd')) or not game.get('start_time'):
+                continue
+            if (game.get('home_tricode'),game.get('away_tricode'))!=(event['home'],event['away']):
+                continue
             original=parse_time(game['start_time'])
-            if finished and original>cutoff:continue
+            if finished and original>cutoff:
+                continue
             delta=abs((original-event['start']).total_seconds())
-            if delta<=(3600 if finished else 36*3600):possible.append((delta,game))
+            if delta<=(3600 if finished else 36*3600):
+                possible.append((delta,game))
         close=[item for item in possible if item[0]<=3600]
         pool=close or possible
         if (len(pool)!=1 or (event['status']=='scheduled' and event['start']<=cutoff)
@@ -184,11 +231,16 @@ def verify_secondary_schedule(cached,observations,as_of):
             continue
         candidates.setdefault(pool[0][1]['game_id'],[]).append(event)
     for game in result['games']:
-        gid=game['game_id'];matches=candidates.get(gid,[])
-        if len(matches)!=1:continue
+        gid=game['game_id']
+        matches=candidates.get(gid,[])
+        if len(matches)!=1:
+            continue
         event=matches[0]
-        new_start=event['start'].isoformat();old_status=game['status'];old_start=game['start_time']
-        game['start_time']=new_start;game['status']=event['status']
+        new_start=event['start'].isoformat()
+        old_status=game['status']
+        old_start=game['start_time']
+        game['start_time']=new_start
+        game['status']=event['status']
         if game.get('venue',{}).get('timezone'):
             game['local_start_time']=event['start'].astimezone(ZoneInfo(game['venue']['timezone'])).isoformat()
         game['schedule_corroboration']={k:event[k] for k in ('source_url','observed_at','source_sha256','espn_id')}
@@ -198,7 +250,8 @@ def verify_secondary_schedule(cached,observations,as_of):
         verified.append(gid)
     verified_set=set(verified)
     for game in cached['games']:
-        if game.get('status')!='scheduled' or not game.get('start_time'):continue
+        if game.get('status')!='scheduled' or not game.get('start_time'):
+            continue
         original=parse_time(game['start_time'])
         if cutoff<original<=cutoff+timedelta(hours=24) and game['game_id'] not in verified_set:
             blocked.append(game['game_id'])
@@ -221,38 +274,50 @@ def verify_secondary_schedule(cached,observations,as_of):
 
 
 def fetch_verified_secondary_schedule(cached,directory,as_of):
-    cutoff=parse_time(as_of);today=cutoff.astimezone(EASTERN).date()
+    cutoff=parse_time(as_of)
+    today=cutoff.astimezone(EASTERN).date()
     observations=[_secondary_observation(today+timedelta(days=i),Path(directory)/'secondary') for i in (0,1)]
     result=verify_secondary_schedule(cached,observations,datetime.now(timezone.utc).isoformat())
-    folder=Path(directory)/'secondary';version=folder/'versions'/(result['version']+'.json')
-    if version.exists() and version.read_bytes()!=canonical(result):raise ValueError('Secondary version hash collision')
-    if not version.exists():atomic_json(version,result)
+    folder=Path(directory)/'secondary'
+    version=folder/'versions'/(result['version']+'.json')
+    if version.exists() and version.read_bytes()!=canonical(result):
+        raise ValueError('Secondary version hash collision')
+    if not version.exists():
+        atomic_json(version,result)
     atomic_json(folder/'verified-latest.json',result)
     return result
 
 
 def due_jobs(schedule,now,*,include_waiting=False):
-    now=parse_time(now);jobs=[]
+    now=parse_time(now)
+    jobs=[]
     for g in schedule['games']:
-        if g['status']!='scheduled' or not g['start_time']:continue
-        start=parse_time(g['start_time']);remaining=start-now
+        if g['status']!='scheduled' or not g['start_time']:
+            continue
+        start=parse_time(g['start_time'])
+        remaining=start-now
         if timedelta(0)<remaining<=timedelta(hours=24):
             stage='final' if remaining<=timedelta(minutes=30) else 'preliminary'
             morning=start.astimezone(ZoneInfo('America/Los_Angeles')).replace(hour=9,minute=0,second=0,microsecond=0)
             ready=min(morning,start-timedelta(minutes=30))
             waiting=now<ready
-            if waiting and not include_waiting:continue
+            if waiting and not include_waiting:
+                continue
             # Stable through unrelated schedule changes; a changed tipoff gets a new key.
             key=f"{g['game_id']}:{g['start_time']}:{stage}"
             jobs.append(dict(game_id=g['game_id'],stage=stage,key=key,checkpoint_at=(start-timedelta(minutes=30)).isoformat()))
-            if waiting:jobs[-1].update(waiting=True,ready_at=ready.isoformat())
+            if waiting:
+                jobs[-1].update(waiting=True,ready_at=ready.isoformat())
     return jobs
 
 
 def game_context(schedule,game_id):
     target=next(g for g in schedule['games'] if g['game_id']==game_id)
-    if not target['start_time']:return {}
-    start=parse_time(target['start_time']);day=start.astimezone(EASTERN).date();out={}
+    if not target['start_time']:
+        return {}
+    start=parse_time(target['start_time'])
+    day=start.astimezone(EASTERN).date()
+    out={}
     for team in (target['home_team_id'],target['away_team_id']):
         previous=[g for g in schedule['games'] if g['start_time'] and g['status'] not in ('postponed','tbd')
                   and team in (g['home_team_id'],g['away_team_id']) and parse_time(g['start_time'])<start]
@@ -264,9 +329,11 @@ def game_context(schedule,game_id):
         if target['away_team_id']==team:
             road=1
             for g in reversed(previous):
-                if g['away_team_id']!=team:break
+                if g['away_team_id']!=team:
+                    break
                 road+=1
-        old_zone=last['venue']['timezone'] if last else None;new_zone=target['venue']['timezone']
+        old_zone=last['venue']['timezone'] if last else None
+        new_zone=target['venue']['timezone']
         shift=None
         if old_zone and new_zone:
             shift=(start.astimezone(ZoneInfo(new_zone)).utcoffset()-start.astimezone(ZoneInfo(old_zone)).utcoffset()).total_seconds()/3600

@@ -154,7 +154,8 @@ def _slot(game, now):
 def capture_game_lines(folder, games, season, as_of):
     """Capture lines for the given upcoming games, once per cadence slot each; failures are reported, never raised."""
     from .reference import BASE, fetch_reference, scoreboard_event
-    folder = Path(folder); now = parse_time(as_of)
+    folder = Path(folder)
+    now = parse_time(as_of)
     state_path = folder / 'market' / 'capture-state.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     captured = {k: v for k, v in state.get('captured', {}).items() if now.timestamp() - v < 172800}
@@ -165,7 +166,8 @@ def capture_game_lines(folder, games, season, as_of):
             continue
         slot = _slot(game, now)
         if slot in captured:
-            report['skipped'].append(game['game_id']); continue
+            report['skipped'].append(game['game_id'])
+            continue
         try:
             event, _ = scoreboard_event(game, folder / 'references')
             if event is None:
@@ -188,7 +190,8 @@ def capture_game_lines(folder, games, season, as_of):
 
 def closing_lines(records, start_time):
     """The last capture per provider before tipoff."""
-    tip = parse_time(start_time); latest = {}
+    tip = parse_time(start_time)
+    latest = {}
     for r in records:
         if parse_time(r['retrieved_at']) < tip:
             latest[r['provider_id']] = r
@@ -197,7 +200,9 @@ def closing_lines(records, start_time):
 
 def build_index(folder):
     """Latest and first capture per game and provider, for the dashboard."""
-    root = Path(folder) / 'market' / 'game-lines'; index = {}; damaged = []
+    root = Path(folder) / 'market' / 'game-lines'
+    index = {}
+    damaged = []
     for path in sorted(root.glob('*.jsonl')) if root.exists() else []:
         try:
             records = read_game_lines(folder, path.stem)
@@ -225,7 +230,9 @@ def _implied(odds):
 
 
 def _record(picks):
-    wins = sum(p == 'win' for p in picks); losses = sum(p == 'loss' for p in picks); pushes = sum(p == 'push' for p in picks)
+    wins = sum(p == 'win' for p in picks)
+    losses = sum(p == 'loss' for p in picks)
+    pushes = sum(p == 'push' for p in picks)
     return dict(picks=len(picks), wins=wins, losses=losses, pushes=pushes,
                 win_rate=wins / (wins + losses) if wins + losses else None)
 
@@ -240,10 +247,12 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     when the model margin exceeds the market margin by the threshold.
     """
     from .daily_review import _selected
-    folder = Path(folder); as_of = as_of or datetime.now(timezone.utc).isoformat()
+    folder = Path(folder)
+    as_of = as_of or datetime.now(timezone.utc).isoformat()
     games = {g['game_id']: g for g in schedule.get('games', []) if g.get('start_time') and g.get('status') not in ('postponed', 'cancelled', 'tbd')}
     chosen = selected if selected is not None else _selected(folder, games, as_of, schedule.get('season'))
-    rows = []; errors = []
+    rows = []
+    errors = []
     for gid, game in sorted(games.items(), key=lambda item: item[1]['start_time']):
         selection = chosen.get((gid, 'final')) or chosen.get((gid, 'preliminary'))
         try:
@@ -293,12 +302,14 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                 row['total_edge'] = model_total - total
                 row['went_over'] = None if actual_total == total else actual_total > total
                 row['total_abs_error'] = dict(model=abs(model_total - actual_total), market=abs(total - actual_total))
-            implied_home = _implied(home_ml); implied_away = _implied(away_ml)
+            implied_home = _implied(home_ml)
+            implied_away = _implied(away_ml)
             if implied_home is not None and implied_away is not None and implied_home + implied_away > 0:
                 row['market_home_win'] = implied_home / (implied_home + implied_away)
             rows.append(row)
     summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows))
-    spread_rows = [r for r in rows if 'spread_edge' in r]; total_rows = [r for r in rows if 'total_edge' in r]
+    spread_rows = [r for r in rows if 'spread_edge' in r]
+    total_rows = [r for r in rows if 'total_edge' in r]
     if spread_rows:
         summary['margin_abs_error'] = dict(model=sum(r['margin_abs_error']['model'] for r in spread_rows) / len(spread_rows),
                                            market=sum(r['margin_abs_error']['market'] for r in spread_rows) / len(spread_rows), n=len(spread_rows))

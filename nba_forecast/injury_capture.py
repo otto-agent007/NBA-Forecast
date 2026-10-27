@@ -24,7 +24,8 @@ def capture_daily(directory,season,now):
     elif local<scheduled:
         status['state']='waiting'
     else:
-        try:capture=fetch_daily_report(season,Path(directory)/'raw')
+        try:
+            capture=fetch_daily_report(season,Path(directory)/'raw')
         except (ValueError,OSError) as exc:
             status.update(state='error',error=str(exc),last_attempt_at=now)
             atomic_json(folder/'status.json',status)
@@ -42,7 +43,8 @@ def record_check(directory,check,stage):
         payload={**check,'forecast_stage':stage}
         digest=hashlib.sha256(canonical(payload)).hexdigest()
         archive=root/'records'/(digest+'.json')
-        if not archive.exists():atomic_json(archive,payload)
+        if not archive.exists():
+            atomic_json(archive,payload)
         atomic_json(root/'latest.json',payload)
         if stage=='final' and game['phase']=='final_review' and game['report_status']=='captured_pending_review':
             final=root/'final.json'
@@ -62,16 +64,19 @@ def reported_unavailable(directory,schedule,roster,history,game,parsed=None):
     leaves that game counted as before. ``parsed`` caches reports by hash.
     """
     from .injury_parser import parse_report,pdf_text
-    folder=Path(directory);teams={game['home_team_id'],game['away_team_id']}
+    folder=Path(directory)
+    teams={game['home_team_id'],game['away_team_id']}
     parsed={} if parsed is None else parsed
     earlier=sorted({r['game_id'] for r in history if r['team_id'] in teams and r['season']==schedule['season']})
     result={}
     for gid in earlier:
         path=folder/'injuries/games'/gid/'final.json'
-        if not path.exists():continue
+        if not path.exists():
+            continue
         check=json.loads(path.read_text())
         evidence=next((g.get('anchor_report') for g in check.get('games',[]) if g.get('game_id')==gid),None)
-        if not evidence:continue
+        if not evidence:
+            continue
         if evidence['sha256'] not in parsed:
             try:
                 text=pdf_text(folder/'raw'/(evidence['sha256']+'.pdf'),evidence['sha256'])

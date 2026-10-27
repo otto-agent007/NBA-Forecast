@@ -17,7 +17,8 @@ def complete_official_fixture():
                 reboundsOffensive=0,reboundsDefensive=0,assists=0,steals=0,blocks=0,
                 foulsPersonal=0,plusMinusPoints=5 if side=='homeTeam' else -5)
         for pid in extra_ids:
-            person=copy.deepcopy(team['players'][0]);person.update(personId=pid,familyName=str(pid))
+            person=copy.deepcopy(team['players'][0])
+            person.update(personId=pid,familyName=str(pid))
             person['statistics']={key:('48:00' if key=='minutes' else 0) for key in person['statistics']}
             person['statistics']['plusMinusPoints']=5 if side=='homeTeam' else -5
             team['players'].append(person)
@@ -61,7 +62,8 @@ class OutcomeSyncTests(unittest.TestCase):
         self.assertEqual(record['team_stats']['H']['player_tov'],12)
         self.assertEqual(record['known_at'],'2026-10-24T02:00:00Z')
         rows[0].pop('game_period')
-        with self.assertRaises(ValueError):environment_record(game,rows)
+        with self.assertRaises(ValueError):
+            environment_record(game,rows)
 
 
 class OfficialOutcomeDiscoveryTests(unittest.TestCase):
@@ -73,7 +75,8 @@ class OfficialOutcomeDiscoveryTests(unittest.TestCase):
             Path(d,'roster.json').write_text(json.dumps({'players':[]}))
             report=sync_finished_games(d,{'games':[game]},[],'2026-10-21T00:01:00Z')
             self.assertEqual(report['imported'],['0022600001'])
-            self.assertFalse(report['pending']);self.assertFalse(report['errors'])
+            self.assertFalse(report['pending'])
+            self.assertFalse(report['errors'])
             rows=json.loads(Path(d,'finals/0022600001.json').read_text())
             shots=json.loads(Path(d,'shots/0022600001.json').read_text())
             self.assertEqual(len(rows),10)
@@ -93,7 +96,8 @@ class OfficialOutcomeDiscoveryTests(unittest.TestCase):
                                    (ValueError('No roster'),False)]:
             with self.subTest(failure=str(failure)),tempfile.TemporaryDirectory() as d:
                 page,game,meta=complete_official_fixture()
-                if has_roster:Path(d,'roster.json').write_text(json.dumps({'players':[]}))
+                if has_roster:
+                    Path(d,'roster.json').write_text(json.dumps({'players':[]}))
                 with patch('nba_forecast.outcome_sync.fetch_espn_final',side_effect=failure), \
                         patch('nba_forecast.outcome_sync.fetch_official_game_page',return_value=(page,meta),create=True):
                     report=sync_finished_games(d,{'games':[game]},[],'2026-10-21T00:01:00Z')
@@ -105,11 +109,16 @@ class OfficialOutcomeDiscoveryTests(unittest.TestCase):
         for change in ('ongoing','missing_period','shot_count','minutes','turnovers'):
             with self.subTest(change=change),tempfile.TemporaryDirectory() as d:
                 page,game,meta=complete_official_fixture()
-                if change=='ongoing':page['game']['gameStatus']=2
-                elif change=='missing_period':page['playByPlay']['actions']=[a for a in page['playByPlay']['actions'] if a['period']!=4]
-                elif change=='shot_count':page['playByPlay']['actions'].pop(0)
-                elif change=='minutes':page['game']['homeTeam']['players'][0]['statistics']['minutes']='1:00'
-                else:page['game']['homeTeam']['players'][0]['statistics']['turnovers']=1
+                if change=='ongoing':
+                    page['game']['gameStatus']=2
+                elif change=='missing_period':
+                    page['playByPlay']['actions']=[a for a in page['playByPlay']['actions'] if a['period']!=4]
+                elif change=='shot_count':
+                    page['playByPlay']['actions'].pop(0)
+                elif change=='minutes':
+                    page['game']['homeTeam']['players'][0]['statistics']['minutes']='1:00'
+                else:
+                    page['game']['homeTeam']['players'][0]['statistics']['turnovers']=1
                 Path(d,'roster.json').write_text(json.dumps({'players':[]}))
                 with patch('nba_forecast.outcome_sync.fetch_espn_final',side_effect=ValueError('ESPN athlete ID unavailable')), \
                         patch('nba_forecast.outcome_sync.fetch_official_game_page',return_value=(page,meta),create=True):
@@ -166,7 +175,8 @@ class OfficialOutcomeDiscoveryTests(unittest.TestCase):
                     patch('nba_forecast.outcome_sync.fetch_official_game_page',return_value=(page,meta),create=True):
                 initial=sync_finished_games(d,schedule,[],'2026-10-21T00:01:00Z')
             self.assertEqual(initial['imported'],['0022600001'])
-            for path in Path(d,'environment-finals/records').glob('*.json'):path.unlink()
+            for path in Path(d,'environment-finals/records').glob('*.json'):
+                path.unlink()
             with patch('nba_forecast.outcome_sync.fetch_espn_final',side_effect=AssertionError('No network expected')), \
                     patch('nba_forecast.outcome_sync.fetch_official_game_page',side_effect=AssertionError('No network expected'),create=True):
                 report=sync_finished_games(d,schedule,[],'2026-10-24T00:00:00Z')
@@ -178,7 +188,8 @@ class OfficialOutcomeDiscoveryTests(unittest.TestCase):
         games=[dict(base,game_id=f'002260000{i+1}',start_time=f'2026-10-{18+i:02d}T00:00:00Z') for i in range(6)]
         calls=[]
         def blocked(game,*args,**kwargs):
-            calls.append(game['game_id']);raise ValueError('ESPN unavailable')
+            calls.append(game['game_id'])
+            raise ValueError('ESPN unavailable')
         with tempfile.TemporaryDirectory() as d, \
                 patch('nba_forecast.outcome_sync.fetch_espn_final',side_effect=blocked), \
                 patch('nba_forecast.outcome_sync.fetch_official_game_page',side_effect=ValueError('NBA unavailable')):
@@ -209,13 +220,17 @@ class OfficialOutcomeDiscoveryTests(unittest.TestCase):
                 page,game,meta=complete_official_fixture()
                 rows=normalize_official_page(page,game,meta)
                 for row in rows:
-                    if change=='game':row['game_id']='0022600002'
-                    elif change=='time':row['game_time']='2026-10-20T00:01:00Z'
+                    if change=='game':
+                        row['game_id']='0022600002'
+                    elif change=='time':
+                        row['game_time']='2026-10-20T00:01:00Z'
                     else:
                         row['team_id']='3' if row['team_id']=='1' else '4'
                         row['opponent_id']='4' if row['team_id']=='3' else '3'
-                Path(d,'finals').mkdir();path=Path(d,'finals/0022600001.json')
-                original=json.dumps(rows,indent=2);path.write_text(original)
+                Path(d,'finals').mkdir()
+                path=Path(d,'finals/0022600001.json')
+                original=json.dumps(rows,indent=2)
+                path.write_text(original)
                 with patch('nba_forecast.outcome_sync.fetch_espn_final',side_effect=AssertionError('No replacement fetch expected')), \
                         patch('nba_forecast.outcome_sync.fetch_official_game_page',side_effect=AssertionError('No replacement fetch expected')):
                     report=sync_finished_games(d,{'season':'2026-27','games':[game]},[],'2026-10-24T00:00:00Z')

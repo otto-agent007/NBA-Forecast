@@ -19,7 +19,8 @@ def production(root):
     old['runner_package_sha256'] = 'f' * 64  # the release being replaced
     active = install_artifact(root, old)
     (root / 'model-upgrade-active.json').write_text(json.dumps(dict(artifact_sha256=active, activated_at='2026-10-25T08:00:00Z')))
-    units = root / 'units'; units.mkdir()
+    units = root / 'units'
+    units.mkdir()
     for name in D.UNITS:
         (units / name).write_text('[Unit]\nDescription=x\n[Service]\nType=oneshot\nWorkingDirectory=/old/release\nUMask=0077\nExecStart=/usr/bin/python3 -m nba_forecast tick\n')
     return active, units
@@ -28,7 +29,8 @@ def production(root):
 class DeployTests(unittest.TestCase):
     def test_deploy_pins_builds_activates_rewrites_and_records_once(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d); old_active, units = production(root)
+            root = Path(d)
+            old_active, units = production(root)
             plan = D.deploy(root, units, systemd=False, dry_run=True)
             self.assertFalse(plan['unchanged'])
             self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active, 'a dry run writes nothing')
@@ -59,7 +61,8 @@ class DeployTests(unittest.TestCase):
 
     def test_a_unit_without_one_working_directory_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d); _, units = production(root)
+            root = Path(d)
+            _, units = production(root)
             (units / 'nba-dashboard.service').write_text('[Service]\nExecStart=x\n')
             with self.assertRaisesRegex(ValueError, 'WorkingDirectory'):
                 D.deploy(root, units, systemd=False)

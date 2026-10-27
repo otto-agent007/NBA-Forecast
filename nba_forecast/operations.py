@@ -29,7 +29,8 @@ from .market_lines import capture_game_lines,market_report
 from .reference import archive_daily_references
 
 
-def _now():return datetime.now(timezone.utc).isoformat()
+def _now():
+    return datetime.now(timezone.utc).isoformat()
 
 
 # The season calendar is downloaded once and checked once a day after this hour
@@ -54,7 +55,8 @@ def _code_digest():
     """Fingerprint of this package's source; cached decisions expire with the code."""
     global _CODE_DIGEST
     if _CODE_DIGEST is None:
-        package=Path(__file__).resolve().parent;digest=hashlib.sha256()
+        package=Path(__file__).resolve().parent
+        digest=hashlib.sha256()
         for path in sorted(package.rglob('*.py')):
             digest.update(path.relative_to(package).as_posix().encode()+b'\0'+path.read_bytes())
         _CODE_DIGEST=digest.hexdigest()
@@ -67,7 +69,8 @@ def _read(path,default):
 
 def _contents(folder):
     """Each file's name and content digest; a rewrite with identical bytes changes nothing."""
-    if not folder.exists():return []
+    if not folder.exists():
+        return []
     return sorted((p.name,hashlib.sha256(p.read_bytes()).hexdigest()) for p in folder.iterdir() if p.is_file())
 
 
@@ -79,15 +82,19 @@ def _game_archives(raw):
     """
     names=[]
     for path in sorted(raw.glob('*.provenance.json')) if raw.exists() else []:
-        try:url=json.loads(path.read_text()).get('source_url','')
-        except (ValueError,AttributeError):url='/liveData/boxscore/'  # Unreadable: count it, conservatively.
-        if re.search(r'/liveData/(boxscore|playbyplay)/',str(url)):names.append(path.name)
+        try:
+            url=json.loads(path.read_text()).get('source_url','')
+        except (ValueError,AttributeError):
+            url='/liveData/boxscore/'  # Unreadable: count it, conservatively.
+        if re.search(r'/liveData/(boxscore|playbyplay)/',str(url)):
+            names.append(path.name)
     return names
 
 
 def _ledger_state(db):
     """Append-only tables: row counts and newest rowids identify their contents."""
-    if not Path(db).exists():return None
+    if not Path(db).exists():
+        return None
     with closing(sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)) as conn:
         return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table}').fetchone())
                 for table in ('runs','evaluations')]
@@ -95,12 +102,15 @@ def _ledger_state(db):
 
 def _roster(folder,season,raw,jobs,report):
     """The roster for this tick's jobs: a recent saved copy, else a fresh capture, else a recent fallback."""
-    saved=_read(folder/'roster.json',None);now=parse_time(_now())
+    saved=_read(folder/'roster.json',None)
+    now=parse_time(_now())
     age=(now-parse_time(saved['observed_at'])).total_seconds() if saved else None
     reuse=ROSTER_FINAL_REUSE_SECONDS if any(j['stage']=='final' for j in jobs) else ROSTER_REUSE_SECONDS
     if saved and age is not None and 0<=age<=reuse:
-        report['roster_source']='saved';return saved
-    try:roster=fetch_roster(season,cache_dir=raw)
+        report['roster_source']='saved'
+        return saved
+    try:
+        roster=fetch_roster(season,cache_dir=raw)
     except (ValueError,OSError) as exc:
         if saved and age is not None and 0<=age<=48*3600:
             report['roster_source']='saved_after_failure'
@@ -109,7 +119,8 @@ def _roster(folder,season,raw,jobs,report):
         report['roster_source']='unavailable'
         report['warnings'].append(dict(task='roster',error=str(exc),action='Forecast withheld; injury capture still runs.'))
         return None
-    atomic_json(folder/'roster.json',roster);report['roster_source']='fresh'
+    atomic_json(folder/'roster.json',roster)
+    report['roster_source']='fresh'
     return roster
 
 
@@ -129,11 +140,16 @@ def _evidence_key(check,espn_injuries,roster,stage):
 
 
 def _calendar_due(state,now):
-    if state.get('refresh_requested_at'):return True
-    try:checked=parse_time(state['checked_at'])
-    except (KeyError,TypeError,ValueError):return True
-    local=now.astimezone(PACIFIC);check=local.replace(hour=CALENDAR_CHECK_HOUR,minute=0,second=0,microsecond=0)
-    if local<check:check-=timedelta(days=1)
+    if state.get('refresh_requested_at'):
+        return True
+    try:
+        checked=parse_time(state['checked_at'])
+    except (KeyError,TypeError,ValueError):
+        return True
+    local=now.astimezone(PACIFIC)
+    check=local.replace(hour=CALENDAR_CHECK_HOUR,minute=0,second=0,microsecond=0)
+    if local<check:
+        check-=timedelta(days=1)
     return checked<check
 
 
@@ -151,13 +167,16 @@ def _calendar(folder,season,report):
     check never withholds forecasts: each forecast's preflight still confirms
     its own matchup and tipoff against ESPN's scoreboard.
     """
-    path=folder/'schedule/fetch-state.json';state=_read(path,{});now=parse_time(_now())
+    path=folder/'schedule/fetch-state.json'
+    state=_read(path,{})
+    now=parse_time(_now())
     saved=_read(folder/'schedule/latest.json',None)
     deferred=bool(state.get('next_attempt_at')) and now<parse_time(state['next_attempt_at'])
     if saved is not None and (deferred or not _calendar_due(state,now)):
         verified=_read(folder/'schedule/secondary/verified-latest.json',None)
         if state.get('source')=='espn' and verified and verified.get('crosscheck',{}).get('nba_base_version')==saved.get('version'):
-            report['schedule_source']='espn_verified_cached_nba';return verified
+            report['schedule_source']='espn_verified_cached_nba'
+            return verified
         report['schedule_source']='unverified_cached_nba' if state.get('consecutive_failures') else 'saved_nba'
         return saved
     # The daily check is also when the day's ESPN injury list and depth charts are archived.
@@ -167,12 +186,17 @@ def _calendar(folder,season,report):
     except Exception as exc:
         report['warnings'].append(dict(task='daily_references',error=f'{type(exc).__name__}: {exc}'))
     try:
-        schedule=fetch_schedule(folder/'schedule');source='nba';report['schedule_source']='fresh_nba'
+        schedule=fetch_schedule(folder/'schedule')
+        source='nba'
+        report['schedule_source']='fresh_nba'
     except (ValueError,OSError) as exc:
-        if saved is None:raise
-        if saved['season']!=season:raise ValueError('saved calendar belongs to another season') from exc
+        if saved is None:
+            raise
+        if saved['season']!=season:
+            raise ValueError('saved calendar belongs to another season') from exc
         try:
-            schedule=fetch_verified_secondary_schedule(saved,folder/'schedule',_now());source='espn'
+            schedule=fetch_verified_secondary_schedule(saved,folder/'schedule',_now())
+            source='espn'
             report['schedule_source']='espn_verified_cached_nba'
             report['schedule_recovery']=dict(nba_error=str(exc),crosscheck=schedule['crosscheck'])
         except (ValueError,OSError) as secondary_error:
@@ -195,8 +219,10 @@ def ledger_runs(db):
     Histories are large immutable inputs. Only artifact recovery needs them;
     routine ticks must not load one copy for every saved forecast.
     """
-    if not Path(db).exists():return
-    after=0;upper=None
+    if not Path(db).exists():
+        return
+    after=0
+    upper=None
     while True:
         with closing(sqlite3.connect(db)) as conn:
             conn.row_factory=sqlite3.Row
@@ -205,14 +231,17 @@ def ledger_runs(db):
             rows=conn.execute(
                 'SELECT rowid AS insertion_order,run_id,snapshot_json,forecast_json,mode FROM runs '
                 'WHERE rowid>? AND rowid<=? ORDER BY rowid LIMIT 32',(after,upper)).fetchall()
-        if not rows:return
+        if not rows:
+            return
         after=rows[-1]['insertion_order']
-        for row in rows:yield dict(row)
+        for row in rows:
+            yield dict(row)
 
 
 def _run_ids(db):
     """(run_id, mode) in insertion order, without opening any JSON."""
-    if not Path(db).exists():return []
+    if not Path(db).exists():
+        return []
     with closing(sqlite3.connect(db)) as conn:
         return conn.execute('SELECT run_id,mode FROM runs ORDER BY rowid').fetchall()
 
@@ -233,9 +262,12 @@ def apply_review(snapshot,review,*,skip_superseded=False):
     out=deepcopy(snapshot)
     if len(out['games'])!=1 or review['game_id']!=out['games'][0]['game_id']:
         raise ValueError('review targets a different game')
-    game=out['games'][0];players={p['player_id']:p for p in out['roster']['players']};seen=set()
+    game=out['games'][0]
+    players={p['player_id']:p for p in out['roster']['players']}
+    seen=set()
     for update in review.get('availability',[]):
-        pid=update['player_id'];p=players.get(pid)
+        pid=update['player_id']
+        p=players.get(pid)
         if not p or pid in seen or p['team_id'] not in (game['home_team_id'],game['away_team_id']):
             raise ValueError('duplicate or wrong-team review player')
         seen.add(pid)
@@ -254,7 +286,8 @@ def apply_review(snapshot,review,*,skip_superseded=False):
                     retained_published_at=p.get('status_published_at',p['status_observed_at'])))
                 continue
             raise ValueError('review cannot supersede newer availability evidence')
-        for key in ('status','status_observed_at','status_source_url'):p[key]=update[key]
+        for key in ('status','status_observed_at','status_source_url'):
+            p[key]=update[key]
         p['status_published_at']=update.get('status_published_at',update['status_observed_at'])
         p['status_game_id']=review['game_id']
         p['status_basis']='sourced_review'
@@ -266,73 +299,99 @@ def apply_review(snapshot,review,*,skip_superseded=False):
 
 
 def run_tick(directory,history):
-    folder=Path(directory);folder.mkdir(parents=True,exist_ok=True);lock=folder/'tick.lock'
+    folder=Path(directory)
+    folder.mkdir(parents=True,exist_ok=True)
+    lock=folder/'tick.lock'
     import fcntl
     handle=lock.open('a')
-    try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    try:
+        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError as exc:
-        handle.close();raise ValueError('tick already running') from exc
+        handle.close()
+        raise ValueError('tick already running') from exc
     report=dict(started_at=_now(),status='running',created_runs=0,recovered_runs=0,evaluated_runs=0,errors=[],warnings=[],missed_final_games=[],waiting_jobs=[])
     try:
         _tick(folder,history,report)
         report['status']='partial' if report['errors'] or report['missed_final_games'] else 'complete'
     except Exception as exc:
-        report['errors'].append(dict(task='tick',error=f'{type(exc).__name__}: {exc}'));report['status']='error'
+        report['errors'].append(dict(task='tick',error=f'{type(exc).__name__}: {exc}'))
+        report['status']='error'
     finally:
         report['finished_at']=_now()
         try:
             atomic_json(folder/'last-tick.json',report)
-            with (folder/'ticks.jsonl').open('a') as f:f.write(json.dumps(report,sort_keys=True)+'\n')
+            with (folder/'ticks.jsonl').open('a') as f:
+                f.write(json.dumps(report,sort_keys=True)+'\n')
         finally:
-            fcntl.flock(handle,fcntl.LOCK_UN);handle.close()
+            fcntl.flock(handle,fcntl.LOCK_UN)
+            handle.close()
     return report
 
 
 def _tick(folder,history,report):
     validate_history(history)
     # Daily evidence must still be collected when the calendar endpoint fails.
-    now=parse_time(_now());year=now.year if now.month>=7 else now.year-1
+    now=parse_time(_now())
+    year=now.year if now.month>=7 else now.year-1
     season=f'{year}-{(year+1)%100:02d}'
-    try:report['daily_injuries']=capture_daily(folder,season,_now())
+    try:
+        report['daily_injuries']=capture_daily(folder,season,_now())
     except (ValueError,OSError) as exc:
         report['errors'].append(dict(task='daily_injuries',error=str(exc)))
     schedule=_calendar(folder,season,report)
     report['schedule_version']=schedule['version']
-    statepath=folder/'state.json';state=json.loads(statepath.read_text()) if statepath.exists() else {'jobs':{}}
-    db=folder/'forecast.sqlite';raw=folder/'raw';cache=folder/'finals';cache.mkdir(exist_ok=True)
+    statepath=folder/'state.json'
+    state=json.loads(statepath.read_text()) if statepath.exists() else {'jobs':{}}
+    db=folder/'forecast.sqlite'
+    raw=folder/'raw'
+    cache=folder/'finals'
+    cache.mkdir(exist_ok=True)
     # A run already recorded under its operation key with all three artifacts
     # needs nothing; only the others are opened.
-    recorded=set(state['jobs'].values());artifacts=('profiles.json','forecast.json','snapshot.json')
+    recorded=set(state['jobs'].values())
+    artifacts=('profiles.json','forecast.json','snapshot.json')
     for run_id,_ in _run_ids(db):
         output=folder/'runs'/run_id
-        if run_id in recorded and all((output/name).exists() for name in artifacts):continue
+        if run_id in recorded and all((output/name).exists() for name in artifacts):
+            continue
         run=_run_row(db,run_id,'snapshot_json,forecast_json')
-        snapshot=json.loads(run['snapshot_json']);key=snapshot.get('operation_key')
+        snapshot=json.loads(run['snapshot_json'])
+        key=snapshot.get('operation_key')
         if key:
             missing=[name for name in artifacts if not (output/name).exists()]
-            if 'profiles.json' in missing:atomic_json(output/'profiles.json',build_profiles(snapshot,_saved_history(db,run_id)))
-            if 'forecast.json' in missing:atomic_json(output/'forecast.json',json.loads(run['forecast_json']))
-            if 'snapshot.json' in missing:atomic_json(output/'snapshot.json',snapshot)
-            if missing:report['recovered_artifacts']=report.get('recovered_artifacts',0)+len(missing)
+            if 'profiles.json' in missing:
+                atomic_json(output/'profiles.json',build_profiles(snapshot,_saved_history(db,run_id)))
+            if 'forecast.json' in missing:
+                atomic_json(output/'forecast.json',json.loads(run['forecast_json']))
+            if 'snapshot.json' in missing:
+                atomic_json(output/'snapshot.json',snapshot)
+            if missing:
+                report['recovered_artifacts']=report.get('recovered_artifacts',0)+len(missing)
         if key and key not in state['jobs']:
-            state['jobs'][key]=run_id;report['recovered_runs']+=1
+            state['jobs'][key]=run_id
+            report['recovered_runs']+=1
     atomic_json(statepath,state)
     from .player_sync import enrich_final_cache
     enrich_final_cache(folder)
     combined={(r['game_id'],r['player_id']):r for r in history}
     for p in sorted(cache.glob('*.json')):
-        rows=json.loads(p.read_text());validate_history(rows)
+        rows=json.loads(p.read_text())
+        validate_history(rows)
         for row in rows:
-            key=(row['game_id'],row['player_id']);old=combined.get(key)
-            if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):combined[key]=row
-    history=list(combined.values());validate_history(history)
+            key=(row['game_id'],row['player_id'])
+            old=combined.get(key)
+            if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):
+                combined[key]=row
+    history=list(combined.values())
+    validate_history(history)
     prior_path=folder/'historical-priors.json'
     if prior_path.exists():
         book=json.loads(prior_path.read_text())
         if book.get('boxscore_fields_version')!=1:
             from .historical import expand_prior_fields
             atomic_json(prior_path,expand_prior_fields(book,folder))
-    jobs=due_jobs(schedule,_now(),include_waiting=True);by_id={g['game_id']:g for g in schedule['games']}
+    jobs=due_jobs(schedule,_now(),include_waiting=True)
+    by_id={g['game_id']:g for g in schedule['games']}
     report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
     upcoming=[by_id[j['game_id']] for j in jobs]
     jobs=[j for j in jobs if not j.get('waiting')]
@@ -345,32 +404,42 @@ def _tick(folder,history,report):
     active_model,model_digest=load_active(folder,_now())
     # Market lines for upcoming games, at the forecast cadence; never a reason to fail the tick.
     capture={}
-    try:capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
-    except Exception as exc:report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
+    try:
+        capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
+    except Exception as exc:
+        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.
     roster=_roster(folder,season,raw,jobs,report) if jobs else None
-    capture_cache={};checks={}
+    capture_cache={}
+    checks={}
     for job in jobs:
-        try:checks[job['game_id']]=fetch_injury_check(dict(season=season,games=[by_id[job['game_id']]],as_of=_now(),forecast_stage=job['stage']),raw,capture_cache=capture_cache)
-        except (ValueError,OSError) as exc:checks[job['game_id']]=exc
+        try:
+            checks[job['game_id']]=fetch_injury_check(dict(season=season,games=[by_id[job['game_id']]],as_of=_now(),forecast_stage=job['stage']),raw,capture_cache=capture_cache)
+        except (ValueError,OSError) as exc:
+            checks[job['game_id']]=exc
     for job in jobs:
         version=active_model['model_version'] if active_model else MODEL_VERSION
         evidence=_evidence_key(checks.get(job['game_id']),(capture.get('evidence') or {}).get(job['game_id']),roster,job['stage'])
         job['key']+=f':model:{version}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:evidence:{evidence}'
         job['key']+=':boxscore:'+BOX_MODEL_VERSION
-        if active_model:job['key']+=':configuration:'+active_model['model_key']+':artifact:'+model_digest
+        if active_model:
+            job['key']+=':configuration:'+active_model['model_key']+':artifact:'+model_digest
         prior_book=folder/'historical-priors.json'
-        if prior_book.exists():job['key']+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
+        if prior_book.exists():
+            job['key']+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
         roster_review=folder/'roster-reviews'/(job['game_id']+'.json')
-        if roster_review.exists():job['key']+=':roster-review:'+hashlib.sha256(roster_review.read_bytes()).hexdigest()
+        if roster_review.exists():
+            job['key']+=':roster-review:'+hashlib.sha256(roster_review.read_bytes()).hexdigest()
         path=folder/'reviews'/(job['game_id']+'.json')
         if path.exists():
-            review=json.loads(path.read_text());reviews[job['game_id']]=review
+            review=json.loads(path.read_text())
+            reviews[job['game_id']]=review
             job['key']+=':review:'+hashlib.sha256(canonical(review)).hexdigest()
     # A job that failed is retried after a pause instead of every minute.
     failed=state.setdefault('failed_jobs',{})
-    for key in [k for k,v in failed.items() if (parse_time(_now())-parse_time(v['at'])).total_seconds()>86400]:del failed[key]
+    for key in [k for k,v in failed.items() if (parse_time(_now())-parse_time(v['at'])).total_seconds()>86400]:
+        del failed[key]
     def deferred(job):
         item=failed.get(job['key'])
         pause=JOB_RETRY_SECONDS[1] if job['stage']=='final' else JOB_RETRY_SECONDS[0]
@@ -387,7 +456,8 @@ def _tick(folder,history,report):
                           schedule_context=game_context(schedule,game['game_id']))
             try:
                 check=checks[job['game_id']]
-                if isinstance(check,Exception):raise check
+                if isinstance(check,Exception):
+                    raise check
                 snapshot['as_of']=_now()
                 snapshot['injury_check']=check
                 record_check(folder,check,job['stage'])
@@ -399,9 +469,11 @@ def _tick(folder,history,report):
                         snapshot=apply_report(snapshot,parsed,allow_not_listed=True)
                         report['warnings'].extend(dict(forecast_game_id=job['game_id'],**i) for i in parsed['issues'])
             except (ValueError,OSError) as exc:
-                if job['stage']=='final':raise
+                if job['stage']=='final':
+                    raise
                 report['warnings'].append(dict(game_id=job['game_id'],error=str(exc),action='Preliminary availability remains unresolved.'))
-            if roster is None:raise ValueError('No roster observed within 48 hours; injury checkpoint retained, forecast withheld')
+            if roster is None:
+                raise ValueError('No roster observed within 48 hours; injury checkpoint retained, forecast withheld')
             snapshot['as_of']=_now()
             if job['game_id'] in reviews:
                 snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
@@ -410,10 +482,12 @@ def _tick(folder,history,report):
             snapshot['reported_unavailable']=reported_unavailable(folder,schedule,roster,usable,game,parsed_reports)
             prior_path=folder/'historical-priors.json'
             if prior_path.exists():
-                book=json.loads(prior_path.read_text());teams={game['home_team_id'],game['away_team_id']}
+                book=json.loads(prior_path.read_text())
+                teams={game['home_team_id'],game['away_team_id']}
                 player_ids={p['player_id'] for p in roster['players'] if p['team_id'] in teams}
                 snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
-            if active_model:snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
+            if active_model:
+                snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
             snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable)
             if uses_refinements(snapshot):
                 from .role_context import prepare_role_context
@@ -426,13 +500,15 @@ def _tick(folder,history,report):
                 report['errors'].append(dict(task='preflight',game_id=job['game_id'],issues=verification['issues']))
                 if any(i['code']=='tipoff_changed' for i in verification['issues']):
                     request_calendar_check(folder,'tipoff_changed:'+job['game_id'])
-                failed[job['key']]=dict(at=_now(),reason='preflight');continue
+                failed[job['key']]=dict(at=_now(),reason='preflight')
+                continue
             snapshot['preflight']=verification
             profiles=build_profiles(snapshot,usable)
             prediction=forecast(snapshot,usable)
             run_id=save_run(db,snapshot,usable,prediction)
             # The immutable operation_key in the run is authoritative if interrupted here.
-            state['jobs'][job['key']]=run_id;atomic_json(statepath,state)
+            state['jobs'][job['key']]=run_id
+            atomic_json(statepath,state)
             output=folder/'runs'/run_id
             atomic_json(output/'profiles.json',profiles)
             atomic_json(output/'forecast.json',prediction)
@@ -445,16 +521,21 @@ def _tick(folder,history,report):
     # Prioritize pregame deadlines over downloads and postgame reporting.
     if active_model:
         from .outcome_sync import sync_finished_games
-        synced=sync_finished_games(folder,schedule,history,_now());report['final_sync']=synced
+        synced=sync_finished_games(folder,schedule,history,_now())
+        report['final_sync']=synced
         report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
         report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
     for game in schedule['games']:
-        if game['status']!='final':continue
+        if game['status']!='final':
+            continue
         path=cache/(game['game_id']+'.json')
-        if path.exists():continue
+        if path.exists():
+            continue
         try:
-            url=boxscore_url(game['game_id']);payload=fetch_json(url,cache_dir=raw)
-            rows=normalize_boxscore(payload,url,_now());atomic_json(path,rows)
+            url=boxscore_url(game['game_id'])
+            payload=fetch_json(url,cache_dir=raw)
+            rows=normalize_boxscore(payload,url,_now())
+            atomic_json(path,rows)
         except Exception as exc:
             report['errors'].append(dict(task='final_boxscore',game_id=game['game_id'],error=f'{type(exc).__name__}: {exc}'))
     # Complete/revise player boxes before evaluating the frozen forecasts.
@@ -473,7 +554,8 @@ def _tick(folder,history,report):
         start=game['start_time']
         if start and game['status']!='postponed' and parse_time(state['tracking_started_at'])<parse_time(start)<=parse_time(_now()):
             key=f"{game['game_id']}:{start}:final"
-            if not any(k==key or k.startswith(key+':') for k in state['jobs']):report['missed_final_games'].append(game['game_id'])
+            if not any(k==key or k.startswith(key+':') for k in state['jobs']):
+                report['missed_final_games'].append(game['game_id'])
     atomic_json(statepath,state)
     _refresh_derived(folder,db,schedule,active_model,model_digest,report)
 
@@ -484,34 +566,45 @@ def _evaluate_runs(folder,db,report):
     Runs are immutable, so each run's game IDs are remembered; an unchanged run
     costs one file hash per game instead of decoding its forecast again.
     """
-    path=folder/'evaluation-state.json';saved=_read(path,{})
+    path=folder/'evaluation-state.json'
+    saved=_read(path,{})
     known=saved.get('runs',{}) if saved.get('code')==_code_digest() else {}
-    if not Path(db).exists():return
+    if not Path(db).exists():
+        return
     with closing(sqlite3.connect(db)) as conn:
         latest=dict(conn.execute('SELECT run_id,MAX(revision) FROM evaluations GROUP BY run_id').fetchall())
     finals={}
     def final(gid):
         if gid not in finals:
-            target=folder/'finals'/(gid+'.json');raw=target.read_bytes() if target.exists() else None
+            target=folder/'finals'/(gid+'.json')
+            raw=target.read_bytes() if target.exists() else None
             finals[gid]=(hashlib.sha256(raw).hexdigest() if raw is not None else None,raw)
         return finals[gid]
     def signature(games,revision):
         return hashlib.sha256(canonical(dict(finals=[[gid,final(gid)[0]] for gid in games],revision=revision))).hexdigest()
     unchanged=0
     for run_id,mode in _run_ids(db):
-        if mode!='live':continue
+        if mode!='live':
+            continue
         entry=known.get(run_id)
         if entry and entry['signature']==signature(entry['games'],latest.get(run_id)):
-            unchanged+=1;continue
+            unchanged+=1
+            continue
         run=_run_row(db,run_id,'snapshot_json,forecast_json')
-        snapshot=json.loads(run['snapshot_json']);prediction=json.loads(run['forecast_json'])
+        snapshot=json.loads(run['snapshot_json'])
+        prediction=json.loads(run['forecast_json'])
         keys={(p['game_id'],p['player_id'],p['team_id']) for p in prediction['predictions']}
-        games=[g['game_id'] for g in snapshot['games']];actuals=[];revision=latest.get(run_id)
+        games=[g['game_id'] for g in snapshot['games']]
+        actuals=[]
+        revision=latest.get(run_id)
         for gid in games:
             raw=final(gid)[1]
-            if raw is not None:actuals.extend(r for r in json.loads(raw) if (r['game_id'],r['player_id'],r['team_id']) in keys)
+            if raw is not None:
+                actuals.extend(r for r in json.loads(raw) if (r['game_id'],r['player_id'],r['team_id']) in keys)
         if actuals:
-            try:revision=evaluate_run(db,run_id,actuals)['revision'];report['evaluated_runs']+=1
+            try:
+                revision=evaluate_run(db,run_id,actuals)['revision']
+                report['evaluated_runs']+=1
             except Exception as exc:
                 report['errors'].append(dict(task='evaluation',run_id=run_id,error=f'{type(exc).__name__}: {exc}'))
                 continue
@@ -538,23 +631,31 @@ def _refresh_derived(folder,db,schedule,active_model,model_digest,report):
     An unchanged rebuild would reproduce the same reports, so the saved summary,
     errors and warnings are carried into this tick's report instead.
     """
-    path=folder/'derived-reports.json';saved=_read(path,{})
+    path=folder/'derived-reports.json'
+    saved=_read(path,{})
     signature=_derived_signature(folder,db,schedule,active_model,model_digest)
     outputs=[folder/'performance.json',folder/'benchmarks.json',folder/'daily-reviews/index.json',folder/'market/report.json']
-    if active_model:outputs.append(folder/'model-status.json')
-    if (folder/'roster.json').exists():outputs.append(folder/'postgame/index.json')
-    try:age=(parse_time(_now())-parse_time(saved['computed_at'])).total_seconds()
-    except (KeyError,TypeError,ValueError):age=None
+    if active_model:
+        outputs.append(folder/'model-status.json')
+    if (folder/'roster.json').exists():
+        outputs.append(folder/'postgame/index.json')
+    try:
+        age=(parse_time(_now())-parse_time(saved['computed_at'])).total_seconds()
+    except (KeyError,TypeError,ValueError):
+        age=None
     if (saved.get('signature')==signature and not report.get('recovered_artifacts') and age is not None
             and 0<=age<DERIVED_REFRESH_SECONDS and all(p.exists() for p in outputs)):
-        report.update(saved['report']);report['errors'].extend(saved['errors']);report['warnings'].extend(saved['warnings'])
+        report.update(saved['report'])
+        report['errors'].extend(saved['errors'])
+        report['warnings'].extend(saved['warnings'])
         report['derived_reports']=dict(status='unchanged',computed_at=saved['computed_at'])
         # Outcome discovery runs every tick; keep its summary in the model status current.
         status=folder/'model-status.json'
         if active_model and status.exists():
             current=json.loads(status.read_text())
             if current.get('outcomes')!=report.get('final_sync'):
-                current['outcomes']=report.get('final_sync');atomic_json(status,current)
+                current['outcomes']=report.get('final_sync')
+                atomic_json(status,current)
         return
     errors,warnings=len(report['errors']),len(report['warnings'])
     _derived_reports(folder,db,schedule,active_model,model_digest,report)
@@ -579,7 +680,9 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
         report['prospective_calibration']={k:assessed.get(k) for k in ('status','sample_count','game_count','minimum_games','reason')}
         report['errors'].extend(dict(task='prospective_calibration',detail=e) for e in assessed.get('collection_errors',[]))
         if assessed['status']=='ready' and assessed.get('residual_evidence_sha256')!=(active_model.get('calibration') or {}).get('residual_evidence_sha256'):
-            updated=deepcopy(active_model);updated['calibration']=assessed;updated['known_at']=_now()
+            updated=deepcopy(active_model)
+            updated['calibration']=assessed
+            updated['known_at']=_now()
             digest=install_artifact(folder,updated)
             atomic_json(folder/'model-upgrade-active.json',dict(artifact_sha256=digest,activated_at=_now()))
             active_model,model_digest=updated,digest
@@ -591,7 +694,9 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
         if (margin_assessed['status']=='ready' and
                 margin_assessed.get('evidence_sha256')!=(active_model.get('margin_calibration') or {}).get('evidence_sha256')):
             if verify_margin_calibration_sources(folder,margin_assessed):
-                updated=deepcopy(active_model);updated['margin_calibration']=margin_assessed;updated['known_at']=_now()
+                updated=deepcopy(active_model)
+                updated['margin_calibration']=margin_assessed
+                updated['known_at']=_now()
                 digest=install_artifact(folder,updated)
                 atomic_json(folder/'model-upgrade-active.json',dict(artifact_sha256=digest,activated_at=_now()))
                 active_model,model_digest=updated,digest
@@ -618,6 +723,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     report['errors'].extend(dict(task='daily_review',**e) for e in report['daily_review']['errors'])
     try:
         market=market_report(folder,schedule,_now())
-        atomic_json(folder/'market/report.json',market);report['market']=market['summary']
+        atomic_json(folder/'market/report.json',market)
+        report['market']=market['summary']
     except Exception as exc:
         report['errors'].append(dict(task='market_report',error=f'{type(exc).__name__}: {exc}'))

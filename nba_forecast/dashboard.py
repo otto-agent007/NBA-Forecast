@@ -56,7 +56,8 @@ HISTORY_FIELDS=('game_id','player_id','team_id','start_time','status','reason','
 
 def _connect(db):
     # URI mode=ro is important: opening the UI never initializes or edits a ledger.
-    conn=sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True);conn.row_factory=sqlite3.Row
+    conn=sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)
+    conn.row_factory=sqlite3.Row
     return conn
 
 
@@ -78,33 +79,41 @@ def _run_summaries(conn,season):
 
 def _choose_runs(summaries,by_id):
     """(game_id, stage) -> (rank, run_id) of the newest pregame run that forecast the game as the schedule knows it; the newest roster's run."""
-    chosen={};roster=None
+    chosen={}
+    roster=None
     for s in summaries:
         rank=(parse_time(s['created_at']),s['insertion_order'])
         if s['roster_observed_at']:
             roster_rank=(parse_time(s['roster_observed_at']),s['insertion_order'])
-            if roster is None or roster_rank>roster[0]:roster=(roster_rank,s['run_id'])
+            if roster is None or roster_rank>roster[0]:
+                roster=(roster_rank,s['run_id'])
         for saved in s['games']:
             game=by_id.get(saved['game_id'])
-            if not game or not game.get('start_time') or game.get('status') in ('postponed','cancelled','tbd'):continue
+            if not game or not game.get('start_time') or game.get('status') in ('postponed','cancelled','tbd'):
+                continue
             if (parse_time(saved['start_time'])!=parse_time(game['start_time']) or
                 any(saved[k]!=game[k] for k in ('home_team_id','away_team_id')) or
-                rank[0]>=parse_time(game['start_time'])):continue
+                rank[0]>=parse_time(game['start_time'])):
+                continue
             key=(game['game_id'],s['stage'] or 'preliminary')
-            if key not in chosen or rank>chosen[key][0]:chosen[key]=(rank,s['run_id'])
+            if key not in chosen or rank>chosen[key][0]:
+                chosen[key]=(rank,s['run_id'])
     return chosen,(roster[1] if roster else None)
 
 
 def _profiles_stat(folder,run_id):
     path=folder/'runs'/run_id/'profiles.json'
-    if not path.exists():return None
-    stat=path.stat();return stat.st_size,stat.st_mtime_ns
+    if not path.exists():
+        return None
+    stat=path.stat()
+    return stat.st_size,stat.st_mtime_ns
 
 
 def _decode_run(folder,conn,run_id):
     """Every stage view one immutable run holds, built once; the schedule decides later which still apply."""
     row=conn.execute('SELECT created_at,snapshot_json,forecast_json FROM runs WHERE run_id=?',(run_id,)).fetchone()
-    snapshot=json.loads(row['snapshot_json']);forecast=json.loads(row['forecast_json'])
+    snapshot=json.loads(row['snapshot_json'])
+    forecast=json.loads(row['forecast_json'])
     stage=forecast.get('forecast_stage','preliminary')
     roles=read_optional(folder/'runs'/run_id/'profiles.json',{})
     player_roles={p['player_id']:p for p in roles.get('players',[])}
@@ -135,22 +144,27 @@ def _decode_run(folder,conn,run_id):
 
 def _roster(conn,run_id):
     """The newest saved roster: that run's players and observation time, decoded once."""
-    if run_id is None:return [],None
+    if run_id is None:
+        return [],None
     if run_id not in _ROSTERS:
         row=conn.execute("SELECT json_extract(snapshot_json,'$.roster.players'),json_extract(snapshot_json,'$.roster.observed_at') "
                          "FROM runs WHERE run_id=?",(run_id,)).fetchone()
-        _ROSTERS.clear();_ROSTERS[run_id]=(json.loads(row[0]),row[1])
+        _ROSTERS.clear()
+        _ROSTERS[run_id]=(json.loads(row[0]),row[1])
     return _ROSTERS[run_id]
 
 
 def _compact_prediction(p):
-    components=p.get('components') or {};kept={}
+    components=p.get('components') or {}
+    kept={}
     for name,fields in VIEW_COMPONENTS.items():
         value=components.get(name)
-        if value is None:continue
+        if value is None:
+            continue
         kept[name]=value if fields is None or not isinstance(value,dict) else {k:value[k] for k in fields if k in value}
     rotation=p.get('rotation_role')
-    if isinstance(rotation,dict):rotation={k:v for k,v in rotation.items() if k!='game_ids'}
+    if isinstance(rotation,dict):
+        rotation={k:v for k,v in rotation.items() if k!='game_ids'}
     return dict(p,components=kept,rotation_role=rotation)
 
 
@@ -178,20 +192,23 @@ def _forecast_views(folder,db,schedule,compact=False):
             chosen,roster_run=_choose_runs(_run_summaries(conn,schedule.get('season')),by_id)
             needed={run_id for _,run_id in chosen.values()}
             for run_id in list(_RUN_VIEWS):
-                if run_id not in needed:del _RUN_VIEWS[run_id]
+                if run_id not in needed:
+                    del _RUN_VIEWS[run_id]
             for run_id in sorted(needed):
                 if run_id not in _RUN_VIEWS or _RUN_VIEWS[run_id]['profiles_stat']!=_profiles_stat(folder,run_id):
                     _RUN_VIEWS[run_id]=_decode_run(folder,conn,run_id)
             views={}
             for (gid,stage),(rank,run_id) in sorted(chosen.items()):
                 view=_RUN_VIEWS[run_id]['views'].get(gid)
-                if view is not None:views.setdefault(gid,dict(forecast=None,forecast_stage=None,forecasts={}))['forecasts'][stage]=view
+                if view is not None:
+                    views.setdefault(gid,dict(forecast=None,forecast_stage=None,forecasts={}))['forecasts'][stage]=view
             for gid,item in views.items():
                 # The page opens on the final-stage forecast when one is saved, else the newest.
                 item['forecast_stage']=max(item['forecasts'],key=lambda stage:(stage=='final',chosen[(gid,stage)][0]))
                 item['forecast']=item['forecasts'][item['forecast_stage']]
             players,observed=_roster(conn,roster_run)
-            _VIEWS.clear();_VIEWS.update(key=key,runs=sorted(needed),full=(views,players,observed),
+            _VIEWS.clear()
+            _VIEWS.update(key=key,runs=sorted(needed),full=(views,players,observed),
                                          compact=(_compact_views(views),players,observed))
         return deepcopy(_VIEWS['compact' if compact else 'full'])
 
@@ -199,15 +216,22 @@ def _forecast_views(folder,db,schedule,compact=False):
 def _final_score(folder,game):
     """Team points from the captured final box score (official team total, else player sum), or None."""
     rows=read_optional(folder/'finals'/(game['game_id']+'.json'),None)
-    if not isinstance(rows,list):return None
-    sides={game.get('home_team_id'):'home',game.get('away_team_id'):'away'};official,summed={},{};periods=0
+    if not isinstance(rows,list):
+        return None
+    sides={game.get('home_team_id'):'home',game.get('away_team_id'):'away'}
+    official,summed={},{}
+    periods=0
     for r in rows:
         side=sides.get(r.get('team_id'))
-        if not side:continue
-        summed[side]=summed.get(side,0)+(r.get('pts') or 0);periods=max(periods,r.get('game_period') or 0)
+        if not side:
+            continue
+        summed[side]=summed.get(side,0)+(r.get('pts') or 0)
+        periods=max(periods,r.get('game_period') or 0)
         pts=(r.get('team_boxscore') or {}).get('pts')
-        if isinstance(pts,int):official.setdefault(side,pts)
-    if set(summed)!={'home','away'}:return None
+        if isinstance(pts,int):
+            official.setdefault(side,pts)
+    if set(summed)!={'home','away'}:
+        return None
     return dict(home=official.get('home',summed['home']),away=official.get('away',summed['away']),periods=periods or None)
 
 
@@ -220,13 +244,16 @@ def dashboard_data(directory,*,compact=False):
     """
     folder=Path(directory)
     schedule=_current_schedule(folder)
-    games=deepcopy(schedule.get('games',[]));by_id={g['game_id']:g for g in games}
+    games=deepcopy(schedule.get('games',[]))
+    by_id={g['game_id']:g for g in games}
     for g in games:
-        if not compact:g['forecast']=None
+        if not compact:
+            g['forecast']=None
         g['forecast_stage']=None
         g['forecasts']={}
         # The calendar is checked once a day; a captured final box score shows the game is over.
-        if g.get('status') in ('scheduled','live') and (folder/'finals'/(g['game_id']+'.json')).exists():g['status']='final'
+        if g.get('status') in ('scheduled','live') and (folder/'finals'/(g['game_id']+'.json')).exists():
+            g['status']='final'
         g['final_score']=_final_score(folder,g) if g.get('status')=='final' else None
         capture=read_optional(folder/'injuries/games'/g['game_id']/'latest.json',None)
         item=next((i for i in (capture or {}).get('games',[]) if i['game_id']==g['game_id']),None)
@@ -236,13 +263,17 @@ def dashboard_data(directory,*,compact=False):
         update=read_optional(folder/'availability'/g['game_id']/'latest.json',None)
         g['availability_update']=update if update and g.get('start_time') and parse_time(update['start_time'])==parse_time(g['start_time']) else None
 
-    db=folder/'forecast.sqlite';players=[];roster_observed=None
+    db=folder/'forecast.sqlite'
+    players=[]
+    roster_observed=None
     if db.exists():
         views,players,roster_observed=_forecast_views(folder,db,schedule,compact=compact)
-        for gid,item in views.items():by_id[gid].update(item)
+        for gid,item in views.items():
+            by_id[gid].update(item)
     if not players:
         roster=read_optional(folder/'roster.json',{})
-        players=roster.get('players',[]);roster_observed=roster.get('observed_at')
+        players=roster.get('players',[])
+        roster_observed=roster.get('observed_at')
     # Roster status from another game's snapshot is not current availability.
     team_codes={g[side+'_team_id']:g.get(side+'_tricode') for g in games for side in ('home','away')}
     team_names={g[side+'_team_id']:g.get(side+'_name') for g in games for side in ('home','away')}
@@ -257,9 +288,11 @@ def dashboard_data(directory,*,compact=False):
               'team_name':team_names.get(p['team_id']),'rotation_role':rotations.get(p['player_id']),
               'observed_stats':summaries.get(p['player_id'])} for p in players]
     pool_lineups=projected_lineups([p for p in players if p['roster_membership']!='historical_appearance'],players)
-    for p in players:p['projected_starter']=p['player_id'] in pool_lineups.get(p['team_id'],{}).get('player_ids',[])
+    for p in players:
+        p['projected_starter']=p['player_id'] in pool_lineups.get(p['team_id'],{}).get('player_ids',[])
     market_lines=read_optional(folder/'market/index.json',None)
-    for g in games:g['market']=((market_lines or {}).get('games') or {}).get(g['game_id'])
+    for g in games:
+        g['market']=((market_lines or {}).get('games') or {}).get(g['game_id'])
     model_status=read_optional(folder/'model-status.json',None)
     if model_status:
         model_status['prospective']=read_optional(folder/'prospective-calibration-status.json',None)
@@ -286,19 +319,22 @@ def dashboard_payload(directory):
     ``generated_at`` is when the content last changed, not when it was asked
     for, so a poll that finds nothing new revalidates to 304 and sends no body.
     """
-    value=dashboard_data(directory,compact=True);stamp=value.pop('generated_at')
+    value=dashboard_data(directory,compact=True)
+    stamp=value.pop('generated_at')
     stable=json.dumps(value,allow_nan=False,sort_keys=True).encode()
     etag='"'+hashlib.sha256(stable).hexdigest()[:32]+'"'
     with _CACHE_LOCK:
         if _PAYLOAD.get('etag')!=etag:
-            _PAYLOAD.clear();_PAYLOAD.update(etag=etag,body=b'{"generated_at":'+json.dumps(stamp).encode()+b','+stable[1:])
+            _PAYLOAD.clear()
+            _PAYLOAD.update(etag=etag,body=b'{"generated_at":'+json.dumps(stamp).encode()+b','+stable[1:])
         return _PAYLOAD['etag'],_PAYLOAD['body']
 
 
 def serve_dashboard(directory,assets,port=8765):
     """Loopback only. No arbitrary file access, directory listing, writes or CORS."""
     root=Path(assets).resolve()
-    if not (root/'index.html').is_file():raise ValueError('Build the dashboard first: npm ci --prefix dashboard && npm run build --prefix dashboard')
+    if not (root/'index.html').is_file():
+        raise ValueError('Build the dashboard first: npm ci --prefix dashboard && npm run build --prefix dashboard')
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             path=unquote(urlsplit(self.path).path)
@@ -314,23 +350,37 @@ def serve_dashboard(directory,assets,port=8765):
                             value=player_payload(directory,path.rsplit('/',1)[1])
                         body=json.dumps(value,allow_nan=False).encode()
                 except (OSError,ValueError,KeyError,sqlite3.Error):
-                    self.send_error(503,'Saved dashboard evidence is unavailable');return
+                    self.send_error(503,'Saved dashboard evidence is unavailable')
+                    return
                 if etag and self.headers.get('If-None-Match')==etag:
-                    self.send_response(304);self.send_header('ETag',etag);self.send_header('Cache-Control','no-cache');self.end_headers();return
-                self.send_response(200);self.send_header('Content-Type','application/json')
+                    self.send_response(304)
+                    self.send_header('ETag',etag)
+                    self.send_header('Cache-Control','no-cache')
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type','application/json')
                 self.send_header('Cache-Control','no-cache' if etag else 'no-store')
-                if etag:self.send_header('ETag',etag)
+                if etag:
+                    self.send_header('ETag',etag)
             else:
                 target=(root/('index.html' if path=='/' else path.lstrip('/'))).resolve()
-                if not target.is_relative_to(root) or not target.is_file():self.send_error(404);return
-                body=target.read_bytes();self.send_response(200)
+                if not target.is_relative_to(root) or not target.is_file():
+                    self.send_error(404)
+                    return
+                body=target.read_bytes()
+                self.send_response(200)
                 self.send_header('Content-Type',mimetypes.guess_type(target.name)[0] or 'application/octet-stream')
             self.send_header('X-Content-Type-Options','nosniff')
             self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.nba.com; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'")
-            self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
-        def log_message(self,fmt,*args):pass
+            self.send_header('Content-Length',str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self,fmt,*args):
+            pass
     with ThreadingHTTPServer(('127.0.0.1',port),Handler) as server:
-        print(f'Dashboard: http://127.0.0.1:{port}',flush=True);server.serve_forever()
+        print(f'Dashboard: http://127.0.0.1:{port}',flush=True)
+        server.serve_forever()
 
 
 def _selected_predictions(db,season,player_id):
@@ -342,15 +392,19 @@ def _selected_predictions(db,season,player_id):
     with closing(_connect(db)) as conn,_CACHE_LOCK:
         key=_ledger_key(db,conn)
         if _PREDICTIONS.get('path')!=key[0]:
-            _PREDICTIONS.clear();_PREDICTIONS.update(path=key[0],seen=0,index={})
+            _PREDICTIONS.clear()
+            _PREDICTIONS.update(path=key[0],seen=0,index={})
         if _PREDICTIONS.get('key')!=key:
             index=_PREDICTIONS['index']
             for run in conn.execute("SELECT rowid,run_id,created_at,forecast_json FROM runs WHERE mode='live' AND scope='league' "
                                     "AND rowid>? ORDER BY rowid",(_PREDICTIONS['seen'],)):
-                f=json.loads(run['forecast_json']);rank=(parse_time(run['created_at']),run['rowid'])
+                f=json.loads(run['forecast_json'])
+                rank=(parse_time(run['created_at']),run['rowid'])
                 for pred in f['predictions']:
-                    if not pred.get('game_id') or rank[0]>=parse_time(pred['start_time']):continue
-                    slot=index.setdefault((f['season'],pred['player_id']),{});previous=slot.get(pred['game_id'])
+                    if not pred.get('game_id') or rank[0]>=parse_time(pred['start_time']):
+                        continue
+                    slot=index.setdefault((f['season'],pred['player_id']),{})
+                    previous=slot.get(pred['game_id'])
                     if previous is None or rank>previous['rank']:
                         slot[pred['game_id']]=dict(rank=rank,run_id=run['run_id'],saved_at=run['created_at'],model_version=f['model_version'],
                                                    prediction={k:pred.get(k) for k in HISTORY_FIELDS})
@@ -361,10 +415,15 @@ def _selected_predictions(db,season,player_id):
 
 
 def player_payload(directory,player_id):
-    if not re.fullmatch(r'[0-9]+',str(player_id)):raise ValueError('Invalid player ID')
-    folder=Path(directory);page=read_optional(folder/'players'/(player_id+'.json'),None)
-    if page is None:return dict(player_id=player_id,missing_reason='Player history has not been synchronized yet.',prediction_history=[])
-    page=deepcopy(page);selected={};db=folder/'forecast.sqlite'
+    if not re.fullmatch(r'[0-9]+',str(player_id)):
+        raise ValueError('Invalid player ID')
+    folder=Path(directory)
+    page=read_optional(folder/'players'/(player_id+'.json'),None)
+    if page is None:
+        return dict(player_id=player_id,missing_reason='Player history has not been synchronized yet.',prediction_history=[])
+    page=deepcopy(page)
+    selected={}
+    db=folder/'forecast.sqlite'
     if db.exists():
         selected=_selected_predictions(db,page['season'],player_id)
         with closing(_connect(db)) as conn:

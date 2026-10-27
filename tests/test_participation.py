@@ -180,7 +180,8 @@ class LedgerParticipationTests(unittest.TestCase):
             return store.save_run(self.db, self.snapshot, self.history, self.forecast)
 
     def test_questionable_needs_a_probability_below_one_and_bounds_are_checked(self):
-        q = self.snapshot['roster']['players'][0]; q['status'] = 'questionable'
+        q = self.snapshot['roster']['players'][0]
+        q['status'] = 'questionable'
         p1 = next(p for p in self.forecast['predictions'] if p['player_id'] == 'P1')
         p1['participation_probability'] = 1.0
         with self.assertRaisesRegex(ValueError, 'below one'):

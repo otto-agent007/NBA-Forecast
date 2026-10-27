@@ -27,14 +27,16 @@ def person_key(name):
     still identifies exactly one person.
     """
     words=[w for w in re.split(r'[\s,.]+',name) if w]
-    while len(words)>2 and normalized(words[-1]) in SUFFIXES:words.pop()
+    while len(words)>2 and normalized(words[-1]) in SUFFIXES:
+        words.pop()
     return normalized(' '.join(words))
 
 
 def report_name(name):
     """Report "Last, First" order as "First Last", keeping "Last, Jr., First" suffixes with the surname."""
     parts=[part.strip() for part in name.split(',')]
-    if len(parts)==3 and normalized(parts[1]) in SUFFIXES:return parts[2]+' '+parts[0]+' '+parts[1]
+    if len(parts)==3 and normalized(parts[1]) in SUFFIXES:
+        return parts[2]+' '+parts[0]+' '+parts[1]
     last,first=name.split(',',1)
     return first+' '+last
 
@@ -47,40 +49,60 @@ def pdf_text(path,expected_hash):
         result=subprocess.run(['pdftotext','-layout',str(path),'-'],capture_output=True,text=True,timeout=30,check=True)
     except (OSError,subprocess.SubprocessError) as exc:
         raise ValueError('Poppler pdftotext is required and must extract this PDF successfully') from exc
-    if 'Injury Report:' not in result.stdout:raise ValueError('missing official injury report heading')
+    if 'Injury Report:' not in result.stdout:
+        raise ValueError('missing official injury report heading')
     return result.stdout
 
 
 def parse_report(text,schedule,roster,evidence):
-    names=defaultdict(list);loose=defaultdict(list);teams={};games=defaultdict(list)
+    names=defaultdict(list)
+    loose=defaultdict(list)
+    teams={}
+    games=defaultdict(list)
     for p in roster['players']:
         names[(p['team_id'],normalized(p['name']))].append(p['player_id'])
         loose[(p['team_id'],person_key(p['name']))].append(p['player_id'])
     for g in schedule['games']:
         for side in ('home','away'):
-            name=g[side+'_name'];tid=g[side+'_team_id']
-            if tid!='0':teams[normalized(name)]=tid
-            if 'Clippers' in name:teams[normalized('LA Clippers')]=tid
+            name=g[side+'_name']
+            tid=g[side+'_team_id']
+            if tid!='0':
+                teams[normalized(name)]=tid
+            if 'Clippers' in name:
+                teams[normalized('LA Clippers')]=tid
         if g['start_time']:
             day=parse_time(g['start_time']).astimezone(EASTERN).date().isoformat()
             games[(day,str(g['away_tricode'])+'@'+str(g['home_tricode']))].append(g)
-    day=matchup=team=None;rows=[];issues=[];coverage=set();dates=set()
+    day=matchup=team=None
+    rows=[]
+    issues=[]
+    coverage=set()
+    dates=set()
     for line in text.splitlines():
-        if 'Injury Report:' in line or 'Player Name' in line or re.search(r'Page \d+ of \d+',line):continue
+        if 'Injury Report:' in line or 'Player Name' in line or re.search(r'Page \d+ of \d+',line):
+            continue
         date=re.search(r'\b(\d{2}/\d{2}/\d{4})\b',line)
         if date:
-            day=datetime.strptime(date[1],'%m/%d/%Y').date().isoformat();dates.add(day);team=None;matchup=None
+            day=datetime.strptime(date[1],'%m/%d/%Y').date().isoformat()
+            dates.add(day)
+            team=None
+            matchup=None
             line=line[date.end():]
         match=re.search(r'\b([A-Z]{2,3}@[A-Z]{2,3})\b',line)
-        if match:matchup=match[1];team=None;line=line[match.end():]
+        if match:
+            matchup=match[1]
+            team=None
+            line=line[match.end():]
         line=re.sub(r'^\s*\d{2}:\d{2}\s*\(ET\)\s*','',line)
         tokens=[v.strip() for v in re.split(r'\s{2,}',line.strip()) if v.strip()]
         for token in tokens:
             if normalized(token) in teams:
-                team=teams[normalized(token)];coverage.add((day,matchup,team))
+                team=teams[normalized(token)]
+                coverage.add((day,matchup,team))
         status=STATUS.search(line)
         if 'NOT YET SUBMITTED' in line.upper():
-            issues.append(dict(kind='team_not_submitted',date=day,matchup=matchup,team_id=team));continue
+            issues.append(dict(kind='team_not_submitted',date=day,matchup=matchup,team_id=team))
+            continue
         if not status:
             # A player-looking row cannot silently become an omission. Wrapped
             # or unknown statuses make complete-team inference unsafe.
@@ -89,35 +111,42 @@ def parse_report(text,schedule,roster,evidence):
             continue
         # A report row's player name is the final multi-space-delimited field
         # before Current Status. Wrapped reason lines cannot become player rows.
-        before=line[:status.start()].strip();parts=re.split(r'\s{2,}',before)
+        before=line[:status.start()].strip()
+        parts=re.split(r'\s{2,}',before)
         name=parts[-1] if parts else ''
         if ',' not in name:
-            issues.append(dict(kind='unparsed_status_row',text=line.strip(),team_id=team,date=day,matchup=matchup));continue
+            issues.append(dict(kind='unparsed_status_row',text=line.strip(),team_id=team,date=day,matchup=matchup))
+            continue
         full=report_name(name)
         # An exact spelling first; otherwise a suffix-free match naming one teammate only.
         ids=names.get((team,normalized(full)),[]) or loose.get((team,person_key(full)),[])
         candidates=games.get((day,matchup),[])
         candidates=[g for g in candidates if team in (g['home_team_id'],g['away_team_id'])]
         if len(ids)!=1 or len(candidates)!=1:
-            issues.append(dict(kind='unmatched_identity_or_game',name=name,date=day,matchup=matchup,team_id=team));continue
+            issues.append(dict(kind='unmatched_identity_or_game',name=name,date=day,matchup=matchup,team_id=team))
+            continue
         label=status[1]
         rows.append(dict(player_id=ids[0],team_id=team,game_id=candidates[0]['game_id'],reported_status=label,
                          status={'Available':'available','Out':'out'}.get(label,'questionable'),
                          source_name=name,source_line=line.strip(),**evidence))
     for (game_day,code),candidates in games.items():
-        if game_day not in dates:continue
+        if game_day not in dates:
+            continue
         for game in candidates:
             for tid in (game['home_team_id'],game['away_team_id']):
                 if (game_day,code,tid) not in coverage:
                     issues.append(dict(kind='missing_team_coverage',game_id=game['game_id'],team_id=tid,date=game_day,matchup=code))
-    if not dates:issues.append(dict(kind='missing_report_game_dates'))
+    if not dates:
+        issues.append(dict(kind='missing_report_game_dates'))
     grouped=defaultdict(list)
-    for row in rows:grouped[(row['game_id'],row['player_id'])].append(row)
+    for row in rows:
+        grouped[(row['game_id'],row['player_id'])].append(row)
     unique=[]
     for key,group in grouped.items():
         if len({r['reported_status'] for r in group})>1:
             issues.append(dict(kind='conflicting_player_status',game_id=key[0],player_id=key[1],team_id=group[0]['team_id']))
-        else:unique.append(group[0])
+        else:
+            unique.append(group[0])
     pages=[(int(a),int(b)) for a,b in re.findall(r'Page (\d+) of (\d+)',text)]
     pages_complete=bool(pages) and len({b for _,b in pages})==1 and {a for a,_ in pages}==set(range(1,pages[0][1]+1))
     complete_teams=[]
@@ -133,26 +162,35 @@ def parse_report(text,schedule,roster,evidence):
 
 
 def apply_report(snapshot,parsed,game_ids=None,*,allow_not_listed=False):
-    out=deepcopy(snapshot);cutoff=parse_time(out['as_of']);evidence=parsed['evidence']
+    out=deepcopy(snapshot)
+    cutoff=parse_time(out['as_of'])
+    evidence=parsed['evidence']
     if not parse_time(evidence['published_at'])<=parse_time(evidence['retrieved_at'])<=cutoff:
         raise ValueError('injury report evidence chronology invalid')
-    if cutoff-parse_time(evidence['published_at'])>timedelta(hours=24):raise ValueError('injury report is stale')
-    games={g['game_id']:g for g in out['games']};players={p['player_id']:p for p in out['roster']['players']}
+    if cutoff-parse_time(evidence['published_at'])>timedelta(hours=24):
+        raise ValueError('injury report is stale')
+    games={g['game_id']:g for g in out['games']}
+    players={p['player_id']:p for p in out['roster']['players']}
     target=set(games) if game_ids is None else set(game_ids)
-    if not target<=games.keys():raise ValueError('injury application targets unknown game')
+    if not target<=games.keys():
+        raise ValueError('injury application targets unknown game')
     teams={games[gid][side] for gid in target for side in ('home_team_id','away_team_id')}
     for p in players.values():
         if p['team_id'] in teams:
             p['status']='unknown'
-            for field in ('status_source_url','status_observed_at','status_published_at','status_game_id','reported_status','status_basis'):p.pop(field,None)
+            for field in ('status_source_url','status_observed_at','status_published_at','status_game_id','reported_status','status_basis'):
+                p.pop(field,None)
     for gid in target:
-        g=games[gid];day=parse_time(g['start_time']).astimezone(EASTERN).date().isoformat()
+        g=games[gid]
+        day=parse_time(g['start_time']).astimezone(EASTERN).date().isoformat()
         for tid in (g['home_team_id'],g['away_team_id']):
             if not any(c['date']==day and c['team_id']==tid for c in parsed['team_coverage']):
                 out.setdefault('injury_coverage_warnings',[]).append(dict(game_id=gid,team_id=tid,kind='missing_team_coverage'))
     for row in parsed['rows']:
-        if row['game_id'] not in target:continue
-        p=players.get(row['player_id']);g=games[row['game_id']]
+        if row['game_id'] not in target:
+            continue
+        p=players.get(row['player_id'])
+        g=games[row['game_id']]
         if not p or p['team_id']!=row['team_id'] or p['team_id'] not in (g['home_team_id'],g['away_team_id']):
             raise ValueError('injury row does not match roster/game')
         p.update(status=row['status'],status_source_url=evidence['source_url'],status_observed_at=evidence['retrieved_at'],
@@ -160,7 +198,8 @@ def apply_report(snapshot,parsed,game_ids=None,*,allow_not_listed=False):
     if allow_not_listed:
         listed={(r['game_id'],r['player_id']) for r in parsed['rows']}
         for gid in target:
-            g=games[gid];day=parse_time(g['start_time']).astimezone(EASTERN).date().isoformat()
+            g=games[gid]
+            day=parse_time(g['start_time']).astimezone(EASTERN).date().isoformat()
             matchup=str(g.get('away_tricode'))+'@'+str(g.get('home_tricode'))
             for p in players.values():
                 covered=any(c['date']==day and c['matchup']==matchup and c['team_id']==p['team_id'] for c in parsed.get('complete_teams',[]))

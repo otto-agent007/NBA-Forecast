@@ -29,10 +29,15 @@ class RosterRefreshTests(unittest.TestCase):
             def capture(url,directory,max_age):
                 payload,meta=self.capture(url,directory,max_age)
                 if url.endswith('/1610612738/roster'):
-                    if case=='missing':raise ValueError('unavailable')
-                    if case=='wrong_team':payload['info']['TEAM_ID']=1610612737
-                    if case=='wrong_season':payload['roster'][0]['SEASON']='2025'
-                    if case=='duplicate':payload['roster'][0]['PLAYER_ID']=1610612737
+                    if case=='missing':
+                        raise ValueError('unavailable')
+                    if case=='wrong_team':
+                        payload['info']['TEAM_ID']=1610612737
+                    if case=='wrong_season':
+                        payload['roster'][0]['SEASON']='2025'
+                    if case=='duplicate':
+                        payload['roster'][0]['PLAYER_ID']=1610612737
                 return payload,meta
             with self.subTest(case=case),tempfile.TemporaryDirectory() as d,patch('nba_forecast.roster_refresh.fetch_reference',side_effect=capture):
-                with self.assertRaises(ValueError):fetch_team_rosters('2026-27',Path(d))
+                with self.assertRaises(ValueError):
+                    fetch_team_rosters('2026-27',Path(d))

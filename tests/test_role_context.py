@@ -195,8 +195,10 @@ class RoleContextTests(unittest.TestCase):
         for contradiction in ('prose', 'pbp'):
             with self.subTest(contradiction=contradiction):
                 game, page = page_fixture()
-                if contradiction=='prose': page['story']['content'].append('Flagg returned to the game in the third quarter.')
-                else: page['playByPlay']['actions'].append(dict(personId=1642843, teamId=1610612742,
+                if contradiction=='prose':
+                    page['story']['content'].append('Flagg returned to the game in the third quarter.')
+                else:
+                    page['playByPlay']['actions'].append(dict(personId=1642843, teamId=1610612742,
                     period=3, clock='PT10M00.00S', actionNumber=500, actionType='Made Shot'))
                 history, _ = self.install(page, game)
                 self.assertEqual(self.prepare(history)['events'], [])
@@ -217,11 +219,15 @@ class RoleContextTests(unittest.TestCase):
             with self.subTest(change=change):
                 history, _ = self.install()
                 snapshot = copy.deepcopy(self.snapshot)
-                if change=='source': snapshot['as_of']='2026-10-24T05:00:00Z'
+                if change=='source':
+                    snapshot['as_of']='2026-10-24T05:00:00Z'
                 if change=='history':
-                    for row in history: row['known_at']='2026-10-24T08:00:00Z'
-                if change=='target': snapshot['games']=[self.game]
-                if change=='excluded': snapshot['model_enhancements']={'excluded_history_game_ids':[self.game['game_id']]}
+                    for row in history:
+                        row['known_at']='2026-10-24T08:00:00Z'
+                if change=='target':
+                    snapshot['games']=[self.game]
+                if change=='excluded':
+                    snapshot['model_enhancements']={'excluded_history_game_ids':[self.game['game_id']]}
                 prepared = role_context.prepare_role_context(self.directory, snapshot, history)
                 self.assertEqual(prepared['events'], [])
 
@@ -230,28 +236,39 @@ class RoleContextTests(unittest.TestCase):
             with self.subTest(change=change):
                 history, _ = self.install()
                 injured = next(r for r in history if r['player_id']=='1642843')
-                if change=='player': injured['player_id']='999'
-                if change=='team': injured['team_id'], injured['opponent_id']=injured['opponent_id'], injured['team_id']
+                if change=='player':
+                    injured['player_id']='999'
+                if change=='team':
+                    injured['team_id'], injured['opponent_id']=injured['opponent_id'], injured['team_id']
                 if change=='game':
-                    for row in history: row['game_time']='2026-10-23T22:00:00Z'
-                if change=='minutes': injured['minutes']=32
-                with self.assertRaises(ValueError): self.prepare(history)
+                    for row in history:
+                        row['game_time']='2026-10-23T22:00:00Z'
+                if change=='minutes':
+                    injured['minutes']=32
+                with self.assertRaises(ValueError):
+                    self.prepare(history)
 
     def test_duplicate_or_malformed_raw_player_identity_is_rejected_by_preparation(self):
         for change in ('duplicate', 'game', 'player', 'names', 'malformed'):
             with self.subTest(change=change):
                 game, page = page_fixture()
                 history, _ = self.install(page, game)
-                if change=='duplicate': page['game']['awayTeam']['players'].append(copy.deepcopy(page['game']['awayTeam']['players'][0]))
-                if change=='game': page['game']['gameId']='0022600096'
-                if change=='player': page['game']['awayTeam']['players'][0]['personId']=999
+                if change=='duplicate':
+                    page['game']['awayTeam']['players'].append(copy.deepcopy(page['game']['awayTeam']['players'][0]))
+                if change=='game':
+                    page['game']['gameId']='0022600096'
+                if change=='player':
+                    page['game']['awayTeam']['players'][0]['personId']=999
                 if change=='names':
                     home=page['game']['homeTeam']['players'][0]
                     away=page['game']['awayTeam']['players'][0]
-                    for field in ('firstName','familyName'): home[field],away[field]=away[field],home[field]
-                if change=='malformed': page['game']['awayTeam']['players']='invalid'
+                    for field in ('firstName','familyName'):
+                        home[field],away[field]=away[field],home[field]
+                if change=='malformed':
+                    page['game']['awayTeam']['players']='invalid'
                 self.write_source(page, game)
-                with self.assertRaises(ValueError): self.prepare(history)
+                with self.assertRaises(ValueError):
+                    self.prepare(history)
 
     def test_unplayed_person_is_not_an_injury_shortened_appearance(self):
         person = self.page['game']['awayTeam']['players'][0]
@@ -267,7 +284,8 @@ class RoleContextTests(unittest.TestCase):
     def test_malformed_provenance_container_raises_value_error(self):
         history, metadata = self.install()
         Path(metadata['provenance_path']).write_text('[]')
-        with self.assertRaises(ValueError): self.prepare(history)
+        with self.assertRaises(ValueError):
+            self.prepare(history)
 
     def test_same_time_different_raw_versions_are_ambiguous(self):
         history, _ = self.install()
@@ -300,11 +318,16 @@ class RoleContextTests(unittest.TestCase):
                 prepared = self.prepare(history)
                 path = Path(metadata['provenance_path'])
                 supplied = json.loads(path.read_bytes())
-                if change=='naive': supplied['retrieved_at']='2026-10-24T06:00:00'
-                if change=='before_game': supplied['retrieved_at']='2026-10-23T22:00:00Z'
-                if change=='backdated': supplied['retrieved_at']='2026-10-24T05:00:00Z'
-                if change=='bytes': supplied['bytes']+=1
-                if change=='hash': supplied['sha256']='0'*64
+                if change=='naive':
+                    supplied['retrieved_at']='2026-10-24T06:00:00'
+                if change=='before_game':
+                    supplied['retrieved_at']='2026-10-23T22:00:00Z'
+                if change=='backdated':
+                    supplied['retrieved_at']='2026-10-24T05:00:00Z'
+                if change=='bytes':
+                    supplied['bytes']+=1
+                if change=='hash':
+                    supplied['sha256']='0'*64
                 path.write_text(json.dumps(supplied))
                 if change=='backdated':
                     # Capture pins original observation metadata. A first raw
@@ -314,7 +337,8 @@ class RoleContextTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         role_context.verify_role_context(self.snapshot, history, self.directory)
                 else:
-                    with self.assertRaises(ValueError): self.prepare(history)
+                    with self.assertRaises(ValueError):
+                        self.prepare(history)
                 path.write_text(json.dumps({k:metadata[k] for k in ('source_url','sha256','retrieved_at','bytes')}))
 
     def test_preparation_is_idempotent_and_replays_after_current_final_cache_disappears(self):
@@ -350,14 +374,22 @@ class RoleContextTests(unittest.TestCase):
         for mutation in ('event_duplicate', 'source_duplicate', 'player', 'team', 'known', 'text', 'hash', 'coverage'):
             with self.subTest(mutation=mutation):
                 supplied = copy.deepcopy(prepared)
-                if mutation=='event_duplicate': supplied['events'].append(copy.deepcopy(supplied['events'][0]))
-                if mutation=='source_duplicate': supplied['sources'].append(copy.deepcopy(supplied['sources'][0]))
-                if mutation=='player': supplied['events'][0]['player_id']='1630174'
-                if mutation=='team': supplied['events'][0]['team_id']='1610612754'
-                if mutation=='known': supplied['events'][0]['known_at']='2026-10-23T22:00:00Z'
-                if mutation=='text': supplied['events'][0]['source_text']='invented evidence'
-                if mutation=='hash': supplied['events'][0]['source_sha256']='0'*64
-                if mutation=='coverage': supplied['coverage']['confirmed_events']=9
+                if mutation=='event_duplicate':
+                    supplied['events'].append(copy.deepcopy(supplied['events'][0]))
+                if mutation=='source_duplicate':
+                    supplied['sources'].append(copy.deepcopy(supplied['sources'][0]))
+                if mutation=='player':
+                    supplied['events'][0]['player_id']='1630174'
+                if mutation=='team':
+                    supplied['events'][0]['team_id']='1610612754'
+                if mutation=='known':
+                    supplied['events'][0]['known_at']='2026-10-23T22:00:00Z'
+                if mutation=='text':
+                    supplied['events'][0]['source_text']='invented evidence'
+                if mutation=='hash':
+                    supplied['events'][0]['source_sha256']='0'*64
+                if mutation=='coverage':
+                    supplied['coverage']['confirmed_events']=9
                 self.snapshot['role_context'] = supplied
                 with self.assertRaises(ValueError):
                     role_context.verify_role_context(self.snapshot, history, self.directory)
@@ -373,7 +405,8 @@ class RoleContextTests(unittest.TestCase):
                 try:
                     with self.assertRaisesRegex(ValueError, 'hash|archive'):
                         role_context.verify_role_context(self.snapshot, history, self.directory)
-                finally: path.write_bytes(before)
+                finally:
+                    path.write_bytes(before)
 
     def test_preflight_uses_prepared_cutoff_for_at_most_five_minutes(self):
         history, _ = self.install()
@@ -386,8 +419,10 @@ class RoleContextTests(unittest.TestCase):
                          {'0022600095'})
         for cutoff in ('2026-10-24T06:59:59Z', '2026-10-24T07:05:01Z'):
             self.snapshot['as_of']=cutoff
-            with self.assertRaises(ValueError): role_context.verify_role_context(self.snapshot, history, self.directory)
-            with self.assertRaises(ValueError): role_context.role_excluded_game_ids(self.snapshot, '1642843', history)
+            with self.assertRaises(ValueError):
+                role_context.verify_role_context(self.snapshot, history, self.directory)
+            with self.assertRaises(ValueError):
+                role_context.role_excluded_game_ids(self.snapshot, '1642843', history)
 
     def test_helper_requires_the_exact_eligible_played_history_identity(self):
         history, _ = self.install()
@@ -396,10 +431,14 @@ class RoleContextTests(unittest.TestCase):
             with self.subTest(change=change):
                 altered = copy.deepcopy(history)
                 row = next(r for r in altered if r['player_id']=='1642843')
-                if change=='player': row['player_id']='999'
-                if change=='team': row['team_id'], row['opponent_id']=row['opponent_id'], row['team_id']
-                if change=='time': row['game_time']='2026-10-23T22:00:00Z'
-                if change=='future': row['known_at']='2026-10-24T08:00:00Z'
+                if change=='player':
+                    row['player_id']='999'
+                if change=='team':
+                    row['team_id'], row['opponent_id']=row['opponent_id'], row['team_id']
+                if change=='time':
+                    row['game_time']='2026-10-23T22:00:00Z'
+                if change=='future':
+                    row['known_at']='2026-10-24T08:00:00Z'
                 self.assertEqual(role_context.role_excluded_game_ids(self.snapshot, '1642843', altered), set())
 
     def test_helper_refuses_duplicate_events_and_same_time_conflicting_history(self):
@@ -407,9 +446,11 @@ class RoleContextTests(unittest.TestCase):
         prepared = self.prepare(history)
         self.snapshot['role_context']=copy.deepcopy(prepared)
         self.snapshot['role_context']['events'].append(copy.deepcopy(prepared['events'][0]))
-        with self.assertRaises(ValueError): role_context.role_excluded_game_ids(self.snapshot, '1642843', history)
+        with self.assertRaises(ValueError):
+            role_context.role_excluded_game_ids(self.snapshot, '1642843', history)
         self.snapshot['role_context']=prepared
-        swapped=copy.deepcopy(history[-1]);swapped['team_id'],swapped['opponent_id']=swapped['opponent_id'],swapped['team_id']
+        swapped=copy.deepcopy(history[-1])
+        swapped['team_id'],swapped['opponent_id']=swapped['opponent_id'],swapped['team_id']
         with self.assertRaises(ValueError):
             role_context.role_excluded_game_ids(self.snapshot, '1642843', history+[swapped])
 
@@ -418,9 +459,12 @@ class RoleContextTests(unittest.TestCase):
         prepared = self.prepare(history)
         for target in ('candidate','snapshot'):
             with self.subTest(target=target):
-                snapshot=copy.deepcopy(self.snapshot);snapshot['role_context']=prepared
-                if target=='candidate': snapshot['model_enhancements']={'excluded_history_game_ids':['0022600095']}
-                else: snapshot['excluded_history_game_ids']=['0022600095']
+                snapshot=copy.deepcopy(self.snapshot)
+                snapshot['role_context']=prepared
+                if target=='candidate':
+                    snapshot['model_enhancements']={'excluded_history_game_ids':['0022600095']}
+                else:
+                    snapshot['excluded_history_game_ids']=['0022600095']
                 self.assertEqual(role_context.role_excluded_game_ids(snapshot,'1642843',history),set())
                 with self.assertRaises(ValueError):
                     role_context.verify_role_context(snapshot,history,self.directory)

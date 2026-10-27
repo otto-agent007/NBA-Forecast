@@ -4,7 +4,8 @@ from nba_forecast.benchmarks import paired_metrics, baseline_values
 class BenchmarkTests(unittest.TestCase):
     def test_paired_error_metrics(self):
         r=paired_metrics([{'model':12,'player_average':10,'minutes_rate':11,'actual':10}])
-        self.assertEqual(r['paired_n'],1);self.assertEqual(r['model']['mae'],2)
+        self.assertEqual(r['paired_n'],1)
+        self.assertEqual(r['model']['mae'],2)
         self.assertEqual(r['player_average']['mae'],0)
     def test_baseline_cannot_use_late_history(self):
         p={'player_id':'1','expected_minutes':20}
@@ -25,8 +26,10 @@ class BenchmarkTests(unittest.TestCase):
         previous=dict(actual(),game_id='G0',game_time='2026-10-20T18:00:00Z',known_at='2026-10-20T21:00:00Z')
         with tempfile.TemporaryDirectory() as d:
             db=Path(d)/'ledger.sqlite'
-            with patch('nba_forecast.store._now',return_value=NOW):rid=save_run(db,snapshot,[previous],forecast)
-            with patch('nba_forecast.store._now',return_value=LATER):evaluate_run(db,rid,[actual()])
+            with patch('nba_forecast.store._now',return_value=NOW):
+                rid=save_run(db,snapshot,[previous],forecast)
+            with patch('nba_forecast.store._now',return_value=LATER):
+                evaluate_run(db,rid,[actual()])
             metrics=benchmark_report(db)['groups'][0]['metrics']
             self.assertEqual(metrics['paired_n'],1)
             self.assertEqual(metrics['model']['mae'],4)

@@ -33,14 +33,19 @@ def main():
     parser.add_argument('--history',required=True)
     parser.add_argument('--output',required=True)
     parser.add_argument('--artifact',help='Use an already prepared refined artifact')
-    args=parser.parse_args();folder=Path(args.directory);output=Path(args.output)
-    if output.exists():parser.error('Diagnostic output already exists')
+    args=parser.parse_args()
+    folder=Path(args.directory)
+    output=Path(args.output)
+    if output.exists():
+        parser.error('Diagnostic output already exists')
     output.mkdir(parents=True)
-    now=datetime.now(timezone.utc);as_of=now.isoformat()
+    now=datetime.now(timezone.utc)
+    as_of=now.isoformat()
     base,parent=load_active(folder,as_of)
     if base['model_version']==REFINED_VERSION:
         artifact=read(args.artifact) if args.artifact else base
-        parent=base['parent_artifact_sha256'];base=_read(folder,parent,as_of)
+        parent=base['parent_artifact_sha256']
+        base=_read(folder,parent,as_of)
     else:
         artifact=read(args.artifact) if args.artifact else build_artifact(base,parent,as_of)
     digest=install_artifact(folder,artifact)
@@ -48,9 +53,13 @@ def main():
     history={(r['game_id'],r['player_id']):r for r in read(args.history)}
     for path in sorted((folder/'finals').glob('*.json')):
         for row in read(path):
-            key=row['game_id'],row['player_id'];previous=history.get(key)
-            if previous is None or parse_time(row['known_at'])>=parse_time(previous['known_at']):history[key]=row
-    history=list(history.values());roster=read(folder/'roster.json');schedule=read(folder/'schedule/latest.json')
+            key=row['game_id'],row['player_id']
+            previous=history.get(key)
+            if previous is None or parse_time(row['known_at'])>=parse_time(previous['known_at']):
+                history[key]=row
+    history=list(history.values())
+    roster=read(folder/'roster.json')
+    schedule=read(folder/'schedule/latest.json')
     games=[g for g in schedule['games'] if g.get('start_time') and now<parse_time(g['start_time'])<now+timedelta(hours=24)
         and g.get('status') not in ('cancelled','postponed','tbd')]
     summary=dict(purpose='DIAGNOSTIC ONLY; assumes every roster player is available. These are not pregame forecasts or accuracy measurements.',
@@ -66,17 +75,23 @@ def main():
         s['role_context']=prepare_role_context(folder,s,usable)
         s['shot_quality']=prepare_shot_quality(folder,s,usable)
         s['shot_profiles']=prepare_shot_profiles(folder,s,usable)
-        verify_enhancements(s,folder);verify_role_context(s,usable,folder)
-        verify_shot_quality(s,usable,folder);verify_shot_profiles(s,usable,folder)
-        new=forecast(s,usable);_validate_forecast(s,new)
+        verify_enhancements(s,folder)
+        verify_role_context(s,usable,folder)
+        verify_shot_quality(s,usable,folder)
+        verify_shot_profiles(s,usable,folder)
+        new=forecast(s,usable)
+        _validate_forecast(s,new)
         old_snapshot=deepcopy(s)
         old_snapshot['model_enhancements']=prepare(base,parent,game,cutoff,directory=folder)
-        old=forecast(old_snapshot,usable);before={p['player_id']:p for p in old['predictions']}
+        old=forecast(old_snapshot,usable)
+        before={p['player_id']:p for p in old['predictions']}
         rows=[p for p in new['predictions'] if p['game_id']==game['game_id']]
         impacts=[]
         for p in rows:
-            if p['status']!='projected':continue
-            q=p['components'].get('shot_quality',{});prior=before[p['player_id']]
+            if p['status']!='projected':
+                continue
+            q=p['components'].get('shot_quality',{})
+            prior=before[p['player_id']]
             if p['components'].get('role_context') or q.get('scoring_changed'):
                 impacts.append(dict(player_id=p['player_id'],name=p['name'],old_minutes=prior['expected_minutes'],new_minutes=p['expected_minutes'],
                     old_points=prior['points_mean'],new_points=p['points_mean'],location_points_delta=q.get('points_delta'),
@@ -93,4 +108,5 @@ def main():
     atomic_json(output/'summary.json',summary)
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    main()

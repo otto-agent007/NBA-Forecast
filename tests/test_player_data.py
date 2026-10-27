@@ -13,7 +13,8 @@ class PlayerDataTests(unittest.TestCase):
         self.assertEqual(p['current_season']['dnp'],1)
         self.assertIsNone(p['recent_games'][0]['pts'])
         self.assertEqual(p['prior_season']['gp'],0)
-        with self.assertRaises(ValueError): build_player_pages([],rows+rows[:1],'2026-27','2026-10-22T00:00:00Z')
+        with self.assertRaises(ValueError):
+            build_player_pages([],rows+rows[:1],'2026-27','2026-10-22T00:00:00Z')
 
     def test_every_played_player_and_zero_attempt_coverage(self):
         base=dict(player_id='99',name='Former Roster Player',team_id='A',game_id='g',season='2026-27',season_type='Regular Season',

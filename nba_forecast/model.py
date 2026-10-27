@@ -186,7 +186,8 @@ def _opportunities(previous, current, team_id=None, historical=None, *, excluded
     totals = {field: sum(r[field] * w for r, w in weighted)
               for field in ("minutes", "fga", "fg3a", "fta", "tov")}
     if historical:
-        t=historical['totals'];decay=.90**len(current)
+        t=historical['totals']
+        decay=.90**len(current)
         prior_weight=t['GP']*decay
         mass=prior_weight+sum(.90**age for age,_ in enumerate(reversed(current)))
         for field,key in (('minutes','MIN'),('fga','FGA'),('fg3a','FG3A'),('fta','FTA'),('tov','TOV')):
@@ -196,7 +197,8 @@ def _opportunities(previous, current, team_id=None, historical=None, *, excluded
     # older teams still inform per-minute production and shooting efficiency.
     # Role minutes are minutes when playing: participation is modeled separately,
     # so current-season DNPs no longer dilute them.
-    role_previous=previous;role_current=[r for r in current if r['status']=='played' and r['minutes']>0]
+    role_previous=previous
+    role_current=[r for r in current if r['status']=='played' and r['minutes']>0]
     current_team=[r for r in role_current if r['team_id']==team_id] if team_id else []
     if current_team:
         role_previous=[r for r in previous if r['team_id']==team_id]
@@ -208,7 +210,8 @@ def _opportunities(previous, current, team_id=None, historical=None, *, excluded
     role_current=[r for r in role_current if r['game_id'] not in excluded]
     role_prior_weight=min(len(role_previous),6)*.70**len(role_current)
     role_weighted=[(r,.75**age) for age,r in enumerate(reversed(role_current))]
-    if role_previous:role_weighted += [(r,role_prior_weight/len(role_previous)) for r in role_previous]
+    if role_previous:
+        role_weighted += [(r,role_prior_weight/len(role_previous)) for r in role_previous]
     role_mass=sum(w for _,w in role_weighted)
     minutes=sum(r['minutes']*w for r,w in role_weighted)/role_mass if role_mass else 0.
     rates = {field: totals[field] / totals["minutes"] if totals["minutes"] else 0.0
@@ -683,8 +686,10 @@ def _baseline_forecast(snapshot, history):
             quality['baseline_percentages']=before
             quality['adjusted_percentages']={kind:detail['percentage'] for kind,detail in shooting.items()}
             p['components']['shot_quality']=quality
-            if quality.get('scoring_changed'):p['flags'].append('location_shooting_adjustment')
-        if historical:p['components']['historical_prior']=historical
+            if quality.get('scoring_changed'):
+                p['flags'].append('location_shooting_adjustment')
+        if historical:
+            p['components']['historical_prior']=historical
         p["components"]["multistat"] = _multistat(previous, current)
         recent_role = (current or previous)[-5:]
         normal_recent_role=[r for r in recent_role if r['game_id'] not in (excluded_role or ())]
@@ -735,7 +740,8 @@ def _baseline_forecast(snapshot, history):
                     break
                 ratio = 1 + (goal - current_sum) / movable_sum
                 for p in movable:
-                    items = list(working[p["player_id"]]); items[7] = min(1.0, items[7] * ratio)
+                    items = list(working[p["player_id"]])
+                    items[7] = min(1.0, items[7] * ratio)
                     working[p["player_id"]] = tuple(items)
             for p in projected_team:
                 p["participation_probability"] = working[p["player_id"]][7]
@@ -763,9 +769,11 @@ def _baseline_forecast(snapshot, history):
             shortfall=240.-sum(working[pid][7]*target[pid] for pid in target)
             ceiling={pid:min(48.,(1.+UPLIFT_CAP[0 if pid in core else 1])*working[pid][0]) for pid in target}
             open_ids=[pid for pid in target if pid not in locked and target[pid]>0 and working[pid][7]>0 and target[pid]<ceiling[pid]-1e-9]
-            if shortfall<=1e-9 or not open_ids:break
+            if shortfall<=1e-9 or not open_ids:
+                break
             factor=1.+shortfall/sum(working[pid][7]*target[pid] for pid in open_ids)
-            for pid in open_ids:target[pid]=min(ceiling[pid],target[pid]*factor)
+            for pid in open_ids:
+                target[pid]=min(ceiling[pid],target[pid]*factor)
         deficit=max(0.,240.-sum(working[pid][7]*target[pid] for pid in target))
         assigned_minutes = 0.0
         for p in team_predictions:

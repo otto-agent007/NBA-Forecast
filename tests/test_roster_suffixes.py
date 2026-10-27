@@ -7,27 +7,36 @@ from tests.test_preflight import evidence
 
 
 def rename(snapshot,reference,team,nba,espn,index=0):
-    person=[p for p in snapshot['roster']['players'] if p['team_id']==team][index];old=person['name']
-    person['name']=nba;names=reference['rosters'][team];names[names.index(old)]=espn
+    person=[p for p in snapshot['roster']['players'] if p['team_id']==team][index]
+    old=person['name']
+    person['name']=nba
+    names=reference['rosters'][team]
+    names[names.index(old)]=espn
 
 
 class RosterSuffixTests(unittest.TestCase):
     def test_suffix_spellings_confirm_the_roster(self):
-        s,p,r=evidence();rename(s,r,'T1','Bobby Portis Jr.','Bobby Portis');rename(s,r,'T2','Ernest Udeh','Ernest Udeh, Jr.')
+        s,p,r=evidence()
+        rename(s,r,'T1','Bobby Portis Jr.','Bobby Portis')
+        rename(s,r,'T2','Ernest Udeh','Ernest Udeh, Jr.')
         result=check_inputs(s,[],p,r)
         self.assertEqual(result['status'],'passed',result['issues'])
         self.assertEqual(result['name_suffix_matches'],[dict(team_id='T1',nba=['Bobby Portis Jr.'],espn=['Bobby Portis']),
                                                         dict(team_id='T2',nba=['Ernest Udeh'],espn=['Ernest Udeh, Jr.'])])
 
     def test_a_real_difference_beside_a_suffix_is_noted_without_the_suffix_pair(self):
-        s,p,r=evidence();rename(s,r,'T1','Bobby Portis Jr.','Bobby Portis');dropped=r['rosters']['T1'].pop()
-        result=check_inputs(s,[],p,r);notes=[n for n in result['notes'] if n['code']=='roster_difference']
+        s,p,r=evidence()
+        rename(s,r,'T1','Bobby Portis Jr.','Bobby Portis')
+        dropped=r['rosters']['T1'].pop()
+        result=check_inputs(s,[],p,r)
+        notes=[n for n in result['notes'] if n['code']=='roster_difference']
         self.assertEqual(result['status'],'passed')
         self.assertEqual([(n['team_id'],n['nba_only'],n['espn_only']) for n in notes],[('T1',[dropped],[])])
 
     def test_names_that_collide_without_suffixes_are_not_treated_as_matches(self):
         s,p,r=evidence()
-        rename(s,r,'T1','Gary Payton II','Gary Payton',index=0);rename(s,r,'T1','Gary Payton','Gary Payton III',index=1)
+        rename(s,r,'T1','Gary Payton II','Gary Payton',index=0)
+        rename(s,r,'T1','Gary Payton','Gary Payton III',index=1)
         result=check_inputs(s,[],p,r)
         self.assertEqual(result['name_suffix_matches'],[])
         self.assertTrue(any(n['code']=='roster_difference' and n['team_id']=='T1' for n in result['notes']))

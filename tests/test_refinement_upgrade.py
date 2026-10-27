@@ -23,6 +23,8 @@ class RefinementUpgradeTests(unittest.TestCase):
 
     def test_future_source_or_repeat_upgrade_is_rejected(self):
         base = dict(model_version=REFINED_VERSION, known_at='2026-10-24T01:00:00Z')
-        with self.assertRaises(ValueError): build_artifact(base, 'a' * 64, '2026-10-24T08:00:00Z')
+        with self.assertRaises(ValueError):
+            build_artifact(base, 'a' * 64, '2026-10-24T08:00:00Z')
         base['model_version'] = 'regular-season-baseline-0.5.0'
-        with self.assertRaises(ValueError): build_artifact(base, 'a' * 64, '2026-10-23T08:00:00Z')
+        with self.assertRaises(ValueError):
+            build_artifact(base, 'a' * 64, '2026-10-23T08:00:00Z')
