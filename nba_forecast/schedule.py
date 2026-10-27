@@ -10,6 +10,7 @@ from urllib.error import HTTPError,URLError
 import urllib.request
 from zoneinfo import ZoneInfo
 from .data import SCHEDULE_URL, _fetch, _NoRedirects
+from .files import archive_bytes, atomic_bytes, atomic_json, canonical  # noqa: F401 (re-exported)
 from .validation import parse_time, _season
 
 # Venue locations, not home-team zones (neutral/international sites matter).
@@ -22,15 +23,6 @@ EASTERN = ZoneInfo('America/New_York')
 SECONDARY_HOST = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard'
 SECONDARY_ALIASES = {'GS':'GSW','NO':'NOP','NY':'NYK','SA':'SAS','UTAH':'UTA','WSH':'WAS'}
 SECONDARY_MAX_BYTES = 2 * 1024 * 1024
-
-
-def canonical(value):
-    return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
-
-
-def atomic_json(path,value):
-    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
-    tmp=path.with_suffix(path.suffix+'.tmp');tmp.write_bytes(canonical(value));tmp.replace(path)
 
 
 def normalize_season(payload,observed_at):
@@ -116,9 +108,7 @@ def _secondary_observation(day,directory):
     if not isinstance(payload,dict):raise ValueError('Secondary scoreboard must be an object')
     observed=datetime.now(timezone.utc).isoformat();digest=hashlib.sha256(raw).hexdigest()
     archive=Path(directory)/'raw';archive.mkdir(parents=True,exist_ok=True)
-    path=archive/(digest+'.json')
-    if path.exists() and path.read_bytes()!=raw:raise ValueError('Secondary raw hash collision')
-    if not path.exists():path.write_bytes(raw)
+    archive_bytes(archive/(digest+'.json'),raw)
     meta=archive/(digest+'.provenance.json')
     if not meta.exists():atomic_json(meta,dict(source_url=url,retrieved_at=observed,sha256=digest,bytes=len(raw)))
     return dict(source_url=url,observed_at=observed,source_sha256=digest,payload=payload)

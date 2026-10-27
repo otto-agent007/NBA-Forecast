@@ -23,8 +23,10 @@ class ReferenceTests(unittest.TestCase):
             (root/(hashlib.sha256(url.encode()).hexdigest()+'.json')).write_text(json.dumps(meta))
             payload,saved=fetch_reference(url,root)
             self.assertEqual(payload,{'events':[]});self.assertEqual(saved,meta);opener.assert_not_called()
-            path.write_bytes(b'{}')
-            with self.assertRaisesRegex(ValueError,'hash mismatch'):fetch_reference(url,root)
+            path.write_bytes(b'{"ev')  # a write cut short: fetched again, and the archive repaired
+            opener.return_value.open.return_value.__enter__.return_value.read.return_value=raw
+            payload,saved=fetch_reference(url,root)
+            self.assertEqual(payload,{'events':[]});self.assertEqual(path.read_bytes(),raw);opener.assert_called_once()
 
     def test_same_day_board_is_loaded_once_for_multi_game_slate(self):
         games=[];events=[]

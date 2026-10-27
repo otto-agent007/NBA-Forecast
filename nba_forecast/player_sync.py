@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from .data import normalize_boxscore,fetch_roster
 from .validation import validate_history,parse_time
-from .schedule import atomic_json
+from .files import archive_bytes, atomic_json
 from .player_data import build_player_pages
 from .shots import fetch_game_shots,normalize_page_shots,SHOT_SOURCE_VERSION
 from .full_boxscore_sources import (fetch_official_game_page,normalize_official_page,revise_final_rows,
@@ -93,11 +93,8 @@ def _save_official_final(folder,gid,rows,official,metadata):
     revised=revise_final_rows(rows,official)
     previous=path.read_bytes() if path.exists() else (json.dumps(rows,sort_keys=True,indent=2)+'\n').encode()
     digest=hashlib.sha256(previous).hexdigest()
-    archive=folder/'final-revisions'/gid/(digest+'.json');archive.parent.mkdir(parents=True,exist_ok=True)
-    if archive.exists():
-        if archive.read_bytes()!=previous:raise ValueError('Final revision archive hash collision')
-    else:
-        with archive.open('xb') as stream:stream.write(previous)
+    archive=folder/'final-revisions'/gid/(digest+'.json')
+    archive_bytes(archive,previous)
     atomic_json(archive.with_suffix('.provenance.json'),dict(game_id=gid,sha256=digest,
         archive_kind='prior normalized final cache',source='final cache' if path.exists() else 'normalized history rows',
         replaced_by=dict(metadata)))

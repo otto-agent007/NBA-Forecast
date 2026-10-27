@@ -8,7 +8,7 @@ import urllib.request
 from zoneinfo import ZoneInfo
 
 from .data import _NoRedirects,MAX_BYTES,_NextDataParser,HEADERS
-from .schedule import atomic_json
+from .files import archive_bytes, atomic_json
 from .validation import parse_time
 
 BASE='https://site.api.espn.com/apis/site/v2/sports/basketball/nba/'
@@ -37,8 +37,8 @@ def fetch_reference(url,directory,max_age=300):
         age=(now-parse_time(meta['retrieved_at'])).total_seconds()
         if 0<=age<max_age and raw_path.exists():
             raw=raw_path.read_bytes()
-            if hashlib.sha256(raw).hexdigest()!=meta['sha256']:raise ValueError('reference archive hash mismatch')
-            return decode_reference(raw,url),meta
+            # A damaged archive is not evidence: fetch again, and the write below repairs it.
+            if hashlib.sha256(raw).hexdigest()==meta['sha256']:return decode_reference(raw,url),meta
     opener=urllib.request.build_opener(_NoRedirects())
     headers=HEADERS if url.startswith('https://www.nba.com/team/') else {'User-Agent':'NBA-Forecast/0.1'}
     with opener.open(urllib.request.Request(url,headers=headers),timeout=12) as response:
@@ -47,8 +47,7 @@ def fetch_reference(url,directory,max_age=300):
     payload=decode_reference(raw,url)
     if not isinstance(payload,dict):raise ValueError('reference response is not an object')
     meta=dict(source_url=url,retrieved_at=datetime.now(timezone.utc).isoformat(),sha256=hashlib.sha256(raw).hexdigest())
-    path=folder/'raw'/(meta['sha256']+'.json');path.parent.mkdir(parents=True,exist_ok=True)
-    if not path.exists():path.write_bytes(raw)
+    archive_bytes(folder/'raw'/(meta['sha256']+'.json'),raw)
     atomic_json(pointer,meta)
     return payload,meta
 
