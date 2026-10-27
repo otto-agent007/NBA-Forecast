@@ -21,34 +21,34 @@ def _read(path,default=None):
     return json.loads(path.read_text()) if path.exists() else default
 
 
+def _runs(conn,game_ids,columns):
+    """Live league runs that saved one of these games; no other run is parsed."""
+    return conn.execute(f"SELECT rowid AS insertion_order,{columns} FROM runs WHERE mode='live' AND scope='league' AND EXISTS "
+        "(SELECT 1 FROM json_each(snapshot_json,'$.games') AS g WHERE json_extract(g.value,'$.game_id') IN (SELECT value FROM json_each(?)))",
+        (json.dumps(sorted(game_ids)),))
+
+
 def _selected(folder,games,as_of,season):
-    """Freeze one entire run per game/stage before opening any outcome file."""
+    """Freeze one entire run per game/stage before opening any outcome file.
+
+    Runs are ranked from the ledger columns and the saved game identities; only
+    the chosen run per game and stage is opened, verified and returned.
+    """
     db=folder/'forecast.sqlite'
     chosen={}
     cutoff=parse_time(as_of)
-    if not db.exists():
+    if not db.exists() or not games:
         return chosen
     with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
         conn.row_factory=sqlite3.Row
-        for row in conn.execute("SELECT rowid AS insertion_order,run_id,created_at,as_of,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE mode='live' AND scope='league'"):
+        ranked={}
+        columns="created_at,json_extract(forecast_json,'$.season') AS season,json_extract(forecast_json,'$.forecast_stage') AS stage,json_extract(snapshot_json,'$.games') AS saved_games"
+        for row in _runs(conn,games,columns):
             created=parse_time(row['created_at'])
-            if created>cutoff:
+            stage=row['stage'] or 'preliminary'
+            if created>cutoff or row['season']!=season or stage not in ('preliminary','final'):
                 continue
-            for kind in ('snapshot','forecast'):
-                if hashlib.sha256(row[kind+'_json'].encode()).hexdigest()!=row[kind+'_sha256']:
-                    raise ValueError('Frozen '+kind+' hash mismatch: '+row['run_id'])
-            snapshot=json.loads(row['snapshot_json'])
-            forecast=json.loads(row['forecast_json'])
-            if forecast['season']!=snapshot['season']:
-                raise ValueError('Frozen forecast season differs')
-            if forecast['season']!=season:
-                continue
-            if not parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])==parse_time(row['as_of'])<=created:
-                raise ValueError('Frozen forecast chronology differs: '+row['run_id'])
-            stage=forecast.get('forecast_stage','preliminary')
-            if stage not in ('preliminary','final'):
-                continue
-            for saved in snapshot['games']:
+            for saved in json.loads(row['saved_games']):
                 game=games.get(saved['game_id'])
                 if not game or game.get('status') in ('postponed','cancelled','tbd'):
                     continue
@@ -57,18 +57,32 @@ def _selected(folder,games,as_of,season):
                     continue
                 if any(saved[k]!=game[k] for k in ('home_team_id','away_team_id')):
                     continue
-                predictions=[p for p in forecast['predictions'] if p['game_id']==game['game_id']]
-                if any(p['team_id'] not in (game['home_team_id'],game['away_team_id']) or parse_time(p['start_time'])!=start for p in predictions):
-                    raise ValueError('Frozen prediction identity differs: '+row['run_id'])
                 rank=(created,row['insertion_order'])
                 key=(game['game_id'],stage)
-                if key not in chosen or rank>chosen[key]['rank']:
-                    chosen[key]=dict(rank=rank,run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
-                        model_version=forecast['model_version'],model_key=forecast.get('model_key'),season=forecast['season'],
-                        forecast_sha256=row['forecast_sha256'],predictions=predictions,
-                        totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==game['game_id']),None),
-                        margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==game['game_id']),None),
-                        lineups=snapshot.get('preflight',{}).get('lineups'))
+                if key not in ranked or rank>ranked[key]:
+                    ranked[key]=rank
+        for (gid,stage),rank in sorted(ranked.items()):
+            game=games[gid]
+            start=parse_time(game['start_time'])
+            row=conn.execute('SELECT run_id,created_at,as_of,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE rowid=?',(rank[1],)).fetchone()
+            for kind in ('snapshot','forecast'):
+                if hashlib.sha256(row[kind+'_json'].encode()).hexdigest()!=row[kind+'_sha256']:
+                    raise ValueError('Frozen '+kind+' hash mismatch: '+row['run_id'])
+            snapshot=json.loads(row['snapshot_json'])
+            forecast=json.loads(row['forecast_json'])
+            if forecast['season']!=snapshot['season']:
+                raise ValueError('Frozen forecast season differs')
+            if not parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])==parse_time(row['as_of'])<=rank[0]:
+                raise ValueError('Frozen forecast chronology differs: '+row['run_id'])
+            predictions=[p for p in forecast['predictions'] if p['game_id']==gid]
+            if any(p['team_id'] not in (game['home_team_id'],game['away_team_id']) or parse_time(p['start_time'])!=start for p in predictions):
+                raise ValueError('Frozen prediction identity differs: '+row['run_id'])
+            chosen[(gid,stage)]=dict(rank=rank,run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
+                model_version=forecast['model_version'],model_key=forecast.get('model_key'),season=forecast['season'],
+                forecast_sha256=row['forecast_sha256'],predictions=predictions,
+                totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==gid),None),
+                margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==gid),None),
+                lineups=snapshot.get('preflight',{}).get('lineups'))
     return chosen
 
 
