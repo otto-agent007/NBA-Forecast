@@ -17,7 +17,8 @@ def pending(team='T2'):
     for player in s['roster']['players']:
         if player['team_id']==team:
             player['status']='unknown'
-            for field in ('status_source_url','status_observed_at','status_published_at'):player.pop(field,None)
+            for field in ('status_source_url','status_observed_at','status_published_at'):
+                player.pop(field,None)
     return s,p,r
 
 
@@ -34,7 +35,8 @@ def team(snapshot,tid='T2'):
 
 class EspnFallbackTests(unittest.TestCase):
     def test_listed_players_take_espn_status_and_others_are_available(self):
-        s,p,r=pending();names=sorted(team(s))
+        s,p,r=pending()
+        names=sorted(team(s))
         out=apply_espn_injuries(s,[espn_list(s,players=[(names[0],'Out'),(names[1],'Day-To-Day'),(names[2],'Probable'),(names[3],'Unusual')])])
         people=team(out)
         self.assertEqual([people[n]['status'] for n in names],['out','questionable','available','questionable','available'])
@@ -53,13 +55,15 @@ class EspnFallbackTests(unittest.TestCase):
         self.assertEqual(out['espn_injury_fallbacks'][0]['unmatched_players'],['Not On Roster'])
 
     def test_preflight_passes_with_a_visible_pending_report_note(self):
-        s,p,r=pending();r['espn_injuries']=[espn_list(s,players=[('T2 Person 1','Out')])]
+        s,p,r=pending()
+        r['espn_injuries']=[espn_list(s,players=[('T2 Person 1','Out')])]
         result=check_inputs(apply_espn_injuries(s,r['espn_injuries']),[],p,r)
         self.assertEqual(result['status'],'passed',result['issues'])
         self.assertEqual([n['team_id'] for n in result['notes'] if n['code']=='official_report_pending'],['T2'])
 
     def test_espn_based_status_must_match_its_source(self):
-        s,p,r=pending();r['espn_injuries']=[espn_list(s)]
+        s,p,r=pending()
+        r['espn_injuries']=[espn_list(s)]
         out=apply_espn_injuries(s,r['espn_injuries'])
         next(iter(team(out).values()))['status_observed_at']='2026-10-22T10:58:00Z'
         self.assertIn('availability_conflict',[i['code'] for i in check_inputs(out,[],p,r)['issues']])
@@ -68,7 +72,8 @@ class EspnFallbackTests(unittest.TestCase):
         from nba_forecast.preflight import run_preflight
         from nba_forecast.validation import parse_time
         import tempfile
-        s,p,r=pending();r['espn_injuries']=[espn_list(s,players=[('T2 Person 1','Out')])]
+        s,p,r=pending()
+        r['espn_injuries']=[espn_list(s,players=[('T2 Person 1','Out')])]
         with tempfile.TemporaryDirectory() as folder,patch('nba_forecast.preflight.verify_extractions',return_value=s['injury_extractions']),\
              patch('nba_forecast.preflight.collect_references',return_value=r),patch('nba_forecast.preflight.datetime') as clock:
             clock.now.return_value=parse_time('2026-10-22T11:00:00Z')
@@ -80,7 +85,8 @@ class EspnFallbackTests(unittest.TestCase):
     def test_model_labels_espn_based_availability(self):
         from nba_forecast.model import forecast
         from tests.test_model import row
-        s,p,r=pending();out=apply_espn_injuries(s,[espn_list(s)])
+        s,p,r=pending()
+        out=apply_espn_injuries(s,[espn_list(s)])
         player=next(iter(team(out).values()))
         history=[row(i=i,pid=player['player_id'],team='T2',opponent_id='T1',season='2025-26',
                      game_time=f'2026-04-0{i+1}T20:00:00Z',known_at=f'2026-04-0{i+1}T23:00:00Z') for i in range(3)]
@@ -92,7 +98,8 @@ class EspnFallbackTests(unittest.TestCase):
         from tests.test_empty_injuries import fixture
         s,_,_,payload,meta=fixture()
         athlete=dict(id='4433188',fullName='Devin Carter',displayName='Devin Carter')
-        payload=deepcopy(payload);payload['injuries'][0]['injuries']=[dict(status='Out',athlete=athlete)]
+        payload=deepcopy(payload)
+        payload['injuries'][0]['injuries']=[dict(status='Out',athlete=athlete)]
         reports={x['team_id']:x for x in summary_injuries(payload,s['games'][0],s['season'],meta)}
         self.assertEqual(reports['T1']['players'],[dict(name='Devin Carter',espn_id='4433188',status='Out')])
         self.assertEqual(reports['T2']['players'],[])

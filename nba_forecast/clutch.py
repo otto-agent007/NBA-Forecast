@@ -38,35 +38,46 @@ def normalize(payload, season):
     tables = [t for t in payload.get('resultSets',[]) if t.get('name')=='LeagueDashPlayerClutch']
     if len(tables)!=1:
         raise ValueError('Expected one clutch result table')
-    table=tables[0]; headers=table.get('headers',[])
+    table=tables[0]
+    headers=table.get('headers',[])
     required={'PLAYER_ID','PLAYER_NAME','GP','MIN','FGM','FGA','FG3M','FG3A','FTM','FTA','PTS','AST','TOV'}
     if len(set(headers))!=len(headers) or not required.issubset(headers):
         raise ValueError('Clutch response schema changed')
-    rows=[];seen=set()
+    rows=[]
+    seen=set()
     for values in table.get('rowSet',[]):
-        if len(values)!=len(headers):raise ValueError('Clutch row width mismatch')
-        row=dict(zip(headers,values));pid=row['PLAYER_ID']
-        if type(pid) is not int or pid<=0 or pid in seen:raise ValueError('Invalid or duplicate player ID')
+        if len(values)!=len(headers):
+            raise ValueError('Clutch row width mismatch')
+        row=dict(zip(headers,values))
+        pid=row['PLAYER_ID']
+        if type(pid) is not int or pid<=0 or pid in seen:
+            raise ValueError('Invalid or duplicate player ID')
         seen.add(pid)
         for field in required-{'PLAYER_ID','PLAYER_NAME'}:
             value=row[field]
             if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<0:
                 raise ValueError(f'Invalid clutch count: {field}')
-            if field!='MIN' and int(value)!=value:raise ValueError('Noninteger clutch count')
-        if not isinstance(row['PLAYER_NAME'],str) or not row['PLAYER_NAME']:raise ValueError('Missing player name')
+            if field!='MIN' and int(value)!=value:
+                raise ValueError('Noninteger clutch count')
+        if not isinstance(row['PLAYER_NAME'],str) or not row['PLAYER_NAME']:
+            raise ValueError('Missing player name')
         if not (row['FG3M']<=row['FGM']<=row['FGA'] and row['FG3M']<=row['FG3A']<=row['FGA'] and row['FTM']<=row['FTA']):
             raise ValueError('Inconsistent clutch attempts')
-        if row['PTS']!=2*row['FGM']+row['FG3M']+row['FTM']:raise ValueError('Clutch scoring identity mismatch')
+        if row['PTS']!=2*row['FGM']+row['FG3M']+row['FTM']:
+            raise ValueError('Clutch scoring identity mismatch')
         rows.append(row)
-    if not rows:raise ValueError('Empty clutch table is not verified season coverage')
+    if not rows:
+        raise ValueError('Empty clutch table is not verified season coverage')
     return rows
 
 
 def main():
     from .data import fetch_json
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('seasons',nargs='+');parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
+    parser.add_argument('seasons',nargs='+')
+    parser.add_argument('--output',type=Path,required=True)
+    args=parser.parse_args()
+    args.output.mkdir(parents=True,exist_ok=True)
     for season in args.seasons:
         url=clutch_url(season)
         payload=fetch_json(url,cache_dir=args.output/'raw')
@@ -76,9 +87,12 @@ def main():
                 'parameters':payload['parameters'],'rows':rows,
                 'limitations':['Season aggregates are research evidence, not historical pregame observations.',
                                'Missing players are not zero-filled. No automatic model adjustment.']}
-        path=args.output/f'{season}.json';tmp=path.with_suffix('.tmp')
-        tmp.write_text(json.dumps(result,indent=2)+'\n');tmp.replace(path)
+        path=args.output/f'{season}.json'
+        tmp=path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(result,indent=2)+'\n')
+        tmp.replace(path)
         print(f'{season}: {len(rows)} validated player rows')
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    main()

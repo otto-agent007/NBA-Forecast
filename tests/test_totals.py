@@ -60,9 +60,12 @@ class TotalsTests(unittest.TestCase):
             components={'history':{'played_games':0},'availability':{'status':'available'}})
         for edit in ('questionable','unknown','played','extra_flag'):
             candidate=deepcopy(cold)
-            if edit in ('questionable','unknown'):candidate['components']['availability']['status']=edit
-            elif edit=='played':candidate['components']['history']['played_games']=1
-            else:candidate['flags'].append('new_team_role_unobserved')
+            if edit in ('questionable','unknown'):
+                candidate['components']['availability']['status']=edit
+            elif edit=='played':
+                candidate['components']['history']['played_games']=1
+            else:
+                candidate['flags'].append('new_team_role_unobserved')
             if edit not in ('played','questionable'):
                 self.assertEqual(game_totals(GAME,predictions()+[candidate])['status'],'partial',edit)
             # Schema 3 also required zero played games; schema 4 covers evidence-only withholding regardless.
@@ -81,12 +84,18 @@ class TotalsTests(unittest.TestCase):
         self.assertAlmostEqual(team['points_mean'],100.05)
         self.assertEqual(game_totals(GAME,predictions()+[tagged],schema_version=4)['status'],'partial')
         for edit in ('starter','lineup','unknown','role','tag_only'):
-            candidate=deepcopy(tagged);lineups=None
-            if edit=='starter':candidate['projected_starter']=True
-            elif edit=='lineup':lineups={'A':{'player_ids':['rookie']}}
-            elif edit=='unknown':candidate['components']['availability']['status']='unknown'
-            elif edit=='role':candidate['flags'].append('new_team_role_unobserved')
-            else:candidate['flags']=['availability_questionable']
+            candidate=deepcopy(tagged)
+            lineups=None
+            if edit=='starter':
+                candidate['projected_starter']=True
+            elif edit=='lineup':
+                lineups={'A':{'player_ids':['rookie']}}
+            elif edit=='unknown':
+                candidate['components']['availability']['status']='unknown'
+            elif edit=='role':
+                candidate['flags'].append('new_team_role_unobserved')
+            else:
+                candidate['flags']=['availability_questionable']
             self.assertEqual(game_totals(GAME,predictions()+[candidate],lineups=lineups)['status'],'partial',edit)
 
     def test_out_player_is_known_zero_and_missing_minutes_are_disclosed(self):
@@ -125,9 +134,12 @@ class TotalsTests(unittest.TestCase):
         self.assertEqual((team['status'],team['cold_start_player_ids'],team['unresolved_player_ids']),('complete',['rookie'],[]))
         for edit in ('questionable','starter','role'):
             candidate=deepcopy(covered)
-            if edit=='questionable':candidate['components']['availability']['status']='questionable'
-            elif edit=='starter':candidate['projected_starter']=True
-            else:candidate['flags'].append('new_team_role_unobserved')
+            if edit=='questionable':
+                candidate['components']['availability']['status']='questionable'
+            elif edit=='starter':
+                candidate['projected_starter']=True
+            else:
+                candidate['flags'].append('new_team_role_unobserved')
             # Schema 5 covers the questionable case (test_tagged_bench_players_without_evidence_are_covered_from_schema_5).
             self.assertEqual(game_totals(GAME,rows+[candidate],schema_version=4)['teams'][0]['status'],'partial',edit)
             if edit!='questionable':
@@ -140,10 +152,13 @@ class TotalsTests(unittest.TestCase):
         self.assertEqual(total['teams'][1]['status'],'unavailable')
 
     def test_duplicate_and_nonfinite_projection_rows_are_rejected(self):
-        with self.assertRaises(ValueError):game_totals(GAME,predictions()+[predictions()[0]])
+        with self.assertRaises(ValueError):
+            game_totals(GAME,predictions()+[predictions()[0]])
         for bad in (float('nan'),float('inf'),-1,True):
-            rows=predictions();rows[0]['points_mean']=bad
-            with self.assertRaises(ValueError):game_totals(GAME,rows)
+            rows=predictions()
+            rows[0]['points_mean']=bad
+            with self.assertRaises(ValueError):
+                game_totals(GAME,rows)
 
     def test_new_forecast_contains_totals(self):
         result=forecast(snapshot(),[row()])
@@ -154,12 +169,16 @@ class TotalsTests(unittest.TestCase):
         s,_,f=inputs()
         f['game_totals']=[game_totals(s['games'][0],f['predictions'])]
         _validate_forecast(s,f)
-        forged=deepcopy(f);forged['game_totals'][0]['points_mean']=999
-        with self.assertRaisesRegex(ValueError,'totals'):_validate_forecast(s,forged)
+        forged=deepcopy(f)
+        forged['game_totals'][0]['points_mean']=999
+        with self.assertRaisesRegex(ValueError,'totals'):
+            _validate_forecast(s,forged)
 
     def test_original_saved_totals_schema_remains_valid(self):
         s,_,f=inputs()
         f['game_totals']=[game_totals(s['games'][0],f['predictions'],schema_version=1)]
         _validate_forecast(s,f)
-        forged=deepcopy(f);forged['game_totals'][0]['teams'][0]['projected_players']=True
-        with self.assertRaisesRegex(ValueError,'totals'):_validate_forecast(s,forged)
+        forged=deepcopy(f)
+        forged['game_totals'][0]['teams'][0]['projected_players']=True
+        with self.assertRaisesRegex(ValueError,'totals'):
+            _validate_forecast(s,forged)

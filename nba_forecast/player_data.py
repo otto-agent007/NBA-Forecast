@@ -27,7 +27,8 @@ def _summary(rows, season):
 
 def build_player_pages(roster, history, season, as_of, shots=None):
     cutoff = _timestamp(as_of)
-    year = int(season[:4]); prior = f'{year-1}-{str(year)[-2:]}'
+    year = int(season[:4])
+    prior = f'{year-1}-{str(year)[-2:]}'
     grouped, seen = {}, set()
     for row in history:
         if _timestamp(row['known_at']) > cutoff or _timestamp(row['game_time']) >= cutoff:
@@ -49,33 +50,41 @@ def build_player_pages(roster, history, season, as_of, shots=None):
             people[pid]={'player_id':pid,'name':latest.get('name',pid),'team_id':latest.get('team_id'),
                 'roster_membership':'historical_appearance','identity_basis':'Verified final box score; not on the current roster.'}
     for person in people.values():
-        pid = str(person['player_id']); rows = grouped.get(pid, [])
+        pid = str(person['player_id'])
+        rows = grouped.get(pid, [])
         chart_rows, covered_games, missing_reasons, zero_games = [], set(), [], 0
         played_games={r['game_id']:r for r in rows if r['season']==season and r['status']=='played'}
         for game in shot_games:
-            if game.get('game_id') not in played_games:continue
+            if game.get('game_id') not in played_games:
+                continue
             if not game.get('known_at') or _timestamp(game['known_at']) > cutoff:
                 continue
             if game.get('season') != season or (game.get('game_time') and _timestamp(game['game_time']) >= cutoff):
                 continue
             if game.get('missing_reason'):
-                missing_reasons.append(game['missing_reason']); continue
+                missing_reasons.append(game['missing_reason'])
+                continue
             relevant = [{**s, 'provenance': game.get('provenance', [])} for s in game.get('shots', []) if str(s['player_id']) == pid]
             observed=played_games[game['game_id']]
             coverage=next((p for p in game.get('coverage',{}).get('players',[]) if str(p['player_id'])==pid),None)
             reconciled=game.get('coverage',{}).get('reconciled') is True
             # A zero-attempt appearance is covered only by an explicit player
             # reconciliation; an empty feed is never treated as a clean game.
-            if not reconciled or (not relevant and not (coverage and coverage.get('reconciled'))):continue
+            if not reconciled or (not relevant and not (coverage and coverage.get('reconciled'))):
+                continue
             checks={'fga':len(relevant),'fgm':sum(s['made'] for s in relevant),
                 'fg3a':sum(s['points']==3 for s in relevant),'fg3m':sum(s['made'] and s['points']==3 for s in relevant)}
             if any(observed.get(k)!=v for k,v in checks.items()):
-                missing_reasons.append('Shot totals differ from the latest final box score');continue
-            covered_games.add(game['game_id']);chart_rows.extend(relevant)
-            if not relevant:zero_games+=1
+                missing_reasons.append('Shot totals differ from the latest final box score')
+                continue
+            covered_games.add(game['game_id'])
+            chart_rows.extend(relevant)
+            if not relevant:
+                zero_games+=1
         located = sum(s.get('x') is not None and s.get('y') is not None for s in chart_rows)
         missing=set(played_games)-covered_games
-        if missing:missing_reasons.append(f'{len(missing)} played game(s) awaiting verified shot data')
+        if missing:
+            missing_reasons.append(f'{len(missing)} played game(s) awaiting verified shot data')
         chart = {'shots': chart_rows, 'coverage': {'attempts': len(chart_rows), 'located_attempts': located, 'games': len(covered_games),
             'played_games':len(played_games),'missing_games':len(missing),'missing_game_ids':sorted(missing),
             'zero_attempt_games':zero_games,'complete':not missing and bool(played_games)},

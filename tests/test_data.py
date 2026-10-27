@@ -99,6 +99,17 @@ class DataTests(unittest.TestCase):
             self.assertEqual(archive["sha256"], hashlib.sha256(raw).hexdigest())
             self.assertEqual(json.loads(Path(archive["provenance_path"]).read_text())["source_url"], URL)
 
+    def test_truncated_archive_is_repaired_instead_of_failing_every_fetch(self):
+        raw = (FIXTURES / "boxscore_0022600001.json").read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            archive = data.archive_payload(raw, URL, KNOWN, directory)
+            Path(archive["raw_path"]).write_bytes(raw[:100])  # a write cut short by a crash or a full disk
+            again = data.archive_payload(raw, URL, KNOWN, directory)
+            self.assertTrue(again["repaired_raw_archive"])
+            self.assertEqual(Path(archive["raw_path"]).read_bytes(), raw)
+            self.assertNotIn("repaired_raw_archive", data.archive_payload(raw, URL, KNOWN, directory))
+            self.assertFalse(list(Path(directory).glob(".*.tmp")))
+
     def test_fetch_json_archives_successful_response(self):
         raw = (FIXTURES / "boxscore_0022600001.json").read_bytes()
         with tempfile.TemporaryDirectory() as directory, patch("urllib.request.OpenerDirector.open") as open_request:

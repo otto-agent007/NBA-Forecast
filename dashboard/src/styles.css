@@ -1809,3 +1809,16 @@ pre {
 .daily-review li { margin-bottom: 14px; line-height: 1.5; }
 .daily-review details { margin-top: 12px; }
 .daily-review h4 { margin-top: 24px; }
+
+/* Text for assistive technology only. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

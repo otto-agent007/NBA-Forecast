@@ -65,8 +65,9 @@ ABSENCE_MINIMUM_MINUTES = PARAMETERS['absence_minimum_minutes']
 
 
 def _season(time):
+    """The season a game time belongs to, by its starting year; July starts the next one, as in operations."""
     moment = parse_time(time)
-    return moment.year if moment.month >= 8 else moment.year - 1
+    return moment.year if moment.month >= 7 else moment.year - 1
 
 
 def team_ratings(samples, as_of):
@@ -85,9 +86,11 @@ def team_ratings(samples, as_of):
         for team, signed in ((s['home_team_id'], margin), (s['away_team_id'], -margin)):
             t = totals.setdefault(team, [0., 0, 0., 0])
             if season == current:
-                t[0] += signed; t[1] += 1
+                t[0] += signed
+                t[1] += 1
             else:
-                t[2] += signed; t[3] += 1
+                t[2] += signed
+                t[3] += 1
     ratings = {}
     for team, (now_sum, now_n, prior_sum, prior_n) in sorted(totals.items()):
         prior = RATING_PRIOR_SHRINK * prior_sum / prior_n if prior_n else 0.
@@ -353,22 +356,28 @@ def build_margin_forecasts(snapshot, result):
             if not all(_text(game[k]) for k in ('game_id', 'home_team_id', 'away_team_id')) or game['home_team_id'] == game['away_team_id']:
                 raise ValueError('Invalid game identity')
             if parse_time(result['as_of']) != cutoff:
-                value['reason'] = 'forecast_cutoff_mismatch'; continue
+                value['reason'] = 'forecast_cutoff_mismatch'
+                continue
             if parse_time(game['start_time']) <= cutoff:
-                value['reason'] = 'not_pregame'; continue
+                value['reason'] = 'not_pregame'
+                continue
             if not _text(model_key) or enhancement.get('model_key') != model_key:
-                value['reason'] = 'margin_model_mismatch'; continue
+                value['reason'] = 'margin_model_mismatch'
+                continue
             error = _input_error(inputs, model_key, cutoff, game)
             if error:
-                value['reason'] = error; continue
+                value['reason'] = error
+                continue
             totals = game_totals(game, result['predictions'], lineups=snapshot.get('preflight', {}).get('lineups'))
             value['coverage_status'] = totals['status']
             if 'game_totals' in result:
                 saved = [r for r in result['game_totals'] if r.get('game_id') == game['game_id']]
                 if len(saved) != 1 or _canonical(saved[0]) != _canonical(totals):
-                    value['reason'] = 'totals_disagree_with_predictions'; continue
+                    value['reason'] = 'totals_disagree_with_predictions'
+                    continue
             if totals['status'] != 'complete':
-                value['reason'] = 'incomplete_team_totals'; continue
+                value['reason'] = 'incomplete_team_totals'
+                continue
             means = {t['team_id']: t['points_mean'] for t in totals['teams']}
             player_sum = means[game['home_team_id']] - means[game['away_team_id']]
             absence, absent = absence_adjustment(result['predictions'], game)
@@ -380,22 +389,26 @@ def build_margin_forecasts(snapshot, result):
                          absent_regular_minutes=absent)
             raw_sd = inputs['standard_deviation']
             if not _finite(raw_location) or abs(raw_location)+PARAMETERS['required_interior_standard_deviations']*raw_sd>=SUPPORT:
-                value['reason']='margin_location_or_scale_outside_support';continue
+                value['reason']='margin_location_or_scale_outside_support'
+                continue
             location,sd=raw_location,raw_sd
             calibration=enhancement.get('margin_calibration')
             if calibration is not None:
                 from .prospective_margin_calibration import validate_margin_calibration
                 if not validate_margin_calibration(calibration,model_key,snapshot['as_of']):
-                    value['reason']='invalid_margin_calibration';continue
+                    value['reason']='invalid_margin_calibration'
+                    continue
                 raw_pmf=_pmf(raw_location,raw_sd)
-                location+=calibration['location_bias'];sd*=calibration['scale_factor']
+                location+=calibration['location_bias']
+                sd*=calibration['scale_factor']
                 value.update(calibration_status='prospective_validated',limitation=CALIBRATED_LIMITATION,
                     calibration_audit={k:calibration[k] for k in ('method','training_cutoff','training_games',
                         'training_days','validation_games','evidence_sha256','validation_metrics')},
                     uncalibrated_mean_margin=raw_location,uncalibrated_standard_deviation=raw_sd,
                     uncalibrated_pmf=raw_pmf,uncalibrated_pmf_sha256=_sha(raw_pmf))
             if not _finite(location) or abs(location) + PARAMETERS['required_interior_standard_deviations'] * sd >= SUPPORT:
-                value['reason'] = 'margin_location_or_scale_outside_support'; continue
+                value['reason'] = 'margin_location_or_scale_outside_support'
+                continue
             pmf = _pmf(location, sd)
             distribution_mean = math.fsum(r['margin'] * r['probability'] for r in pmf)
             distribution_sd = math.sqrt(math.fsum((r['margin'] - distribution_mean) ** 2 * r['probability'] for r in pmf))

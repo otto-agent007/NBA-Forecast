@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from .data import normalize_boxscore,fetch_roster
 from .validation import validate_history,parse_time
-from .schedule import atomic_json
+from .files import archive_bytes, atomic_json
 from .player_data import build_player_pages
 from .shots import fetch_game_shots,normalize_page_shots,SHOT_SOURCE_VERSION
 from .full_boxscore_sources import (fetch_official_game_page,normalize_official_page,revise_final_rows,
@@ -17,13 +17,18 @@ def enrich_archive(directory):
     rows={}
     for path in sorted(Path(directory).glob('*.provenance.json')):
         meta=json.loads(path.read_text())
-        if '/liveData/boxscore/boxscore_002' not in meta.get('source_url',''):continue
+        if '/liveData/boxscore/boxscore_002' not in meta.get('source_url',''):
+            continue
         raw=(path.parent/(meta['sha256']+'.json')).read_bytes()
-        if hashlib.sha256(raw).hexdigest()!=meta['sha256']:raise ValueError('Archive hash mismatch: '+path.name)
+        if hashlib.sha256(raw).hexdigest()!=meta['sha256']:
+            raise ValueError('Archive hash mismatch: '+path.name)
         for row in normalize_boxscore(json.loads(raw),meta['source_url'],meta['retrieved_at']):
-            key=(row['game_id'],row['player_id']);old=rows.get(key)
-            if old is None or parse_time(old['known_at'])<parse_time(row['known_at']):rows[key]=row
-    result=list(rows.values());validate_history(result)
+            key=(row['game_id'],row['player_id'])
+            old=rows.get(key)
+            if old is None or parse_time(old['known_at'])<parse_time(row['known_at']):
+                rows[key]=row
+    result=list(rows.values())
+    validate_history(result)
     return sorted(result,key=lambda r:(r['game_time'],r['game_id'],r['player_id']))
 
 
@@ -33,16 +38,20 @@ def enrich_final_cache(folder):
     evidence={(r['game_id'],r['player_id']):r for r in enrich_archive(folder/'raw')}
     required=('fgm','fga','fg3m','fg3a','ftm','fta','tov','pts','minutes','team_id','opponent_id')
     for path in (folder/'finals').glob('*.json'):
-        rows=json.loads(path.read_text());changed=False
+        rows=json.loads(path.read_text())
+        changed=False
         for row in rows:
             raw=evidence.get((row['game_id'],row['player_id']))
-            if not raw or any(row[k]!=raw[k] for k in required):continue
+            if not raw or any(row[k]!=raw[k] for k in required):
+                continue
             for field in ('reb','ast','stl','blk','starter'):
                 if row.get(field) is None and raw.get(field) is not None:
-                    row[field]=raw[field];changed=True
+                    row[field]=raw[field]
+                    changed=True
                     row['known_at']=max((row['known_at'],raw['known_at']),key=parse_time)
         if changed:
-            validate_history(rows);atomic_json(path,rows)
+            validate_history(rows)
+            atomic_json(path,rows)
 
 
 def _shot_state(result, rows):
@@ -51,23 +60,32 @@ def _shot_state(result, rows):
         return False,False
     expected={(r['team_id'],r['player_id']):[r[k] for k in ('fga','fgm','fg3a','fg3m')]
               for r in rows if r['status']=='played'}
-    coverage=result.get('coverage',{});people=coverage.get('players',[])
+    coverage=result.get('coverage',{})
+    people=coverage.get('players',[])
     if (coverage.get('reconciled') is not True or len(people)!=len(expected)
             or {(p.get('team_id'),p.get('player_id')) for p in people}!=set(expected)):
         return False,False
-    counts={key:[0,0,0,0] for key in expected};located=0;seen=set()
+    counts={key:[0,0,0,0] for key in expected}
+    located=0
+    seen=set()
     for shot in result.get('shots',[]):
-        key=shot.get('team_id'),shot.get('player_id');number=shot.get('action_number')
+        key=shot.get('team_id'),shot.get('player_id')
+        number=shot.get('action_number')
         if (key not in counts or shot.get('game_id')!=rows[0]['game_id'] or number in seen
                 or shot.get('points') not in (2,3) or type(shot.get('made')) is not bool):
             return False,False
-        seen.add(number);made=shot['made'];three=shot['points']==3
-        for i,value in enumerate((1,int(made),int(three),int(made and three))):counts[key][i]+=value
+        seen.add(number)
+        made=shot['made']
+        three=shot['points']==3
+        for i,value in enumerate((1,int(made),int(three),int(made and three))):
+            counts[key][i]+=value
         located+=int(shot.get('x') is not None and shot.get('y') is not None)
-    if counts!=expected or coverage.get('attempts')!=sum(v[0] for v in expected.values()):return False,False
+    if counts!=expected or coverage.get('attempts')!=sum(v[0] for v in expected.values()):
+        return False,False
     for player in people:
         key=player['team_id'],player['player_id']
-        if [player.get(k) for k in ('attempts','made','three_attempts','three_made')]!=expected[key]:return False,False
+        if [player.get(k) for k in ('attempts','made','three_attempts','three_made')]!=expected[key]:
+            return False,False
     return True,located==coverage['attempts'] and coverage.get('located_attempts')==located
 
 
@@ -88,16 +106,14 @@ def _save_official_final(folder,gid,rows,official,metadata):
                  r.get('source_url')==metadata['source_url'] for r in rows)
     if verified and all(r['status']=='dnp' or
             (r['player_id'] in index and all(r.get(k)==index[r['player_id']].get(k) for k in compare)) for r in rows):
-        if not path.exists():atomic_json(path,rows)
+        if not path.exists():
+            atomic_json(path,rows)
         return rows,None
     revised=revise_final_rows(rows,official)
     previous=path.read_bytes() if path.exists() else (json.dumps(rows,sort_keys=True,indent=2)+'\n').encode()
     digest=hashlib.sha256(previous).hexdigest()
-    archive=folder/'final-revisions'/gid/(digest+'.json');archive.parent.mkdir(parents=True,exist_ok=True)
-    if archive.exists():
-        if archive.read_bytes()!=previous:raise ValueError('Final revision archive hash collision')
-    else:
-        with archive.open('xb') as stream:stream.write(previous)
+    archive=folder/'final-revisions'/gid/(digest+'.json')
+    archive_bytes(archive,previous)
     atomic_json(archive.with_suffix('.provenance.json'),dict(game_id=gid,sha256=digest,
         archive_kind='prior normalized final cache',source='final cache' if path.exists() else 'normalized history rows',
         replaced_by=dict(metadata)))
@@ -114,36 +130,52 @@ def _pending_shots(gid,rows,now,reason):
 
 
 def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=None):
-    if not 0<=max_shot_games<=50:raise ValueError('max_shot_games must be 0..50')
+    if not 0<=max_shot_games<=50:
+        raise ValueError('max_shot_games must be 0..50')
     folder=Path(directory)
-    if schedule is None:schedule=json.loads((folder/'schedule/latest.json').read_text())
-    season=schedule['season'];now=datetime.now(timezone.utc).isoformat()
+    if schedule is None:
+        schedule=json.loads((folder/'schedule/latest.json').read_text())
+    season=schedule['season']
+    now=datetime.now(timezone.utc).isoformat()
     if roster is None:
         saved=folder/'roster.json'
         roster=json.loads(saved.read_text()) if saved.exists() else fetch_roster(season,cache_dir=folder/'raw')
     now=datetime.now(timezone.utc).isoformat()
-    if parse_time(roster['observed_at'])>parse_time(now):raise ValueError('Roster is future-known')
+    if parse_time(roster['observed_at'])>parse_time(now):
+        raise ValueError('Roster is future-known')
     atomic_json(folder/'roster.json',roster)
     enrich_final_cache(folder)
     combined={(r['game_id'],r['player_id']):r for r in history}
     for path in sorted((folder/'finals').glob('*.json')):
         for row in json.loads(path.read_text()):
-            key=(row['game_id'],row['player_id']);old=combined.get(key)
-            if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):combined[key]=row
-    history=list(combined.values());validate_history(history)
+            key=(row['game_id'],row['player_id'])
+            old=combined.get(key)
+            if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):
+                combined[key]=row
+    history=list(combined.values())
+    validate_history(history)
     targets={}
     for row in history:
-        if row['season']==season and parse_time(row['known_at'])<=parse_time(now):targets.setdefault(row['game_id'],[]).append(row)
+        if row['season']==season and parse_time(row['known_at'])<=parse_time(now):
+            targets.setdefault(row['game_id'],[]).append(row)
     games={g['game_id']:g for g in schedule.get('games',[])}
-    shots_dir=folder/'shots';shots_dir.mkdir(parents=True,exist_ok=True)
-    fetched=0;errors=[];revisions=[];queue=[];cached={}
+    shots_dir=folder/'shots'
+    shots_dir.mkdir(parents=True,exist_ok=True)
+    fetched=0
+    errors=[]
+    revisions=[]
+    queue=[]
+    cached={}
     for gid,rows in targets.items():
-        path=shots_dir/(gid+'.json');old=json.loads(path.read_text()) if path.exists() else None
+        path=shots_dir/(gid+'.json')
+        old=json.loads(path.read_text()) if path.exists() else None
         cached[gid]=old
         reconciled,complete=_shot_state(old,rows)
-        if complete and (gid not in games or not _needs_official_final(rows)):continue
+        if complete and (gid not in games or not _needs_official_final(rows)):
+            continue
         current=old and old.get('source_version')==SHOT_SOURCE_VERSION
-        if current and old.get('next_retry_at') and parse_time(now)<parse_time(old['next_retry_at']):continue
+        if current and old.get('next_retry_at') and parse_time(now)<parse_time(old['next_retry_at']):
+            continue
         attempted=current and old.get('attempt_count',0)>0
         # New games first; among retries the oldest attempt runs first, so a
         # persistently blocked recent game cannot starve the rest of the season.
@@ -153,14 +185,19 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
             cached[gid]=_pending_shots(gid,rows,now,'Shot evidence queued for collection')
             atomic_json(path,cached[gid])
     for _,gid in sorted(queue)[:max_shot_games]:
-        rows=targets[gid];old=cached[gid];path=shots_dir/(gid+'.json');game=games.get(gid)
+        rows=targets[gid]
+        old=cached[gid]
+        path=shots_dir/(gid+'.json')
+        game=games.get(gid)
         fetched+=1
         attempts=1+(old.get('attempt_count',0) if old and old.get('source_version')==SHOT_SOURCE_VERSION else 0)
         try:
             if game is not None:
-                try:page,metadata=fetch_official_game_page(game,cache_dir=folder/'raw')
+                try:
+                    page,metadata=fetch_official_game_page(game,cache_dir=folder/'raw')
                 except (ValueError,OSError) as official_error:
-                    try:result=fetch_game_shots(gid,folder/'raw',final_rows=rows)
+                    try:
+                        result=fetch_game_shots(gid,folder/'raw',final_rows=rows)
                     except (ValueError,OSError) as primary_error:
                         raise ValueError(f'Official game page: {official_error}; NBA LiveData: {primary_error}') from primary_error
                 else:
@@ -176,11 +213,14 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                             item['team_turnover_audit']=dict(status='unavailable',reason=str(exc))
                     rows,revision=_save_official_final(folder,gid,rows,official,metadata)
                     targets[gid]=rows
-                    for row in rows:combined[(gid,row['player_id'])]=row
-                    if revision:revisions.append(revision)
+                    for row in rows:
+                        combined[(gid,row['player_id'])]=row
+                    if revision:
+                        revisions.append(revision)
                     result=normalize_page_shots(page,game,metadata,final_rows=rows)
                     result['final_completeness']=completeness
-            else:result=fetch_game_shots(gid,folder/'raw',final_rows=rows)
+            else:
+                result=fetch_game_shots(gid,folder/'raw',final_rows=rows)
         except (ValueError,OSError) as exc:
             result=_pending_shots(gid,rows,now,str(exc))
             errors.append(dict(game_id=gid,error=str(exc)))
@@ -190,12 +230,15 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
         cached[gid]=result
         atomic_json(path,result)
     shots=[json.loads(p.read_text()) for p in sorted(shots_dir.glob('*.json'))]
-    history=list(combined.values());validate_history(history)
+    history=list(combined.values())
+    validate_history(history)
     now=datetime.now(timezone.utc).isoformat()
     pages=build_player_pages(roster,history,season,now,shots)
-    output=folder/'players';output.mkdir(parents=True,exist_ok=True)
+    output=folder/'players'
+    output.mkdir(parents=True,exist_ok=True)
     for pid,page in pages['players'].items():
-        if not pid.isdigit():raise ValueError('Player page ID must be numeric')
+        if not pid.isdigit():
+            raise ValueError('Player page ID must be numeric')
         page.update(as_of=now,roster_observed_at=roster['observed_at'],season=season)
         atomic_json(output/(pid+'.json'),page)
     summary=dict(as_of=now,season=season,players=len(pages['players']),history_rows=len(history),

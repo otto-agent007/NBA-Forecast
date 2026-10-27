@@ -20,12 +20,15 @@ class BackfillTests(unittest.TestCase):
         self.assertEqual(backfill.game_ids(index(), '2026-27'), ['0022600001'])
         with self.assertRaises(ValueError):
             backfill.game_ids(index(), '2025-26')
-        broken=index(); broken['resultSets'][0]['rowSet'].pop()
-        with self.assertRaises(ValueError): backfill.game_ids(broken,'2026-27')
+        broken=index()
+        broken['resultSets'][0]['rowSet'].pop()
+        with self.assertRaises(ValueError):
+            backfill.game_ids(broken,'2026-27')
 
     def test_unfinished_index_rows_are_not_backfilled(self):
         payload=index()
-        for r in payload['resultSets'][0]['rowSet']: r[-1]=None
+        for r in payload['resultSets'][0]['rowSet']:
+            r[-1]=None
         self.assertEqual(backfill.game_ids(payload,'2026-27'),[])
 
     def test_resume_keeps_known_at_and_avoids_redownload(self):
@@ -48,7 +51,8 @@ class BackfillTests(unittest.TestCase):
 
     def test_corrupt_cache_not_silently_used(self):
         with tempfile.TemporaryDirectory() as folder:
-            games=Path(folder)/'games'; games.mkdir()
+            games=Path(folder)/'games'
+            games.mkdir()
             (games/'0022600001.json').write_text('[]')
             with patch('nba_forecast.backfill.fetch_json') as fetch:
                 result=backfill.backfill_games(['0022600001'],folder,workers=1)
@@ -60,7 +64,9 @@ class BackfillTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch('nba_forecast.backfill.fetch_json',return_value=payload):
             backfill.backfill_games(['0022600001'],folder,workers=1)
             path=Path(folder)/'games/0022600001.json'
-            rows=json.loads(path.read_text());rows[0]['name']='ALTERED';path.write_text(json.dumps(rows))
+            rows=json.loads(path.read_text())
+            rows[0]['name']='ALTERED'
+            path.write_text(json.dumps(rows))
             for _ in range(2):
                 result=backfill.backfill_games(['0022600001'],folder,workers=1)
                 self.assertEqual(result['status'],'incomplete')
@@ -73,4 +79,5 @@ class BackfillTests(unittest.TestCase):
     def test_concurrency_is_bounded_at_eight(self):
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(backfill.backfill_games([],folder,workers=8)['status'],'complete')
-            with self.assertRaises(ValueError):backfill.backfill_games([],folder,workers=9)
+            with self.assertRaises(ValueError):
+                backfill.backfill_games([],folder,workers=9)

@@ -17,10 +17,12 @@ class MultistatTests(unittest.TestCase):
 
     def test_optional_validation_and_dnp(self):
         for value in (-1, True, 1.5):
-            with self.assertRaises(ValueError): validate_history([row(reb=value)])
+            with self.assertRaises(ValueError):
+                validate_history([row(reb=value)])
         validate_history([row(reb=None)])
         dnp = row(minutes=0,fgm=0,fga=0,fg3m=0,fg3a=0,ftm=0,fta=0,tov=0,status='dnp',reb=1)
-        with self.assertRaises(ValueError): validate_history([dnp])
+        with self.assertRaises(ValueError):
+            validate_history([dnp])
 
     def test_missing_observations_do_not_dilute_rate_and_bad_evidence_excluded(self):
         base = self.one([row(reb=10, ast=6, stl=2, blk=1)])
@@ -38,7 +40,8 @@ class MultistatTests(unittest.TestCase):
             self.assertAlmostEqual(after['expected_'+stat],before['expected_'+stat]/2)
 
     def test_feedback_stat_denominators_and_old_reports(self):
-        snap=snapshot(); prediction=forecast(snap,[row(reb=8)])
+        snap=snapshot()
+        prediction=forecast(snap,[row(reb=8)])
         actual=row(game_id='next',reb=10)
         run=dict(run_id='run',mode='replay',scope='subset',created_at=snap['as_of'],as_of=snap['as_of'])
         report=_report(run,prediction,[actual],1,snap['as_of'])
@@ -46,7 +49,9 @@ class MultistatTests(unittest.TestCase):
         self.assertEqual(report['metrics']['per_stat']['ast']['count'],0)
         detail=report['matched'][0]['stat_feedback']['reb']
         self.assertAlmostEqual(detail['minutes_component']+detail['rate_component'],detail['error'])
-        old=copy.deepcopy(report['matched']); old[0].pop('stat_errors');old[0].pop('stat_feedback')
+        old=copy.deepcopy(report['matched'])
+        old[0].pop('stat_errors')
+        old[0].pop('stat_feedback')
         self.assertEqual(_metrics(old)['per_stat']['reb']['count'],0)
 
     def test_ingestion_preserves_optional_unknown_and_observed_counts(self):
@@ -74,11 +79,13 @@ class MultistatTests(unittest.TestCase):
         result = forecast(snap, [row()])
         _validate_forecast(snap, result)
         result['predictions'][0]['expected_reb'] = float('nan')
-        with self.assertRaises(ValueError): _validate_forecast(snap, result)
+        with self.assertRaises(ValueError):
+            _validate_forecast(snap, result)
         snap = snapshot([player(status='out')])
         result = forecast(snap, [])
         result['predictions'][0]['expected_ast'] = None
-        with self.assertRaises(ValueError): _validate_forecast(snap, result)
+        with self.assertRaises(ValueError):
+            _validate_forecast(snap, result)
 
     def test_minutes_restriction_validation(self):
         from nba_forecast.validation import validate_inputs
@@ -88,7 +95,8 @@ class MultistatTests(unittest.TestCase):
         validate_inputs(snap, [], scope='subset')
         for invalid in (-1,49,True,None):
             adjustment['minutes_cap'] = invalid
-            with self.assertRaises(ValueError): validate_inputs(snap, [], scope='subset')
+            with self.assertRaises(ValueError):
+                validate_inputs(snap, [], scope='subset')
 
     def test_not_listed_report_projection_is_explicitly_conditional(self):
         explicit = self.one([row()])

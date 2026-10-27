@@ -10,24 +10,35 @@ class CompleteOfficialFinalTests(unittest.TestCase):
                     game_period=4,plus_minus=2 if team=='A' else -2) for team in ('A','B') for i in range(5)]
 
     def test_minutes_and_plus_minus_conservation(self):
-        rows=self.complete();audit=validate_complete_official_final(rows)
+        rows=self.complete()
+        audit=validate_complete_official_final(rows)
         self.assertEqual(audit['teams']['A']['minutes'],240)
         self.assertTrue(audit['teams']['B']['plus_minus_reconciled'])
         for kind in ('missing_player','minutes','plus_minus','period','excess_player_minutes'):
             with self.subTest(kind=kind):
                 bad=copy.deepcopy(rows)
-                if kind=='missing_player':bad.pop()
-                if kind=='minutes':bad[0]['minutes']-=1
-                if kind=='plus_minus':bad[0]['plus_minus']+=1
-                if kind=='period':bad[0]['game_period']=5
-                if kind=='excess_player_minutes':bad[0]['minutes']+=1;bad[1]['minutes']-=1
-                with self.assertRaises(ValueError):validate_complete_official_final(bad)
+                if kind=='missing_player':
+                    bad.pop()
+                if kind=='minutes':
+                    bad[0]['minutes']-=1
+                if kind=='plus_minus':
+                    bad[0]['plus_minus']+=1
+                if kind=='period':
+                    bad[0]['game_period']=5
+                if kind=='excess_player_minutes':
+                    bad[0]['minutes']+=1
+                    bad[1]['minutes']-=1
+                with self.assertRaises(ValueError):
+                    validate_complete_official_final(bad)
         rows[0]['plus_minus']=None
         self.assertFalse(validate_complete_official_final(rows)['teams']['A']['plus_minus_reconciled'])
 
     def test_overtime_requires_extra_minutes(self):
         rows=self.complete()
-        for r in rows:r.update(game_period=5,minutes=53)
+        for r in rows:
+            r.update(game_period=5,minutes=53)
         self.assertEqual(validate_complete_official_final(rows)['teams']['A']['minutes'],265)
-        for r in rows:r['minutes']=48
-        with self.assertRaises(ValueError):validate_complete_official_final(rows)
+        for r in rows:
+            r['minutes']=48
+        with self.assertRaises(ValueError):
+            validate_complete_official_final(rows)

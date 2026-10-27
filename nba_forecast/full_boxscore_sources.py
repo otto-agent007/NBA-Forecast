@@ -242,7 +242,9 @@ def supplement_official_team_turnovers(page,rows,metadata,verified_shots):
     """
     validate_history(rows)
     try:
-        source=page['game'];gid=source['gameId'];url=full_boxscore_url(gid)
+        source=page['game']
+        gid=source['gameId']
+        url=full_boxscore_url(gid)
         if not rows or {r['game_id'] for r in rows}!={gid} or metadata['source_url']!=url:
             raise ValueError('Official turnover source/game identity mismatch')
         if (verified_shots['game_id']!=gid or verified_shots['source_url']!=url
@@ -266,7 +268,11 @@ def supplement_official_team_turnovers(page,rows,metadata,verified_shots):
         if type(final_period) is not int or final_period<4 or {r.get('game_period') for r in rows}!={final_period}:
             raise ValueError('Official turnover final period is invalid')
         actions=page['playByPlay']['actions']
-        periods=set();ended=set();seen=set();individual=Counter();events={t:[] for t in teams}
+        periods=set()
+        ended=set()
+        seen=set()
+        individual=Counter()
+        events={t:[] for t in teams}
         expected={(r['team_id'],r['player_id']):r['tov'] for r in rows}
         for action in actions:
             period=action['period']
@@ -289,13 +295,16 @@ def supplement_official_team_turnovers(page,rows,metadata,verified_shots):
                 individual[(team_id,person_id)]+=1
                 continue
             if team_id in teams and person_id=='0':
-                resolved=team_id;encoding='explicit teamId and personId zero'
+                resolved=team_id
+                encoding='explicit teamId and personId zero'
             elif (team_id=='0' and person_id in teams and action.get('location')==sides[person_id]
                     and not action.get('playerName') and not action.get('playerNameI')):
-                resolved=person_id;encoding='NBA team ID in personId, zero teamId, matching home/away location'
+                resolved=person_id
+                encoding='NBA team ID in personId, zero teamId, matching home/away location'
             elif (team_id in teams and action.get('personId') is None
                     and isinstance(action.get('qualifiers'),list) and 'team' in action['qualifiers']):
-                resolved=team_id;encoding='explicit teamId and team qualifier without personId'
+                resolved=team_id
+                encoding='explicit teamId and team qualifier without personId'
             else:
                 raise ValueError('Official turnover has an unknown or ambiguous player/team identity')
             events[resolved].append(dict(action_number=number,identity_encoding=encoding,
@@ -333,7 +342,8 @@ def _share_official_team_metadata(enriched,original_rows,official_rows):
     teams=_official_team_metadata(official_rows)
     originals={(r['team_id'],r['player_id']):r for r in original_rows}
     for row in enriched:
-        team=teams[row['team_id']];source=team['members'][0]
+        team=teams[row['team_id']]
+        source=team['members'][0]
         original=originals[(row['team_id'],row['player_id'])]
         known=max((r['known_at'] for r in team['members']),key=parse_time)
         row['team_boxscore_update']=dict(previous_team_boxscore=copy.deepcopy(original.get('team_boxscore')),
@@ -366,9 +376,12 @@ def validate_complete_official_final(rows):
     periods={r.get('game_period') for r in rows}
     if len(periods)!=1 or type(next(iter(periods))) is not int or next(iter(periods))<4:
         raise ValueError('Complete final period is missing or inconsistent')
-    period=next(iter(periods));duration=48+5*(period-4);expected_minutes=duration*5
+    period=next(iter(periods))
+    duration=48+5*(period-4)
+    expected_minutes=duration*5
     teams={r['team_id'] for r in rows}
-    if len(teams)!=2:raise ValueError('Complete final requires both teams')
+    if len(teams)!=2:
+        raise ValueError('Complete final requires both teams')
     scores={t:sum(r['pts'] for r in rows if r['team_id']==t) for t in teams}
     audit={}
     for team in teams:

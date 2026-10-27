@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 import urllib.request
 
+from .files import archive_bytes, atomic_bytes
+
 
 SCHEDULE_URL = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json"
 ROSTER_URL = "https://www.nba.com/players"
@@ -95,13 +97,15 @@ def archive_payload(raw, source_url, known_at, directory):
     raw_path = folder / (digest + suffix)
     meta_path = folder / (digest + ".provenance.json")
     metadata = {"source_url": source_url, "retrieved_at": known_at, "sha256": digest, "bytes": len(raw)}
-    if not raw_path.exists():
-        raw_path.write_bytes(raw)
-    elif raw_path.read_bytes() != raw:
-        raise ValueError("Archive digest collision or corrupted raw cache")
+    # Written through a rename, so a crash cannot leave a truncated archive; a
+    # truncated file from an earlier crash is replaced, since the digest names these bytes.
+    state = archive_bytes(raw_path, raw)
     if not meta_path.exists():
-        meta_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    return {**metadata, "raw_path": str(raw_path), "provenance_path": str(meta_path)}
+        atomic_bytes(meta_path, (json.dumps(metadata, indent=2) + "\n").encode("utf-8"))
+    result = {**metadata, "raw_path": str(raw_path), "provenance_path": str(meta_path)}
+    if state == "repaired":
+        result["repaired_raw_archive"] = True
+    return result
 
 
 def _record_fetch_failure(cache_dir, url, category, exc, attempt=None, status=None):
@@ -211,7 +215,8 @@ def normalize_boxscore(payload, source_url, known_at):
                            minutes_source_value=stats["minutes"])
                 row.update(shooting_percentages(row))
                 if 'starter' in player:
-                    if player['starter'] not in ('0','1'):raise ValueError('invalid starter evidence')
+                    if player['starter'] not in ('0','1'):
+                        raise ValueError('invalid starter evidence')
                     row['starter']=player['starter']=='1'
                 row['home']=side=='homeTeam'
                 rows.append(row)
@@ -277,7 +282,8 @@ def normalize_roster(players, observed_at, season):
 
 
 def fetch_roster(season, *, cache_dir=DEFAULT_CACHE):
-    try:raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
+    try:
+        raw, observed_at = _fetch(ROSTER_URL, cache_dir, allow_roster=True)
     except (ValueError,OSError):
         from .roster_refresh import fetch_team_rosters
         return fetch_team_rosters(season,cache_dir)

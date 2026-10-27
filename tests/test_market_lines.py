@@ -42,10 +42,13 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual((r['source_url'], r['sha256']), (URL, 'b' * 64))
 
     def test_legacy_payload_uses_the_favorite_spread(self):
-        payload = summary(); entry = payload['pickcenter'][0]
+        payload = summary()
+        entry = payload['pickcenter'][0]
         for key in ('pointSpread', 'total', 'moneyline'):
             entry.pop(key)
-        entry['homeTeamOdds']['favorite'] = False; entry['awayTeamOdds']['favorite'] = True; entry['spread'] = -3.0
+        entry['homeTeamOdds']['favorite'] = False
+        entry['awayTeamOdds']['favorite'] = True
+        entry['spread'] = -3.0
         r = M.extract_game_lines(payload, GAME, '2026-27', META)[0]
         self.assertEqual((r['lines']['spread']['home']['current_line'], r['lines']['spread']['away']['current_line']), (3.0, -3.0))
         self.assertEqual(r['lines']['total']['over']['current_line'], 220.5)
@@ -77,6 +80,36 @@ class ArchiveTests(unittest.TestCase):
         index = M.build_index(self.folder)['games'][GAME['game_id']]
         self.assertEqual((index['captures'], index['providers']['100']['first']['spread']['home']['current_line']), (3, -2.5))
 
+    def test_a_cut_off_final_line_is_dropped_and_the_file_repaired(self):
+        first = M.extract_game_lines(summary(), GAME, '2026-27', META)
+        M.record_game_lines(self.folder, first, '2026-10-23T21:00:30Z')
+        path = M._lines_path(self.folder, GAME['game_id'])
+        with path.open('ab') as stream:
+            stream.write(b'{"game_id": "0022600010", "cut')  # a write interrupted mid-line
+        self.assertEqual(len(M.read_game_lines(self.folder, GAME['game_id'])), 1)
+        self.assertEqual(M.build_index(self.folder)['games'][GAME['game_id']]['captures'], 1)
+        moved = M.extract_game_lines(summary(spread_home='-3.5'), GAME, '2026-27', dict(META, sha256='c' * 64))
+        self.assertEqual(len(M.record_game_lines(self.folder, moved, '2026-10-23T22:30:30Z')), 1)
+        records = M.read_game_lines(self.folder, GAME['game_id'])
+        self.assertEqual([r['capture_index'] for r in records], [0, 1])
+        self.assertEqual(len(path.read_bytes().splitlines()), 2)
+        self.assertFalse(list(path.parent.glob('.*.tmp')))
+        # Damage before the end is a real problem and is reported, never skipped.
+        path.write_bytes(b'{"cut\n' + path.read_bytes())
+        with self.assertRaisesRegex(ValueError, 'damaged'):
+            M.read_game_lines(self.folder, GAME['game_id'])
+        index = M.build_index(self.folder)
+        self.assertEqual((index['damaged'], index['games']), ([GAME['game_id']], {}))
+        report = M.market_report(self.folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z',
+                                 selected={(GAME['game_id'], 'final'): dict(run_id='r1')})
+        self.assertEqual([e['game_id'] for e in report['errors']], [GAME['game_id']])
+
+    def test_capture_index_counts_each_game_on_its_own(self):
+        first = M.extract_game_lines(summary(), GAME, '2026-27', META)
+        records = first + [dict(first[0], game_id='0022600011')]
+        appended = M.record_game_lines(self.folder, records, '2026-10-23T21:00:30Z')
+        self.assertEqual([(e['game_id'], e['capture_index']) for e in appended], [('0022600010', 0), ('0022600011', 0)])
+
     def test_capture_uses_cadence_slots_and_survives_failures(self):
         games = [GAME, dict(GAME, game_id='0022600011', home_tricode='LAL', away_tricode='DEN')]
         def event(game, directory):
@@ -101,7 +134,8 @@ class ArchiveTests(unittest.TestCase):
 class ReportTests(unittest.TestCase):
     def test_report_scores_leans_and_head_to_head_error(self):
         with tempfile.TemporaryDirectory() as d:
-            folder = Path(d); (folder / 'finals').mkdir()
+            folder = Path(d)
+            (folder / 'finals').mkdir()
             M.record_game_lines(folder, M.extract_game_lines(summary(), GAME, '2026-27', META), '2026-10-23T21:00:30Z')
             finals = [dict(game_id=GAME['game_id'], team_id='H', pts=60), dict(game_id=GAME['game_id'], team_id='H', pts=55),
                       dict(game_id=GAME['game_id'], team_id='A', pts=50), dict(game_id=GAME['game_id'], team_id='A', pts=58)]
@@ -110,7 +144,8 @@ class ReportTests(unittest.TestCase):
                 dict(team_id='H', side='home', points_mean=114), dict(team_id='A', side='away', points_mean=110)]),
                 margin_forecast=dict(home_win_probability=.6))}
             report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z', selected=selected)
-        row = report['games'][0]; s = report['summary']
+        row = report['games'][0]
+        s = report['summary']
         # Home won 115-108: margin +7 against a -2.5 spread (home covered), total 223 over 220.5.
         self.assertEqual((row['model_margin'], row['market_margin'], row['spread_edge'], row['home_covered']), (4, 2.5, 1.5, True))
         self.assertEqual((row['total_edge'], row['went_over']), (3.5, True))

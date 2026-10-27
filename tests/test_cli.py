@@ -17,10 +17,14 @@ class CliTests(unittest.TestCase):
         from tests.test_store import inputs
         s,_,_=inputs()
         with tempfile.TemporaryDirectory() as d:
-            snapshot=Path(d)/'snapshot.json';snapshot.write_text(json.dumps(s));db=Path(d)/'ledger.sqlite'
+            snapshot=Path(d)/'snapshot.json'
+            snapshot.write_text(json.dumps(s))
+            db=Path(d)/'ledger.sqlite'
             with patch('nba_forecast.preflight.run_preflight',return_value={'status':'blocked','issues':[{'detail':'Missing coverage'}]}),patch('nba_forecast.model.forecast') as model:
                 code=main(['forecast','--snapshot',str(snapshot),'--db',str(db),'--mode','live'])
-            self.assertNotEqual(code,0);model.assert_not_called();self.assertFalse(db.exists())
+            self.assertNotEqual(code,0)
+            model.assert_not_called()
+            self.assertFalse(db.exists())
     def run_cli(self, *args, success=True):
         result = subprocess.run([sys.executable, '-m', 'nba_forecast', *map(str, args)],
                                 cwd=ROOT, text=True, capture_output=True)

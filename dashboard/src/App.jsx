@@ -13,7 +13,6 @@ import {
   gameDay,
   initialDay,
   gamePlayers,
-  longDate,
   timeLabel,
   stamp,
   finalResult,
@@ -57,9 +56,10 @@ export default function App() {
     try {
       const staticMode =
         new URLSearchParams(location.search).get("snapshot") === "1";
+      // no-cache revalidates with the server's ETag: an unchanged page costs a 304, not 20 MB.
       const response = await fetch(
         staticMode ? "./dashboard.json" : "/api/dashboard",
-        { cache: "no-store" },
+        { cache: "no-cache" },
       );
       if (!response.ok)
         throw new Error(
@@ -72,6 +72,9 @@ export default function App() {
         !Array.isArray(next.players)
       )
         throw new Error("Dashboard data format is not supported.");
+      // The server names each game's opening forecast by stage instead of repeating it.
+      for (const g of next.games)
+        g.forecast = g.forecast ?? g.forecasts?.[g.forecast_stage] ?? null;
       setData(next);
       setRefreshRevision((old) => old + 1);
       setDate((old) => old || initialDay(next));
@@ -168,7 +171,7 @@ export default function App() {
               ),
             )}
           </nav>
-          <span className="season">{data?.season || "2026–27"}</span>
+          <span className="season">{data?.season || "—"}</span>
         </div>
       </header>
       {data && (

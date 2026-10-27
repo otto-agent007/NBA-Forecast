@@ -57,6 +57,14 @@ CALIBRATION_ALPHA = .2
 CALIBRATION_MIN_SAMPLES = 200
 CALIBRATION_MIN_GAMES = 20
 CALIBRATION_SCALES = [s / 50 for s in range(35, 71)]
+# A paired change smaller than this share of the reference level is noise however
+# many rows agree: two standard errors on 55,000 player-games resolve effects of
+# a few hundredths of a percent, and ten metrics are gated at once.
+MATERIALITY = .005
+# A limited replay forecasts only the last games of each season, so the walk-forward
+# interval calibration starts cold where the full reference's was warm.
+LIMIT_UNGATED = dict(interval_score='limited replay: the walk-forward interval calibration starts cold at the first '
+                                    'replayed game, so interval scores are not comparable with a full reference')
 LIMITATIONS = ('Rosters are the box score itself, all players available: no injury reports, so participation '
                'is not forecast and DNP players still draw minutes. No prior-season aggregate priors, no '
                'archive-bound enhancements. Player metrics condition on positive participation. Team points '
@@ -239,9 +247,12 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     if projected:
                         t = totals[p['team_id']]
                         weight = 1.0 if probability is None else probability
-                        t['projected'] += weight * p['points_mean']; t['count'] += 1; t['covered'] += a['pts']
+                        t['projected'] += weight * p['points_mean']
+                        t['count'] += 1
+                        t['covered'] += a['pts']
                 if residual_days and residual_days[-1][0] == day:
-                    residual_days[-1][1].extend(residuals); residual_days[-1][2].add(game['game_id'])
+                    residual_days[-1][1].extend(residuals)
+                    residual_days[-1][2].add(game['game_id'])
                 else:
                     residual_days.append((day, residuals, {game['game_id']}))
                 # Team points as production publishes them (totals.game_totals): the weighted player sum
@@ -443,18 +454,27 @@ def _mean_se(values, clusters):
     return math.sqrt(combined), combined / independent
 
 
-def _paired(current, reference, cluster=None):
-    """Mean paired difference (current minus reference) with its clustered standard error and verdict."""
+def _paired(current, reference, cluster=None, *, materiality=MATERIALITY):
+    """Mean paired difference (current minus reference) with its clustered standard error and verdict.
+
+    A verdict needs the change to exceed both two standard errors and the
+    materiality floor, ``materiality`` times the reference level.
+    """
     keys = sorted(set(current) & set(reference))
     if len(keys) < 2:
         return dict(n=len(keys), mean=None, se=None, verdict='insufficient')
     d = [current[k] - reference[k] for k in keys]
     mean = fmean(d)
     se, effect = _mean_se(d, cluster and [cluster(k) for k in keys])
-    verdict = 'improved' if mean + 2 * se < 0 else 'worse' if mean - 2 * se > 0 else 'within_noise'
+    level = fmean(reference[k] for k in keys)
+    floor = materiality * abs(level)
+    bound = max(2 * se, floor)
+    verdict = 'improved' if mean < -bound else 'worse' if mean > bound else 'within_noise'
     return dict(n=len(d), mean=mean, se=se, se_independent=pstdev(d) / math.sqrt(len(d)), design_effect=effect,
-                verdict=verdict, rule='improved/worse when the mean paired difference exceeds two standard errors, '
-                                      'clustered by date and player (team for team rows) and never below independence')
+                reference_level=level, materiality_floor=floor, verdict=verdict,
+                rule='improved/worse when the mean paired difference exceeds two standard errors, clustered by date and '
+                     'player (team for team rows) and never below independence, and the materiality floor of '
+                     f'{materiality:.1%} of the reference level')
 
 
 def _bias(current, reference, cluster=None):
@@ -476,11 +496,12 @@ def _bias(current, reference, cluster=None):
                      'improved; one that appears or grows by at least one standard error is worse')
 
 
-def compare(current, reference, dates=None):
+def compare(current, reference, dates=None, *, ungated=None):
     """Pair the same player-games, teams and games: absolute errors (lower is better) and signed biases.
 
     ``dates`` maps game IDs to their Eastern date for clustering; a game without one
-    is its own cluster.
+    is its own cluster. ``ungated`` names metrics that are reported but left out
+    of the overall verdict, with the reason for each.
     """
     def errors(rows):
         points, minutes, point_bias, participation, interval = {}, {}, {}, {}, {}
@@ -537,8 +558,14 @@ def compare(current, reference, dates=None):
     result = {name: _paired(cur[name], ref[name], cluster[name])
               for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner', 'interval_score')}
     result.update({name: _bias(cur[name], ref[name], cluster[name]) for name in ('points_bias', 'team_points_bias', 'margin_bias')})
-    verdicts = {v['verdict'] for v in result.values()}
+    ungated = dict(ungated or {})
+    for name, reason in ungated.items():
+        if name in result:
+            result[name].update(gated=False, ungated_reason=reason)
+    verdicts = {v['verdict'] for name, v in result.items() if name not in ungated}
     result['verdict'] = 'worse' if 'worse' in verdicts else 'improved' if 'improved' in verdicts else 'within_noise'
+    if ungated:
+        result['ungated'] = ungated
     return result
 
 
@@ -564,8 +591,10 @@ def _point_differential_margins(records, game_ids, min_games=10):
             if gid in game_ids and h[1] >= min_games and a[1] >= min_games and home_margins[season]:
                 margins[gid] = fmean(home_margins[season]) + h[0] / h[1] - a[0] / a[1]
         for gid, home, away, margin in games:
-            totals[(season, home)][0] += margin; totals[(season, home)][1] += 1
-            totals[(season, away)][0] -= margin; totals[(season, away)][1] += 1
+            totals[(season, home)][0] += margin
+            totals[(season, home)][1] += 1
+            totals[(season, away)][0] -= margin
+            totals[(season, away)][1] += 1
             home_margins[season].append(margin)
     return margins
 
@@ -590,12 +619,13 @@ def market_metrics(game_rows, team_rows, records, lines):
     if len(lined) < 2:
         return dict(n=len(lined))
     naive = _point_differential_margins(records, set(lined))
+    day_of = {r['game_id']: _day(r['game_time']) for r in records}
     rows = []
     for gid, line in lined.items():
         g = games[gid]
         rows.append(dict(model=g['projected_margin'], market=-line['home_spread'], naive=naive.get(gid),
                          actual=g['actual_margin'], sd=g['prior_sd'], p_model=g['home_win_probability'],
-                         p_market=_no_vig_home(line)))
+                         p_market=_no_vig_home(line), day=day_of.get(gid, gid)))
     won = lambda r: float(r['actual'] > 0)
     def summary(subset, key, probability):
         scored = [r for r in subset if probability(r) is not None]
@@ -617,10 +647,19 @@ def market_metrics(game_rows, team_rows, records, lines):
     if sxx > 0:
         slope = sum((a - mx) * (b - my) for a, b in zip(x, y)) / sxx
         residuals = [b - my - slope * (a - mx) for a, b in zip(x, y)]
-        se = math.sqrt(sum(e * e for e in residuals) / (len(rows) - 2) / sxx)
-        result['encompassing'] = dict(slope=slope, se=se, intercept=my - slope * mx,
+        se_ols = math.sqrt(sum(e * e for e in residuals) / (len(rows) - 2) / sxx)
+        # Games on one date share news and injuries, so the slope's error is
+        # clustered by date like the gate's, and never taken below OLS.
+        sums = defaultdict(float)
+        for r, a, e in zip(rows, x, residuals):
+            sums[r['day']] += (a - mx) * e
+        groups = len(sums)
+        clustered = math.sqrt(groups / (groups - 1) * sum(s * s for s in sums.values())) / sxx if groups > 1 else se_ols
+        result['encompassing'] = dict(slope=slope, se=max(clustered, se_ols), se_ols=se_ols, clusters=groups,
+                                      intercept=my - slope * mx,
                                       rule='slope of (actual - close) on (model - close); above zero by two standard '
-                                           'errors means the model adds information beyond the closing line')
+                                           'errors, clustered by date and never below OLS, means the model adds '
+                                           'information beyond the closing line')
     teams = [t for t in _records(team_rows, TEAM_FIELDS)
              if t['game_id'] in lined and lines[t['game_id']].get('total') is not None
              and t['actual_points_regulation'] is not None and t['projected_players'] > 0]
@@ -676,7 +715,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})
-        totals['total'] += replayed['total_games']; totals['evaluated'] += replayed['evaluated_games']
+        totals['total'] += replayed['total_games']
+        totals['evaluated'] += replayed['evaluated_games']
         for k, v in replayed['skipped'].items():
             skipped[k] += v
         seasons_seen = Counter(r['season'] for r in season['records'])
@@ -708,14 +748,15 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
         ref_board = read_json(Path(reference) / 'scoreboard.json')
+        ungated = LIMIT_UNGATED if limit else None
         scoreboard['comparison'] = dict(reference=str(reference), reference_created_at=ref_board.get('created_at'),
                                         reference_code_sha256=ref_board.get('code_sha256'),
                                         reference_model_version=ref_board.get('model_version'),
-                                        **compare(rows, ref_rows, dates))
+                                        **compare(rows, ref_rows, dates, ungated=ungated))
         if len(parts) > 1:
             for part in parts:
                 ids = part['game_ids']
-                part['comparison'] = compare(_subset(rows, ids), _subset(ref_rows, ids), dates)
+                part['comparison'] = compare(_subset(rows, ids), _subset(ref_rows, ids), dates, ungated=ungated)
     if len(parts) > 1:
         scoreboard['seasons'] = [{k: v for k, v in p.items() if k != 'game_ids'} for p in parts]
     out.mkdir(parents=True, exist_ok=True)
@@ -730,7 +771,8 @@ def sha256_of(path):
 
 def format_scoreboard(board):
     """A short readable table for the terminal."""
-    m = board['metrics'];lines = []
+    m = board['metrics']
+    lines = []
     lines.append(f"games evaluated {board['games']['evaluated']} of {board['games']['total']}  model {board['model_version']}  code {board['code_sha256'][:12]}")
     lines.append(f"{'players (played)':18s} {'n':>6s} {'pts MAE':>8s} {'bias':>6s} {'min MAE':>8s} {'cov80':>6s} {'width':>6s}")
     for name, item in [('all', m['players']['all'])] + list(m['players']['by_expected_minutes'].items()):
@@ -764,13 +806,15 @@ def format_scoreboard(board):
             brier = f"{item['winner_brier']:.4f}" if item.get('winner_brier') is not None else '  -   '
             return f"  {name:24s} margin MAE {item['margin_mae']:6.2f}  winners {item['winner_accuracy']:.1%}  Brier {brier}"
         lines.append(f"market (same {mk['n']} games, closing line):")
-        lines.append(row('model', mk['model']));lines.append(row('closing line', mk['market']))
+        lines.append(row('model', mk['model']))
+        lines.append(row('closing line', mk['market']))
         nv = mk.get('naive_point_differential')
         if nv:
             lines.append(row(f"point differential (n={nv['n']})", nv) + f"  (model on those {nv['model_margin_mae']:.2f})")
         if mk.get('encompassing'):
             e = mk['encompassing']
-            lines.append(f"  encompassing slope {e['slope']:+.3f} ± {2 * e['se']:.3f} (above zero: the model adds to the close)")
+            lines.append(f"  encompassing slope {e['slope']:+.3f} ± {2 * e['se']:.3f} (above zero: the model adds to the close; "
+                         f"clustered by {e.get('clusters', '?')} dates)")
         if mk.get('team_points'):
             tp = mk['team_points']
             lines.append(f"  team points (n={tp['n']}): model MAE {tp['model_mae']:.2f}, implied by the close {tp['market_mae']:.2f} (bias {tp['market_bias']:+.2f})")
@@ -800,7 +844,9 @@ def format_scoreboard(board):
                 what = ('Brier change' if name in ('participation', 'winner') else
                         'interval score change' if name == 'interval_score' else 'mean abs-error change')
                 lines.append(f"  {name:18s} n={item['n']:6d} {what} {item['mean']:+.4f} ± {2 * item['se']:.4f}"
-                             f" (design effect {item.get('design_effect', 1.0):.2f})  {item['verdict']}")
+                             + (f" floor {item['materiality_floor']:.4f}" if item.get('materiality_floor') is not None else '')
+                             + f" (design effect {item.get('design_effect', 1.0):.2f})  {item['verdict']}"
+                             + ('  [not gated: limited replay]' if item.get('gated') is False else ''))
         for name in ('points_bias', 'team_points_bias', 'margin_bias'):
             item = c.get(name, {})
             if item.get('current') is not None:

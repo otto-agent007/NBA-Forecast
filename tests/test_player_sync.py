@@ -9,15 +9,18 @@ class PlayerSyncTests(unittest.TestCase):
   from datetime import datetime,timezone
   from tests.test_store import inputs
   from tests.test_model import row
-  s,_,_=inputs();r=row(season='2026-27',game_id='0022600001',player_id='1')
+  s,_,_=inputs()
+  r=row(season='2026-27',game_id='0022600001',player_id='1')
   game=dict(s['games'][0],game_id='0022600001',start_time=r['game_time'])
   roster=dict(s['roster'],observed_at='2026-10-22T00:00:00Z',players=[
    dict(player_id='1',name='A',team_id=r['team_id'],status='unknown')])
   captured=[]
   def unavailable(selected,**kwargs):
-   captured.append(selected['start_time']);raise ValueError('offline fixture')
+   captured.append(selected['start_time'])
+   raise ValueError('offline fixture')
   with tempfile.TemporaryDirectory() as d:
-   folder=Path(d);(folder/'schedule').mkdir()
+   folder=Path(d)
+   (folder/'schedule').mkdir()
    (folder/'schedule/latest.json').write_text(json.dumps(dict(season='2026-27',
     games=[dict(game,start_time='2026-10-23T20:00:00Z')])))
    with patch('nba_forecast.player_sync.datetime') as clock,\
@@ -37,11 +40,17 @@ class PlayerSyncTests(unittest.TestCase):
   r=row(season='2026-27',game_id='0022600001',player_id='1')
   roster=dict(s['roster'],observed_at='2026-10-22T00:00:00Z',players=[dict(player_id='1',name='A',team_id=r['team_id'],status='unknown')])
   with tempfile.TemporaryDirectory() as d:
-   folder=Path(d);(folder/'schedule').mkdir();(folder/'schedule/latest.json').write_text(json.dumps({'season':'2026-27'}))
+   folder=Path(d)
+   (folder/'schedule').mkdir()
+   (folder/'schedule/latest.json').write_text(json.dumps({'season':'2026-27'}))
    with patch('nba_forecast.player_sync.fetch_roster',return_value=roster),patch('nba_forecast.player_sync.fetch_game_shots',side_effect=ValueError('HTTP 403')) as fetch:
     result=sync_player_data(d,[r],max_shot_games=1)
-    self.assertEqual(result['shot_games_verified'],0);self.assertIn('403',result['errors'][0]['error'])
-    sync_player_data(d,[r],max_shot_games=1);self.assertEqual(fetch.call_count,1)
-   page=player_payload(d,'1');self.assertEqual(page['name'],'A')
+    self.assertEqual(result['shot_games_verified'],0)
+    self.assertIn('403',result['errors'][0]['error'])
+    sync_player_data(d,[r],max_shot_games=1)
+    self.assertEqual(fetch.call_count,1)
+   page=player_payload(d,'1')
+   self.assertEqual(page['name'],'A')
    self.assertEqual(page['prediction_history'],[])
-   with self.assertRaises(ValueError):player_payload(d,'../forecast.sqlite')
+   with self.assertRaises(ValueError):
+       player_payload(d,'../forecast.sqlite')

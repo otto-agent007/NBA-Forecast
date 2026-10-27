@@ -18,10 +18,13 @@ from tests.test_model import row
 class DailyAutomationTests(unittest.TestCase):
     def test_nine_am_preliminary_then_t30_final_with_archived_report(self):
         clock=['2026-10-22T16:00:00Z']
-        schedule=normalize_season(payload([game(start='2026-10-22T18:00:00Z')]),clock[0]);schedule['version']='test-v1'
-        roster=inputs()[0]['roster'];roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
+        schedule=normalize_season(payload([game(start='2026-10-22T18:00:00Z')]),clock[0])
+        schedule['version']='test-v1'
+        roster=inputs()[0]['roster']
+        roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
         for person,team in zip(roster['players'],roster['team_ids']):
-            person['team_id']=team;person['status']='unknown'
+            person['team_id']=team
+            person['status']='unknown'
         roster['observed_at']=clock[0]
         pid=next(p['player_id'] for p in roster['players'] if p['team_id']=='1610612738')
         history=[row(pid=pid,team='1610612738',opponent_id='1610612752',season='2025-26')]
@@ -31,14 +34,16 @@ class DailyAutomationTests(unittest.TestCase):
             checks=checkpoints(snapshot['games'],report_links(url,clock[0]),clock[0])
             for item in checks:
                 for key in ('anchor_report','latest_report'):
-                    if item[key]:item[key].update(sha256='a'*64,retrieved_at=clock[0])
+                    if item[key]:
+                        item[key].update(sha256='a'*64,retrieved_at=clock[0])
             return dict(checked_at=clock[0],games=checks)
         def parsed(text,schedule,roster,evidence):
             return dict(rows=[dict(player_id=pid,team_id='1610612738',game_id='0022600001',status='available',reported_status='Available')],
                         team_coverage=[],evidence=evidence,issues=[])
         with tempfile.TemporaryDirectory() as d:
             self.enterContext(patch('nba_forecast.operations.run_preflight',return_value={'status':'passed','issues':[]}))
-            folder=Path(d);atomic_json(folder/'schedule/latest.json',schedule)
+            folder=Path(d)
+            atomic_json(folder/'schedule/latest.json',schedule)
             with patch('nba_forecast.operations._now',side_effect=lambda:clock[0]),patch('nba_forecast.store._now',side_effect=lambda:datetime.fromisoformat(clock[0].replace('Z','+00:00'))),patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster',return_value=roster),patch('nba_forecast.operations.capture_daily',return_value={'state':'captured'}),patch('nba_forecast.operations.fetch_injury_check',side_effect=injury_check),patch('nba_forecast.operations.pdf_text',return_value='text'),patch('nba_forecast.operations.parse_report',side_effect=parsed),patch('nba_forecast.player_sync.sync_player_data',return_value={'errors':[]}),patch('nba_forecast.postgame.build_postgames',return_value={'errors':[]}),patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])):
                 preliminary=run_tick(folder,history)
                 self.assertEqual(preliminary['created_runs'],1,preliminary['errors'])

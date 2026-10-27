@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 
 from .availability import summary_sides
-from .schedule import atomic_json, canonical
+from .files import atomic_bytes, atomic_json, canonical
 from .validation import parse_time
 
 VERSION = 'market-lines-1'
@@ -86,33 +86,61 @@ def _lines_path(folder, game_id):
     return Path(folder) / 'market' / 'game-lines' / (game_id + '.jsonl')
 
 
+def _parse_lines(raw, name):
+    """(records, clean byte length, partial): a cut-off final line is dropped, damage before it raises."""
+    records, clean, offset = [], 0, 0
+    for line in raw.splitlines(keepends=True):
+        offset += len(line)
+        text = line.strip()
+        if not text:
+            clean = offset
+            continue
+        try:
+            records.append(json.loads(text))
+        except ValueError:
+            if raw[offset:].strip():
+                raise ValueError(f'damaged market line archive: {name}') from None
+            return records, clean, True  # a write cut short at the end of the file
+        clean = offset
+    return records, clean, False
+
+
 def read_game_lines(folder, game_id):
     path = _lines_path(folder, game_id)
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return _parse_lines(path.read_bytes(), path.name)[0]
 
 
 def record_game_lines(folder, records, captured_at):
-    """Append each provider's record when its lines changed; return what was appended."""
+    """Append each provider's record when its lines changed; return what was appended.
+
+    The file is rewritten through a rename, so a crash mid-write cannot leave a
+    partial line, and a partial line an earlier crash left is dropped first.
+    """
     appended = []
     by_game = {}
     for record in records:
         by_game.setdefault(record['game_id'], []).append(record)
     for game_id, items in by_game.items():
-        existing = read_game_lines(folder, game_id)
-        latest = {r['provider_id']: r for r in existing}
         path = _lines_path(folder, game_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a') as stream:
-            for record in items:
-                previous = latest.get(record['provider_id'])
-                if previous and previous['lines'] == record['lines']:
-                    continue
-                entry = dict(record, captured_at=captured_at, capture_index=len(existing) + len(appended))
-                stream.write(json.dumps(entry, sort_keys=True) + '\n')
-                appended.append(entry)
-                latest[record['provider_id']] = entry
+        raw = path.read_bytes() if path.exists() else b''
+        existing, clean, partial = _parse_lines(raw, path.name) if raw else ([], 0, False)
+        latest = {r['provider_id']: r for r in existing}
+        new = []
+        for record in items:
+            previous = latest.get(record['provider_id'])
+            if previous and previous['lines'] == record['lines']:
+                continue
+            entry = dict(record, captured_at=captured_at, capture_index=len(existing) + len(new))
+            new.append(entry)
+            latest[record['provider_id']] = entry
+        if new or partial:
+            prefix = raw[:clean]
+            if prefix and not prefix.endswith(b'\n'):
+                prefix += b'\n'
+            atomic_bytes(path, prefix + b''.join(json.dumps(e, sort_keys=True).encode() + b'\n' for e in new))
+        appended.extend(new)
     return appended
 
 
@@ -126,7 +154,8 @@ def _slot(game, now):
 def capture_game_lines(folder, games, season, as_of):
     """Capture lines for the given upcoming games, once per cadence slot each; failures are reported, never raised."""
     from .reference import BASE, fetch_reference, scoreboard_event
-    folder = Path(folder); now = parse_time(as_of)
+    folder = Path(folder)
+    now = parse_time(as_of)
     state_path = folder / 'market' / 'capture-state.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     captured = {k: v for k, v in state.get('captured', {}).items() if now.timestamp() - v < 172800}
@@ -137,7 +166,8 @@ def capture_game_lines(folder, games, season, as_of):
             continue
         slot = _slot(game, now)
         if slot in captured:
-            report['skipped'].append(game['game_id']); continue
+            report['skipped'].append(game['game_id'])
+            continue
         try:
             event, _ = scoreboard_event(game, folder / 'references')
             if event is None:
@@ -160,7 +190,8 @@ def capture_game_lines(folder, games, season, as_of):
 
 def closing_lines(records, start_time):
     """The last capture per provider before tipoff."""
-    tip = parse_time(start_time); latest = {}
+    tip = parse_time(start_time)
+    latest = {}
     for r in records:
         if parse_time(r['retrieved_at']) < tip:
             latest[r['provider_id']] = r
@@ -169,9 +200,15 @@ def closing_lines(records, start_time):
 
 def build_index(folder):
     """Latest and first capture per game and provider, for the dashboard."""
-    root = Path(folder) / 'market' / 'game-lines'; index = {}
+    root = Path(folder) / 'market' / 'game-lines'
+    index = {}
+    damaged = []
     for path in sorted(root.glob('*.jsonl')) if root.exists() else []:
-        records = read_game_lines(folder, path.stem)
+        try:
+            records = read_game_lines(folder, path.stem)
+        except ValueError:
+            damaged.append(path.stem)  # one damaged file never hides the other games
+            continue
         if not records:
             continue
         providers = {}
@@ -182,7 +219,7 @@ def build_index(folder):
                                 providers={pid: dict(provider=v['provider'], first_captured_at=v['first']['captured_at'],
                                                      latest_captured_at=v['latest']['captured_at'], latest=v['latest']['lines'],
                                                      first=v['first']['lines']) for pid, v in providers.items()})
-    return dict(version=VERSION, generated_at=datetime.now(timezone.utc).isoformat(), games=index)
+    return dict(version=VERSION, generated_at=datetime.now(timezone.utc).isoformat(), games=index, damaged=damaged)
 
 
 def _implied(odds):
@@ -193,7 +230,9 @@ def _implied(odds):
 
 
 def _record(picks):
-    wins = sum(p == 'win' for p in picks); losses = sum(p == 'loss' for p in picks); pushes = sum(p == 'push' for p in picks)
+    wins = sum(p == 'win' for p in picks)
+    losses = sum(p == 'loss' for p in picks)
+    pushes = sum(p == 'push' for p in picks)
     return dict(picks=len(picks), wins=wins, losses=losses, pushes=pushes,
                 win_rate=wins / (wins + losses) if wins + losses else None)
 
@@ -208,13 +247,19 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     when the model margin exceeds the market margin by the threshold.
     """
     from .daily_review import _selected
-    folder = Path(folder); as_of = as_of or datetime.now(timezone.utc).isoformat()
+    folder = Path(folder)
+    as_of = as_of or datetime.now(timezone.utc).isoformat()
     games = {g['game_id']: g for g in schedule.get('games', []) if g.get('start_time') and g.get('status') not in ('postponed', 'cancelled', 'tbd')}
     chosen = selected if selected is not None else _selected(folder, games, as_of, schedule.get('season'))
     rows = []
+    errors = []
     for gid, game in sorted(games.items(), key=lambda item: item[1]['start_time']):
         selection = chosen.get((gid, 'final')) or chosen.get((gid, 'preliminary'))
-        lines = closing_lines(read_game_lines(folder, gid), game['start_time'])
+        try:
+            lines = closing_lines(read_game_lines(folder, gid), game['start_time'])
+        except ValueError as exc:
+            errors.append(dict(game_id=gid, error=str(exc)))
+            continue
         final_path = folder / 'finals' / (gid + '.json')
         if not selection or not lines or not final_path.exists():
             continue
@@ -257,12 +302,14 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                 row['total_edge'] = model_total - total
                 row['went_over'] = None if actual_total == total else actual_total > total
                 row['total_abs_error'] = dict(model=abs(model_total - actual_total), market=abs(total - actual_total))
-            implied_home = _implied(home_ml); implied_away = _implied(away_ml)
+            implied_home = _implied(home_ml)
+            implied_away = _implied(away_ml)
             if implied_home is not None and implied_away is not None and implied_home + implied_away > 0:
                 row['market_home_win'] = implied_home / (implied_home + implied_away)
             rows.append(row)
     summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows))
-    spread_rows = [r for r in rows if 'spread_edge' in r]; total_rows = [r for r in rows if 'total_edge' in r]
+    spread_rows = [r for r in rows if 'spread_edge' in r]
+    total_rows = [r for r in rows if 'total_edge' in r]
     if spread_rows:
         summary['margin_abs_error'] = dict(model=sum(r['margin_abs_error']['model'] for r in spread_rows) / len(spread_rows),
                                            market=sum(r['margin_abs_error']['market'] for r in spread_rows) / len(spread_rows), n=len(spread_rows))
@@ -299,6 +346,6 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                                               if all(r.get('model_home_win') is not None for r in win_rows) else None),
                                  model_pick_accuracy=sum((r['model_margin'] > 0) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows),
                                  market_pick_accuracy=sum((r['market_home_win'] > .5) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows))
-    return dict(version=VERSION, generated_at=as_of, summary=summary, games=rows,
+    return dict(version=VERSION, generated_at=as_of, summary=summary, games=rows, errors=errors,
                 policy='Closing line is the last capture before tipoff. Leans are descriptive; a win rate on a small sample is not an edge. '
                        'Absolute errors compare the model and the market against the same final scores.')

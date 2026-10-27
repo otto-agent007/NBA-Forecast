@@ -29,7 +29,8 @@ def cached():
 
 class SecondaryScheduleTests(unittest.TestCase):
     def test_one_espn_event_cannot_relabel_earlier_same_pair_nba_game(self):
-        source=cached();later=game('0022600002',start='2026-10-25T22:00:00Z')
+        source=cached()
+        later=game('0022600002',start='2026-10-25T22:00:00Z')
         second=normalize_season(payload([later]),'2026-10-22T03:00:00Z')['games'][0]
         source['games'].append(second)
         result=verify_secondary_schedule(source,[observation([espn_event(date='2026-10-25T22:00Z')])],NOW)
@@ -39,7 +40,8 @@ class SecondaryScheduleTests(unittest.TestCase):
 
     def test_future_or_postponed_nba_game_moved_into_today_is_discovered(self):
         for status in ('scheduled','postponed'):
-            source=cached();source['games'][0]['start_time']='2026-10-25T22:00:00Z'
+            source=cached()
+            source['games'][0]['start_time']='2026-10-25T22:00:00Z'
             source['games'][0]['status']=status
             result=verify_secondary_schedule(source,[observation([espn_event()])],NOW)
             self.assertEqual(result['crosscheck']['verified_game_ids'],['0022600001'])
@@ -48,14 +50,16 @@ class SecondaryScheduleTests(unittest.TestCase):
 
     def test_distant_same_pair_game_cannot_supply_a_near_term_nba_id(self):
         for start in ('2026-10-26T22:00:00Z','2026-10-29T22:00:00Z'):
-            source=cached();source['games'][0]['start_time']=start
+            source=cached()
+            source['games'][0]['start_time']=start
             result=verify_secondary_schedule(source,[observation([espn_event()])],NOW)
             self.assertEqual(result['crosscheck']['verified_game_ids'],[])
             self.assertEqual(len(result['crosscheck']['unmatched_secondary_events']),1)
             self.assertEqual(result['games'][0]['start_time'],start)
 
     def test_past_final_event_cannot_mark_tomorrows_same_pair_game_final(self):
-        source=cached();source['games'][0].update(start_time='2026-10-24T20:00:00Z',status='final')
+        source=cached()
+        source['games'][0].update(start_time='2026-10-24T20:00:00Z',status='final')
         later=game('0022600002',start='2026-10-25T22:00:00Z')
         source['games'].append(normalize_season(payload([later]),'2026-10-22T03:00:00Z')['games'][0])
         record=observation([espn_event(date='2026-10-24T20:00Z',status='STATUS_FINAL')])
@@ -68,7 +72,8 @@ class SecondaryScheduleTests(unittest.TestCase):
     def test_future_final_or_live_event_cannot_suppress_due_forecast(self):
         for state in ('STATUS_FINAL','STATUS_IN_PROGRESS'):
             event=espn_event(status=state)
-            if state=='STATUS_IN_PROGRESS':event['status']['type']['state']='in'
+            if state=='STATUS_IN_PROGRESS':
+                event['status']['type']['state']='in'
             result=verify_secondary_schedule(cached(),[observation([event])],NOW)
             self.assertEqual(result['crosscheck']['verified_game_ids'],[])
             self.assertEqual(result['crosscheck']['blocked_game_ids'],['0022600001'])
@@ -114,13 +119,15 @@ class SecondaryScheduleTests(unittest.TestCase):
             self.assertEqual(result['crosscheck']['blocked_game_ids'],['0022600001'])
 
     def test_unconfirmed_time_and_past_scheduled_tipoff_are_blocked(self):
-        untimed=espn_event();untimed['competitions'][0]['timeValid']=False
+        untimed=espn_event()
+        untimed['competitions'][0]['timeValid']=False
         for events in ([untimed],[espn_event(date='2026-10-24T15:00Z')]):
             result=verify_secondary_schedule(cached(),[observation(events)],NOW)
             self.assertEqual(result['crosscheck']['blocked_game_ids'],['0022600001'])
 
     def test_espn_utah_alias_matches_nba_uta_without_changing_game_id(self):
-        source=cached();row=source['games'][0]
+        source=cached()
+        row=source['games'][0]
         row.update(game_id='0022600112',start_time='2026-10-25T21:00:00Z',
                    source_start_time='2026-10-25T21:00:00Z',
                    home_tricode='UTA',away_tricode='LAL')
@@ -131,8 +138,11 @@ class SecondaryScheduleTests(unittest.TestCase):
         self.assertEqual(result['crosscheck']['verified_game_ids'],['0022600112'])
 
     def test_future_source_cannot_verify(self):
-        record=observation([espn_event()]);record['observed_at']='2026-10-24T16:01:00Z'
-        with self.assertRaises(ValueError):verify_secondary_schedule(cached(),[record],NOW)
+        record=observation([espn_event()])
+        record['observed_at']='2026-10-24T16:01:00Z'
+        with self.assertRaises(ValueError):
+            verify_secondary_schedule(cached(),[record],NOW)
 
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':
+    unittest.main()

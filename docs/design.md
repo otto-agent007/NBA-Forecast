@@ -1,9 +1,14 @@
-# NBA-Forecast v0.1 design
+# NBA-Forecast v0.1 design (October 2026, historical)
+
+The design the first version was built to. The contracts below still hold; the
+model has since grown participation probabilities, team budgets, a team-rating
+margin blend, injury-report replays and a refined production path, which
+`README.md`, `docs/backtest.md` and `docs/season-operations.md` describe.
 
 Build a reproducible player scoring baseline, not a claim of betting edge. The
 owner wants every active player covered, regular-season evidence only, explicit
 minutes/opportunities/roles, resistance to single-game shooting noise, and a
-feedback loop. This initial PR is the authorized deliverable; it is not merged.
+feedback loop.
 
 ## Architecture and boundaries
 

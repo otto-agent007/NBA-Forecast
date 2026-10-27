@@ -57,8 +57,10 @@ def backfill_games(ids, directory, workers=4):
     if isinstance(workers,bool) or not 1 <= workers <= 8:
         raise ValueError('workers must be between 1 and 8')
     ids=sorted(set(ids))
-    for gid in ids: boxscore_url(gid)
-    folder=Path(directory); folder.mkdir(parents=True,exist_ok=True)
+    for gid in ids:
+        boxscore_url(gid)
+    folder=Path(directory)
+    folder.mkdir(parents=True,exist_ok=True)
     lock=folder/'backfill.lock'
     try:
         lock.open('x').close()
@@ -71,7 +73,8 @@ def backfill_games(ids, directory, workers=4):
 
 
 def _run(ids,folder,workers):
-    games=folder/'games'; games.mkdir(exist_ok=True)
+    games=folder/'games'
+    games.mkdir(exist_ok=True)
     manifest_path=folder/'manifest.json'
     old=json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     cache_hashes=dict(old.get('cache_hashes',{}))
@@ -79,28 +82,33 @@ def _run(ids,folder,workers):
     result=dict(cache_hashes=cache_hashes,schema_version=1,status='running',requested_games=len(ids),completed_games=0,
                 resumed_games=0,started_at=datetime.now(timezone.utc).isoformat(),games={},failures={})
     export=folder/'history.json.gz'
-    if export.exists(): export.unlink()  # Derived output; rebuilt only after all requested games pass.
+    if export.exists():
+        export.unlink()  # Derived output; rebuilt only after all requested games pass.
     _write(manifest_path,result)
 
     def one(gid):
         path=games/(gid+'.json')
         if path.exists():
-            raw=path.read_bytes(); rows=json.loads(raw)
+            raw=path.read_bytes()
+            rows=json.loads(raw)
             digest=hashlib.sha256(raw).hexdigest()
             expected=cache_hashes.get(gid)
-            if expected and expected != digest: raise ValueError('cached normalized hash mismatch')
+            if expected and expected != digest:
+                raise ValueError('cached normalized hash mismatch')
             resumed=True
         else:
             payload=fetch_json(boxscore_url(gid),cache_dir=folder/'raw')
             known=datetime.now(timezone.utc).isoformat()
             rows=normalize_boxscore(payload,boxscore_url(gid),known)
-            digest=None; resumed=False
+            digest=None
+            resumed=False
         validate_history(rows)
         if not rows or {r['game_id'] for r in rows}!={gid}:
             raise ValueError('cached game identity or rows invalid')
         if len({r['team_id'] for r in rows}) != 2:
             raise ValueError('final game lacks two teams')
-        if digest is None: digest=_write(path,rows)
+        if digest is None:
+            digest=_write(path,rows)
         return dict(sha256=digest,rows=len(rows),source_url=boxscore_url(gid),
                     known_at=max(r['known_at'] for r in rows)),resumed
 
@@ -121,11 +129,14 @@ def _run(ids,folder,workers):
     result['status']='incomplete' if result['failures'] else 'complete'
     if not result['failures']:
         rows=[]
-        for gid in ids: rows.extend(json.loads((games/(gid+'.json')).read_text()))
+        for gid in ids:
+            rows.extend(json.loads((games/(gid+'.json')).read_text()))
         validate_history(rows)
         raw=json.dumps(rows,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
         zipped=gzip.compress(raw,mtime=0)
-        temporary=export.with_suffix('.gz.tmp'); temporary.write_bytes(zipped); temporary.replace(export)
+        temporary=export.with_suffix('.gz.tmp')
+        temporary.write_bytes(zipped)
+        temporary.replace(export)
         result['export']={'path':'history.json.gz','sha256':hashlib.sha256(zipped).hexdigest(),
                           'rows':len(rows),'players':len({r['player_id'] for r in rows}),
                           'seasons':sorted({r['season'] for r in rows})}
@@ -134,8 +145,10 @@ def _run(ids,folder,workers):
 
 
 def backfill_seasons(seasons,directory,workers=4):
-    folder=Path(directory); folder.mkdir(parents=True,exist_ok=True)
-    ids=[]; indexes=[]
+    folder=Path(directory)
+    folder.mkdir(parents=True,exist_ok=True)
+    ids=[]
+    indexes=[]
     for season in sorted(set(seasons)):
         url=game_log_url(season)
         payload=fetch_json(url,cache_dir=folder/'raw')

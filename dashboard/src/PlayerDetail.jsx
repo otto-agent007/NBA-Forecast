@@ -288,7 +288,8 @@ export default function PlayerDetail({ player, onClose }) {
                     <tr key={r.game_id}>
                       <td className="game-date-cell">{dateKey(r.game_time)}</td>
                       <td>
-                        <TeamMark id={r.opponent_id} />
+                        <TeamMark id={r.opponent_id} code={r.opponent_code} />
+                        <span className="sr-only">{r.opponent_code || r.opponent_id || "Unknown opponent"}</span>
                       </td>
                       <td>
                         {r.status === "dnp"

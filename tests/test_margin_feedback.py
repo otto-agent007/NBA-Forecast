@@ -27,7 +27,8 @@ class MarginFeedbackTests(unittest.TestCase):
             for i in range(5):
                 r=actual('P1' if side=='home' else 'P2')
                 r.update(player_id=side+str(i),minutes=48,game_period=4)
-                if side=='home':r.update(ftm=3,pts=25)
+                if side=='home':
+                    r.update(ftm=3,pts=25)
                 rows.append(r)
         game=dict(game_id='G1',home_team_id='T1',away_team_id='T2')
         d=dict(small_distribution(),**game)

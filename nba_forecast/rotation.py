@@ -23,16 +23,21 @@ def rotation_role(player,rows,*,excluded_game_ids=None):
 
 def projected_lineups(players,profiles):
     """Choose a projected five as a team, without changing numeric forecasts."""
-    by_id={p['player_id']:p for p in profiles};teams=defaultdict(list)
-    for p in players:teams[p['team_id']].append(p)
+    by_id={p['player_id']:p for p in profiles}
+    teams=defaultdict(list)
+    for p in players:
+        teams[p['team_id']].append(p)
     result={}
     for team,members in teams.items():
         eligible=[]
         for player in members:
-            profile=by_id.get(player['player_id'],{});role=profile.get('rotation_role') or {}
+            profile=by_id.get(player['player_id'],{})
+            role=profile.get('rotation_role') or {}
             minutes=profile.get('expected_minutes_baseline')
-            if minutes is None:minutes=role.get('recent_minutes')
-            if player.get('status')=='out' or not (role.get('observations') or (minutes or 0)>0):continue
+            if minutes is None:
+                minutes=role.get('recent_minutes')
+            if player.get('status')=='out' or not (role.get('observations') or (minutes or 0)>0):
+                continue
             eligible.append((player,role,minutes or 0))
         latest=max((parse_time(r['last_game_time']) for _,r,_ in eligible if r.get('last_game_time')),default=None)
         def rank(item):

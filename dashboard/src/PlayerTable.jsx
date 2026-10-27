@@ -1,5 +1,5 @@
 import PlayerPortrait from "./PlayerPortrait";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { filterPlayers, groupPlayers, number, statusLabel } from "./data";
 import { BOX_SCORE_COLUMNS, boxScoreTitle, boxScoreValue } from "./boxscore";
 import { Icon, TeamMark } from "./Icons";
@@ -28,6 +28,10 @@ export default function PlayerTable({
 }) {
   const [teamId, setTeamId] = useState("all");
   const allTeams = useMemo(() => groupPlayers(players), [players]);
+  useEffect(() => {
+    // The slate changed under the filter: a team that is gone cannot hide every row.
+    if (teamId !== "all" && !allTeams.some((t) => t.team_id === teamId)) setTeamId("all");
+  }, [allTeams, teamId]);
   const rows = useMemo(
     () => filterPlayers(players, query, filter, sort).filter((p) => teamId === "all" || p.team_id === teamId),
     [players, query, filter, sort, teamId],
@@ -164,6 +168,7 @@ export default function PlayerTable({
               onClick={() => {
                 setQuery("");
                 setFilter("all");
+                setTeamId("all");
               }}
             >
               Clear filters

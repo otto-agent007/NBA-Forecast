@@ -73,14 +73,22 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
             with self.subTest(change=change):
                 _, page = fixture()
                 g = page['props']['pageProps']['game']
-                if change == 'game': g['gameId'] = '0022600009'
-                if change == 'team': g['homeTeam']['teamId'] = 1610612740
-                if change == 'time': g['gameTimeUTC'] = '2026-10-23T22:00:00Z'
-                if change == 'final': g['gameStatus'] = 2
-                if change == 'score': g['homeTeam']['score'] = 10
-                if change == 'duplicate': g['homeTeam']['players'].append(copy.deepcopy(g['homeTeam']['players'][0]))
-                if change == 'rebound': g['homeTeam']['players'][0]['statistics']['reboundsDefensive'] = 4
-                with self.assertRaises(ValueError): self.normalize(page)
+                if change == 'game':
+                    g['gameId'] = '0022600009'
+                if change == 'team':
+                    g['homeTeam']['teamId'] = 1610612740
+                if change == 'time':
+                    g['gameTimeUTC'] = '2026-10-23T22:00:00Z'
+                if change == 'final':
+                    g['gameStatus'] = 2
+                if change == 'score':
+                    g['homeTeam']['score'] = 10
+                if change == 'duplicate':
+                    g['homeTeam']['players'].append(copy.deepcopy(g['homeTeam']['players'][0]))
+                if change == 'rebound':
+                    g['homeTeam']['players'][0]['statistics']['reboundsDefensive'] = 4
+                with self.assertRaises(ValueError):
+                    self.normalize(page)
         with self.assertRaises(ValueError):
             self.normalize(metadata=dict(source_url='https://www.nba.com/game/0022600008/box-score',
                            retrieved_at='2026-10-24T04:00:00Z', sha256='0'*64))
@@ -93,7 +101,8 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         self.assertIsNone(rows[0]['pf'])
         self.assertIsNone(rows[0]['plus_minus'])
         p['statistics']['minutes'] = ''
-        with self.assertRaises(ValueError): self.normalize()
+        with self.assertRaises(ValueError):
+            self.normalize()
 
     def test_livedata_shape_preserves_explicit_participation_and_iso_clock(self):
         g=self.page['props']['pageProps']['game']
@@ -125,7 +134,8 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         self.assertEqual(row['minutes_source_value'],'10:60')
         self.assertIn('60',row['minutes_normalization'])
         person['statistics']['minutes']='10:61'
-        with self.assertRaises(ValueError):self.normalize()
+        with self.assertRaises(ValueError):
+            self.normalize()
 
     def test_livedata_team_rebounds_separate_player_and_team_rebounds(self):
         team=self.page['props']['pageProps']['game']['homeTeam']
@@ -135,7 +145,8 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         self.assertEqual(rows[0]['team_boxscore']['reb'],5)
         self.assertEqual(rows[0]['team_boxscore']['team_rebounds'],3)
         team['statistics']['reboundsTotal']=9
-        with self.assertRaises(ValueError):self.normalize()
+        with self.assertRaises(ValueError):
+            self.normalize()
 
     def test_explicit_revision_preserves_before_after_counts_and_original_provenance(self):
         self.assertTrue(callable(getattr(sources,'revise_final_rows',None)),
@@ -153,13 +164,15 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         self.assertEqual(revised[0]['official_final_revision']['previous_row']['source_sha256'],'a'*64)
         self.assertEqual(revised[0]['source_url'],'https://www.nba.com/game/0022600008/box-score')
         old[0].update(pts=10,ftm=3,fta=3,ft_pct=1)
-        with self.assertRaises(ValueError):sources.revise_final_rows(old,official)
+        with self.assertRaises(ValueError):
+            sources.revise_final_rows(old,official)
 
     def test_material_minutes_correction_requires_explicit_revision_and_records_diff(self):
         official=self.normalize()
         old=copy.deepcopy(official)
         old[0].update(minutes=28,minutes_precision='whole_minutes',minutes_source_value='28')
-        with self.assertRaises(ValueError):sources.enrich_final_rows(old,official)
+        with self.assertRaises(ValueError):
+            sources.enrich_final_rows(old,official)
         revised=sources.revise_final_rows(old,official)
         change=revised[0]['official_final_revision']['changes']['minutes']
         self.assertEqual(change['before'],28)
@@ -201,13 +214,20 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         for change in ('player','team','points','missing_played','minutes','optional'):
             with self.subTest(change=change):
                 old=copy.deepcopy(official)
-                if change=='player':old[0]['player_id']='999'
-                if change=='team':old[0]['team_id'],old[0]['opponent_id']=old[0]['opponent_id'],old[0]['team_id']
-                if change=='points':old[0].update(pts=10,ftm=3,fta=3,ft_pct=1)
-                if change=='missing_played':old=old[1:]
-                if change=='minutes':old[0].update(minutes=33,minutes_precision='whole_minutes',minutes_source_value='33')
-                if change=='optional':old[0]['pf']=5
-                with self.assertRaises(ValueError):sources.enrich_final_rows(old,official)
+                if change=='player':
+                    old[0]['player_id']='999'
+                if change=='team':
+                    old[0]['team_id'],old[0]['opponent_id']=old[0]['opponent_id'],old[0]['team_id']
+                if change=='points':
+                    old[0].update(pts=10,ftm=3,fta=3,ft_pct=1)
+                if change=='missing_played':
+                    old=old[1:]
+                if change=='minutes':
+                    old[0].update(minutes=33,minutes_precision='whole_minutes',minutes_source_value='33')
+                if change=='optional':
+                    old[0]['pf']=5
+                with self.assertRaises(ValueError):
+                    sources.enrich_final_rows(old,official)
 
     def test_fetch_archives_unchanged_html_with_its_real_source(self):
         raw=encoded(self.page)
@@ -223,7 +243,8 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         for url in ('https://www.nba.com/game/0022600008/box-score?x=1',
                     'https://www.nba.com/game/0042600008/box-score',
                     'https://www.nba.com.evil.test/game/0022600008/box-score'):
-            with self.subTest(url=url), self.assertRaises(ValueError): data._allowed_url(url)
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                data._allowed_url(url)
 
     def turnover_fixture(self):
         from nba_forecast.shots import normalize_page_shots
@@ -276,13 +297,20 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
             with self.subTest(change=change):
                 page,rows,meta,verified=self.turnover_fixture()
                 actions=page['playByPlay']['actions']
-                if change=='player':actions[:]=[a for a in actions if a['actionNumber']!=210]
-                if change=='period':actions[:]=[a for a in actions if a['actionNumber']!=404]
-                if change=='unknown':next(a for a in actions if a['actionNumber']==303).pop('qualifiers')
-                if change=='side':next(a for a in actions if a['actionNumber']==302)['location']='h'
-                if change=='duplicate':actions.append(copy.deepcopy(next(a for a in actions if a['actionNumber']==301)))
-                if change=='proof':verified['coverage']['reconciled']=False
-                if change=='source':verified['provenance'][0]['sha256']='a'*64
+                if change=='player':
+                    actions[:]=[a for a in actions if a['actionNumber']!=210]
+                if change=='period':
+                    actions[:]=[a for a in actions if a['actionNumber']!=404]
+                if change=='unknown':
+                    next(a for a in actions if a['actionNumber']==303).pop('qualifiers')
+                if change=='side':
+                    next(a for a in actions if a['actionNumber']==302)['location']='h'
+                if change=='duplicate':
+                    actions.append(copy.deepcopy(next(a for a in actions if a['actionNumber']==301)))
+                if change=='proof':
+                    verified['coverage']['reconciled']=False
+                if change=='source':
+                    verified['provenance'][0]['sha256']='a'*64
                 with self.assertRaises(ValueError):
                     sources.supplement_official_team_turnovers(page,rows,meta,verified)
 

@@ -148,7 +148,7 @@ uncorrected versions:
 
 | # | Change | Status |
 |---|---|---|
-| 1 | Cluster the gate's standard errors | Done: two-way, date × player. No materiality floor yet |
+| 1 | Cluster the gate's standard errors | Done: two-way, date × player, with a 0.5% materiality floor since 2026-10-26 (`docs/backtest.md`) |
 | 2 | Market and naive baselines on the scoreboard, encompassing test | Done: `market_metrics` |
 | 3 | Official injury reports in the replay, second season | Done: 2024-25 and 2025-26 with T−30 reports |
 | 4 | Blend the player-sum margin with a team rating, preseason prior | Done: 50/50, prior 10 games at 0.6 × last season; the rating loses 0.1 per minute of reported-out regulars (2026-10-26). Reweighting and roster continuity tested on branches (below) |

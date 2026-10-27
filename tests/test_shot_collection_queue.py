@@ -27,7 +27,8 @@ class ShotCollectionQueueTests(unittest.TestCase):
                 person['statistics'].update(reboundsTotal=0,reboundsOffensive=0,reboundsDefensive=0,
                     assists=0,steals=0,blocks=0,foulsPersonal=0,plusMinusPoints=5 if side=='homeTeam' else -5)
             for pid in extra_ids:
-                person=copy.deepcopy(team['players'][0]);person.update(personId=pid,familyName=str(pid))
+                person=copy.deepcopy(team['players'][0])
+                person.update(personId=pid,familyName=str(pid))
                 person['statistics']={k:('48:00' if k=='minutes' else 0) for k in person['statistics']}
                 person['statistics']['plusMinusPoints']=5 if side=='homeTeam' else -5
                 team['players'].append(person)
@@ -62,8 +63,10 @@ class ShotCollectionQueueTests(unittest.TestCase):
         rows=[]
         for number in range(1,4):
             for original in self.rows:
-                r=copy.deepcopy(original);r['game_id']=f'002260000{number}'
-                r['game_time']=f'2026-10-20T0{number}:00:00Z';rows.append(r)
+                r=copy.deepcopy(original)
+                r['game_id']=f'002260000{number}'
+                r['game_time']=f'2026-10-20T0{number}:00:00Z'
+                rows.append(r)
         calls=[]
         def fail(gid,*args,**kwargs):
             calls.append(gid)

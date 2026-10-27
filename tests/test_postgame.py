@@ -13,7 +13,8 @@ class PostgameTests(unittest.TestCase):
     def test_late_blowout_and_no_automatic_early_garbage_time(self):
         points=[dict(elapsed=0,margin=0),dict(elapsed=1440,margin=2),dict(elapsed=2300,margin=22),dict(elapsed=2880,margin=24)]
         c=classify_game(points)
-        self.assertEqual(c['pattern'],'Late blowout');self.assertEqual(c['low_leverage_start'],2300)
+        self.assertEqual(c['pattern'],'Late blowout')
+        self.assertEqual(c['low_leverage_start'],2300)
     def test_exact_minutes_volume_conversion_decomposition(self):
         p=dict(status='projected',expected_minutes=36,expected_fga=24,points_mean=30)
         a=dict(minutes=24,fga=12,pts=18,status='played')
@@ -38,7 +39,8 @@ class VerifiedPostgameTests(unittest.TestCase):
         f=self.fixture
         return analyze_game(pbp or f['pbp'],f['box'],'2026-10-22T18:00:00Z')
     def test_verified_stars_exit_and_all_players_retained(self):
-        report=self.analyze();self.assertEqual(report['pattern'],'Late blowout')
+        report=self.analyze()
+        self.assertEqual(report['pattern'],'Late blowout')
         self.assertEqual(report['home']['score'],127)
         players={p['name']:p for p in report['players']}
         self.assertEqual(players['Luka Dončić']['last_recorded_exit']['elapsed'],2160)
@@ -50,9 +52,15 @@ class VerifiedPostgameTests(unittest.TestCase):
     def test_incomplete_period_score_duplicate_and_identity_rejected(self):
         import copy
         for kind in ('period','score','duplicate','identity'):
-            p=copy.deepcopy(self.fixture['pbp']);a=p['game']['actions']
-            if kind=='period':a[:]=[e for e in a if not(e['actionType']=='period' and e.get('subType')=='end' and e['period']==2)]
-            if kind=='score':a[-1]['scoreHome']='999'
-            if kind=='duplicate':a.append(copy.deepcopy(a[-1]))
-            if kind=='identity':next(e for e in a if e['actionType']=='substitution')['personId']=999999
-            with self.subTest(kind=kind),self.assertRaises(ValueError):self.analyze(p)
+            p=copy.deepcopy(self.fixture['pbp'])
+            a=p['game']['actions']
+            if kind=='period':
+                a[:]=[e for e in a if not(e['actionType']=='period' and e.get('subType')=='end' and e['period']==2)]
+            if kind=='score':
+                a[-1]['scoreHome']='999'
+            if kind=='duplicate':
+                a.append(copy.deepcopy(a[-1]))
+            if kind=='identity':
+                next(e for e in a if e['actionType']=='substitution')['personId']=999999
+            with self.subTest(kind=kind),self.assertRaises(ValueError):
+                self.analyze(p)

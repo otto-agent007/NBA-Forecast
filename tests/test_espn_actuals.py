@@ -101,30 +101,41 @@ class ESPNActualTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.summary, self.game, self.roster, self.meta = fixture()
                 comp = self.summary["header"]["competitions"][0]
-                if change == "final": comp["status"]["type"]["completed"] = False
-                if change == "team": comp["competitors"][0]["team"]["abbreviation"] = "BOS"
-                if change == "side": comp["competitors"][0]["homeAway"] = "away"
-                if change == "date": comp["date"] = "2026-01-06T20:00:00Z"
-                if change == "season": self.summary["header"]["season"]["type"] = 3
-                if change == "event": self.summary["header"]["id"] = "401811034"
-                with self.assertRaises(ValueError): self.normalize()
+                if change == "final":
+                    comp["status"]["type"]["completed"] = False
+                if change == "team":
+                    comp["competitors"][0]["team"]["abbreviation"] = "BOS"
+                if change == "side":
+                    comp["competitors"][0]["homeAway"] = "away"
+                if change == "date":
+                    comp["date"] = "2026-01-06T20:00:00Z"
+                if change == "season":
+                    self.summary["header"]["season"]["type"] = 3
+                if change == "event":
+                    self.summary["header"]["id"] = "401811034"
+                with self.assertRaises(ValueError):
+                    self.normalize()
 
     def test_prestart_or_future_observation_is_rejected(self):
         for known_at in [self.game["start_time"], "2026-01-05T19:00:00Z", "2099-01-01T00:00:00Z"]:
             with self.subTest(known_at=known_at):
                 self.meta["retrieved_at"] = known_at
-                with self.assertRaises(ValueError): self.normalize()
+                with self.assertRaises(ValueError):
+                    self.normalize()
 
     def test_unknown_or_ambiguous_identity_is_rejected(self):
         self.roster["players"][0]["name"] = "Home Player"
-        with self.assertRaisesRegex(ValueError, "identity"): self.normalize()
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.normalize()
         self.roster["players"].append(dict(player_id="11", name="Home Player Jr.", team_id="H"))
         self.roster["players"][0]["name"] = "Home Player Jr."
-        with self.assertRaisesRegex(ValueError, "identity"): self.normalize()
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.normalize()
 
     def test_only_supplied_person_specific_alias_can_match_missing_suffix(self):
         self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["athlete"]["displayName"] = "Home Player"
-        with self.assertRaisesRegex(ValueError, "identity"): self.normalize()
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.normalize()
         rows = self.normalize(name_aliases=[dict(nba_id="10", nba_name="Home Player Jr.", espn_name="Home Player")])
         self.assertEqual(rows[0]["player_id"], "10")
         self.assertEqual(rows[0]["name"], "Home Player Jr.")
@@ -137,7 +148,8 @@ class ESPNActualTests(unittest.TestCase):
         rows = self.normalize(history=[person])
         self.assertEqual(rows[0]["player_id"], "10")
         person["team_id"] = "different"
-        with self.assertRaisesRegex(ValueError, "identity"): self.normalize(history=[person])
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.normalize(history=[person])
 
     def test_missing_required_stats_bad_shot_arithmetic_and_duplicate_players_fail(self):
         for change in ["missing", "identity", "points", "participation", "duplicate", "team_score"]:
@@ -145,13 +157,20 @@ class ESPNActualTests(unittest.TestCase):
                 self.summary, self.game, self.roster, self.meta = fixture()
                 group = self.summary["boxscore"]["players"][0]["statistics"][0]
                 entry = group["athletes"][0]
-                if change == "missing": entry["stats"][5] = "--"
-                if change == "identity": entry["stats"][2] = "8-7"
-                if change == "points": entry["stats"][1] = "10"
-                if change == "participation": del entry["didNotPlay"]
-                if change == "duplicate": group["athletes"].append(copy.deepcopy(entry))
-                if change == "team_score": self.summary["header"]["competitions"][0]["competitors"][0]["score"] = "10"
-                with self.assertRaises(ValueError): self.normalize()
+                if change == "missing":
+                    entry["stats"][5] = "--"
+                if change == "identity":
+                    entry["stats"][2] = "8-7"
+                if change == "points":
+                    entry["stats"][1] = "10"
+                if change == "participation":
+                    del entry["didNotPlay"]
+                if change == "duplicate":
+                    group["athletes"].append(copy.deepcopy(entry))
+                if change == "team_score":
+                    self.summary["header"]["competitions"][0]["competitors"][0]["score"] = "10"
+                with self.assertRaises(ValueError):
+                    self.normalize()
 
     def test_optional_missing_or_invalid_categories_remain_null_with_errors(self):
         entry = self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][0]
@@ -166,7 +185,8 @@ class ESPNActualTests(unittest.TestCase):
     def test_dnp_stats_cannot_contradict_explicit_nonparticipation(self):
         entry = self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][1]
         entry["stats"] = ["1", "9", "3-7", "1-3", "2-2", "1", "5", "2", "1", "0", "2"]
-        with self.assertRaises(ValueError): self.normalize()
+        with self.assertRaises(ValueError):
+            self.normalize()
 
     def test_fetch_joins_unique_final_board_event_then_archives_summary(self):
         comp = copy.deepcopy(self.summary["header"]["competitions"][0])
@@ -184,7 +204,8 @@ class ESPNActualTests(unittest.TestCase):
         for events in [[dict(id="401811033", competitions=[comp])] * 2,
                        [dict(id="401811033", competitions=[{**comp, "status": dict(type=dict(completed=False))}])]]:
             with self.subTest(events=events), patch("nba_forecast.espn_actuals.fetch_reference", return_value=(dict(events=events), self.meta)) as fetch:
-                with self.assertRaises(ValueError): fetch_espn_final(self.game, self.roster, "unused")
+                with self.assertRaises(ValueError):
+                    fetch_espn_final(self.game, self.roster, "unused")
                 self.assertEqual(fetch.call_count, 1)
 
     def test_scoreboard_period_is_retained_when_summary_omits_it(self):
@@ -203,16 +224,19 @@ class ESPNActualTests(unittest.TestCase):
         comp = copy.deepcopy(self.summary["header"]["competitions"][0])
         board = dict(events=[dict(id="401811033", season=dict(year=2027, type=2), competitions=[comp])])
         with patch("nba_forecast.espn_actuals.fetch_reference", return_value=(board, self.meta)) as fetch:
-            with self.assertRaises(ValueError): fetch_espn_final(self.game, self.roster, "unused")
+            with self.assertRaises(ValueError):
+                fetch_espn_final(self.game, self.roster, "unused")
             self.assertEqual(fetch.call_count, 1)
 
     def test_team_core_stats_and_optional_rebounds_cannot_contradict_players(self):
         self.summary["boxscore"]["teams"][0]["statistics"][0]["displayValue"] = "3-8"
-        with self.assertRaises(ValueError): self.normalize()
+        with self.assertRaises(ValueError):
+            self.normalize()
         self.summary, self.game, self.roster, self.meta = fixture()
         self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["stats"][10] = "6"
         self.summary["boxscore"]["teams"][0]["statistics"][8]["displayValue"] = "6"
-        with self.assertRaises(ValueError): self.normalize()
+        with self.assertRaises(ValueError):
+            self.normalize()
 
     def test_missing_optional_team_category_retains_an_explicit_error(self):
         self.summary["boxscore"]["teams"][0]["statistics"][8]["displayValue"] = "--"
@@ -247,15 +271,24 @@ class ESPNActualTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.summary, self.game, self.roster, self.meta = fixture()
                 entry = self.inactive_zero_entry()
-                if change == "active": entry["active"] = True
-                if change == "no_active": del entry["active"]
-                if change == "unknown_reason": entry["reason"] = "UNKNOWN"
-                if change == "positive_points": entry["stats"][1] = "1"
-                if change == "positive_attempt": entry["stats"][2] = "0-1"
-                if change == "missing_count": entry["stats"][5] = "--"
-                if change == "positive_optional": entry["stats"][6] = "1"
-                if change == "invalid_minute_marker": entry["stats"][0] = "garbage"
-                with self.assertRaises(ValueError): self.normalize()
+                if change == "active":
+                    entry["active"] = True
+                if change == "no_active":
+                    del entry["active"]
+                if change == "unknown_reason":
+                    entry["reason"] = "UNKNOWN"
+                if change == "positive_points":
+                    entry["stats"][1] = "1"
+                if change == "positive_attempt":
+                    entry["stats"][2] = "0-1"
+                if change == "missing_count":
+                    entry["stats"][5] = "--"
+                if change == "positive_optional":
+                    entry["stats"][6] = "1"
+                if change == "invalid_minute_marker":
+                    entry["stats"][0] = "garbage"
+                with self.assertRaises(ValueError):
+                    self.normalize()
 
     def test_positive_numeric_minutes_and_explicit_played_counts_are_not_relabelled_dnp(self):
         entry = self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][0]
@@ -364,18 +397,24 @@ class ESPNActualTests(unittest.TestCase):
             with self.subTest(change=change):
                 evidence = copy.deepcopy(previous)
                 history = [evidence]
-                if change == "ambiguous": history.append(dict(evidence, player_id="31"))
-                if change == "future_known": evidence["known_at"] = "2026-01-06T00:00:00Z"
-                if change == "not_nba": evidence["source_url"] = "https://example.test/identity"
-                if change == "unobserved": del evidence["known_at"]
-                with self.assertRaisesRegex(ValueError, "identity"): self.normalize(history=history)
+                if change == "ambiguous":
+                    history.append(dict(evidence, player_id="31"))
+                if change == "future_known":
+                    evidence["known_at"] = "2026-01-06T00:00:00Z"
+                if change == "not_nba":
+                    evidence["source_url"] = "https://example.test/identity"
+                if change == "unobserved":
+                    del evidence["known_at"]
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    self.normalize(history=history)
 
     def test_cross_team_historical_identity_never_admits_an_unsupported_played_row(self):
         person = self.roster["players"].pop(0)
         previous = dict(person, team_id="OLD", game_id="0022500002",
                         source_url="https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022500002.json",
                         known_at="2026-01-04T23:00:00Z")
-        with self.assertRaisesRegex(ValueError, "identity"): self.normalize(history=[previous])
+        with self.assertRaisesRegex(ValueError, "identity"):
+            self.normalize(history=[previous])
 
     def test_exact_historical_dnp_identity_does_not_admit_positive_count_contradiction(self):
         person = self.roster["players"].pop(2)
@@ -384,7 +423,8 @@ class ESPNActualTests(unittest.TestCase):
                         known_at="2026-01-04T23:00:00Z")
         entry = self.summary["boxscore"]["players"][0]["statistics"][0]["athletes"][1]
         entry["stats"] = ["1", "9", "3-7", "1-3", "2-2", "1", "5", "2", "1", "0", "2"]
-        with self.assertRaises(ValueError): self.normalize(history=[previous])
+        with self.assertRaises(ValueError):
+            self.normalize(history=[previous])
 
 
 if __name__ == "__main__":

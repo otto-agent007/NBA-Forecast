@@ -85,7 +85,8 @@ class DailyCaptureTests(unittest.TestCase):
     def test_failed_daily_capture_retries_without_an_empty_success_record(self):
         from nba_forecast.injury_capture import capture_daily
         with tempfile.TemporaryDirectory() as d,patch('nba_forecast.injury_capture.fetch_daily_report',side_effect=ValueError('offline')):
-            with self.assertRaises(ValueError):capture_daily(d,'2026-27','2026-10-23T16:00:00Z')
+            with self.assertRaises(ValueError):
+                capture_daily(d,'2026-27','2026-10-23T16:00:00Z')
             self.assertFalse(list((Path(d)/'injuries/daily').glob('*.json')))
 
     def test_checkpoint_archive_preserves_first_valid_final_and_later_checks(self):

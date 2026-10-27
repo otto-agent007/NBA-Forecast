@@ -69,10 +69,12 @@ class ShotProfilesTests(unittest.TestCase):
         self.assertEqual(source['raw_sources'][0]['sha256'],self.source['provenance'][0]['sha256'])
 
     def test_archived_livedata_play_by_play_and_boxscore_can_reproduce_profiles(self):
-        gid=self.game['game_id'];box={'game':copy.deepcopy(self.page['game'])}
+        gid=self.game['game_id']
+        box={'game':copy.deepcopy(self.page['game'])}
         pbp={'game':copy.deepcopy(self.page['playByPlay'])}
         for action in pbp['game']['actions']:
-            if action.get('isFieldGoal')==1:action['actionType']=str(action['shotValue'])+'pt'
+            if action.get('isFieldGoal')==1:
+                action['actionType']=str(action['shotValue'])+'pt'
         metadata=[]
         for payload,url in ((pbp,playbyplay_url(gid)),(box,boxscore_url(gid))):
             metadata.append(archive_payload(canonical(payload),url,self.meta['retrieved_at'],self.directory/'raw'))
@@ -97,9 +99,12 @@ class ShotProfilesTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 source=copy.deepcopy(self.source)
                 snapshot=copy.deepcopy(self.snapshot)
-                if reason=='future':source['known_at']='2026-10-23T00:00:00Z'
-                if reason=='missing':source.update(shots=[],missing_reason='source unavailable')
-                if reason=='excluded':snapshot['model_enhancements']={'excluded_history_game_ids':[self.game['game_id']]}
+                if reason=='future':
+                    source['known_at']='2026-10-23T00:00:00Z'
+                if reason=='missing':
+                    source.update(shots=[],missing_reason='source unavailable')
+                if reason=='excluded':
+                    snapshot['model_enhancements']={'excluded_history_game_ids':[self.game['game_id']]}
                 atomic_json(self.directory/'shots'/(self.game['game_id']+'.json'),source)
                 prepared=shot_profiles.prepare_shot_profiles(self.directory,snapshot,self.history)
                 self.assertEqual(prepared['sources'],[])
@@ -170,7 +175,8 @@ class ShotProfilesTests(unittest.TestCase):
                 try:
                     with self.assertRaisesRegex(ValueError,'hash'):
                         shot_profiles.verify_shot_profiles(self.snapshot,self.history,self.directory)
-                finally:path.write_bytes(original)
+                finally:
+                    path.write_bytes(original)
 
     def test_manifest_future_time_wrong_game_and_newly_excluded_evidence_fail(self):
         prepared=self.prepare()
@@ -178,9 +184,12 @@ class ShotProfilesTests(unittest.TestCase):
             with self.subTest(change=change):
                 snapshot=copy.deepcopy(self.snapshot)
                 snapshot['shot_profiles']=copy.deepcopy(prepared)
-                if change=='future':snapshot['shot_profiles']['sources'][0]['known_at']='2026-10-23T00:00:00Z'
-                if change=='game':snapshot['shot_profiles']['sources'][0]['game_id']='0022600020'
-                if change=='excluded':snapshot['model_enhancements']={'excluded_history_game_ids':[self.game['game_id']]}
+                if change=='future':
+                    snapshot['shot_profiles']['sources'][0]['known_at']='2026-10-23T00:00:00Z'
+                if change=='game':
+                    snapshot['shot_profiles']['sources'][0]['game_id']='0022600020'
+                if change=='excluded':
+                    snapshot['model_enhancements']={'excluded_history_game_ids':[self.game['game_id']]}
                 with self.assertRaises(ValueError):
                     shot_profiles.verify_shot_profiles(snapshot,self.history,self.directory)
 

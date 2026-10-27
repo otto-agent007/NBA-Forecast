@@ -25,9 +25,11 @@ def game_totals(game, predictions, *, schema_version=5, lineups=None):
     if type(schema_version) is not int or schema_version not in (1,2,3,4,5):
         raise ValueError('Unsupported game totals schema version')
     def weight(p):
-        if schema_version<3:return 1.
+        if schema_version<3:
+            return 1.
         value=p.get('participation_probability')
-        if value is None:return 1.
+        if value is None:
+            return 1.
         if isinstance(value,bool) or not isinstance(value,(int,float)) or not isfinite(value) or not 0<=value<=1:
             raise ValueError('Game totals require participation probabilities in [0, 1]')
         return value
@@ -45,7 +47,8 @@ def game_totals(game, predictions, *, schema_version=5, lineups=None):
                 if isinstance(value,bool) or not isinstance(value,(int,float)) or not isfinite(value) or value<0:
                     raise ValueError('Game totals require finite nonnegative player projections')
         minutes=fsum(weight(p)*p['expected_minutes'] for p in projected)
-        if minutes>240+1e-7:raise ValueError('Game totals exceed the regulation minutes budget')
+        if minutes>240+1e-7:
+            raise ValueError('Game totals exceed the regulation minutes budget')
         withheld=sorted(p['player_id'] for p in rows if p['status'] not in ('projected','out'))
         def bench(p):
             return (p['player_id'] not in starters and p.get('projected_starter') is not True
