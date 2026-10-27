@@ -69,6 +69,12 @@ def analyze_game(payload, boxscore, known_at, forecast=None):
     g=boxscore['game']
     gid=g['gameId']
     actions=payload['game']['actions']
+    # The feed has labelled a regulation game's closing marker period 5 (0022600111).
+    # A trailing game-end action past the final period that carries the final score adds nothing.
+    closing=actions[-1] if actions else None
+    if (closing and closing['actionType']=='game' and closing.get('subType')=='end' and closing['period']>g['period']
+            and (int(closing['scoreHome']),int(closing['scoreAway']))==(g['homeTeam']['score'],g['awayTeam']['score'])):
+        actions=actions[:-1]
     rows=normalize_boxscore(boxscore, f'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{gid}.json', known_at)
     end=2880+max(0,g['period']-4)*300
     points=[dict(elapsed=0,margin=0,home=0,away=0,period=1,clock='PT12M00.00S',action_number=None)]

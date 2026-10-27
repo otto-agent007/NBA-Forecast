@@ -64,6 +64,16 @@ class VerifiedPostgameTests(unittest.TestCase):
                 next(e for e in a if e['actionType']=='substitution')['personId']=999999
             with self.subTest(kind=kind),self.assertRaises(ValueError):
                 self.analyze(p)
+    def test_closing_marker_labelled_overtime_is_ignored_only_at_the_final_score(self):
+        import copy
+        p=copy.deepcopy(self.fixture['pbp'])
+        last=p['game']['actions'][-1]
+        marker=dict(last,actionNumber=last['actionNumber']+4,actionType='game',subType='end',period=5,clock='PT00M00.00S')
+        p['game']['actions'].append(marker)
+        self.assertEqual(self.analyze(p)['home']['score'],127)
+        marker['scoreHome']=str(int(marker['scoreHome'])+1)
+        with self.assertRaises(ValueError):
+            self.analyze(p)
 
 class PostgameSourceTests(unittest.TestCase):
     """The tick archives LiveData box score and play-by-play so build_postgames can run."""
