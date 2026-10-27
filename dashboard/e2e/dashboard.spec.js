@@ -110,6 +110,39 @@ test("daily review shows date-specific coverage and preserves partial forecast t
   await expect(review).not.toContainText('64%');
 });
 
+test("daily review weighs DNPs, splits noise from model misses, and shows the market and repeating misses",async({page})=>{
+  const response=structuredClone(dashboard);
+  const player=(name,cls,minutes,actual)=>({game_id:gameId,player_id:name,name,team:'LAL',predicted:{minutes,pts:12},actual:{minutes:actual,pts:9},miss_class:cls,miss_evidence:[{kind:'play_by_play',detail:'Last substitution out at Q2 4:10 with no later action'}]});
+  const classes={did_not_play:{count:2,points_share:.2,minutes_share:.3},role_shift:{count:1,points_share:.1,minutes_share:.2},early_exit:{count:1,points_share:.15,minutes_share:.2},shooting_variance:{count:6,points_share:.55,minutes_share:.3}};
+  response.daily_reviews={'2026-10-21':{date:'2026-10-21',status:'complete',coverage:{scheduled_games:1,verified_finals:1,final_forecasts:1,play_by_play_games:1},
+    stages:{final:{projected:{count:10,points_mae:4.25,minutes_mae:5.88,interval80_coverage:.8},projected_dnp:{count:3,minutes:31,points:9},model_versions:{'test-v1':1},largest_misses:[],
+      participation:{count:12,played:9,played_share:.75,mean_probability:.8,brier:.12,expected_brier:.14,expected_minutes_lost:6.4,expected_dnp_minutes:12.5},
+      miss_classes:{count:10,classes,groups:{model:{count:3,points_share:.3,minutes_share:.5},unexplained:{count:0,points_share:0,minutes_share:0},noise:{count:7,points_share:.7,minutes_share:.5}}}}},
+    paired_stages:{count:0},improvement_queue:[{code:'minutes',title:'Check the largest minutes misses',action:'Misses the game itself does not explain.',evidence:[player('Role Changer','role_shift',12,24)]}],
+    explained_misses:[player('Hurt Starter','early_exit',34,9)],
+    market:{games:1,model_margin_mae:7,close_margin_mae:2,kalshi_games:1,kalshi_margin_mae:1.5,lost_to_close:[{game_id:gameId,matchup:'GSW @ LAL',lost_by:5,
+      teams:[{team_id:'1610612747',team:'LAL',error:-6,model_points:-4,noise_points:-3,unprojected_points:1,drivers:[{name:'Role Changer',miss_class:'role_shift',points_error:-4}]}]}]},
+    games:[{game_id:gameId,matchup:'GSW @ LAL',home_team_id:'1610612747',away_team_id:'1610612744',score:{'1610612747':100,'1610612744':98},actuals:{status:'verified'},
+      market:{margin:{model:9,close:4,kalshi:3.5,actual:2},margin_abs_error:{model:7,close:2,kalshi:1.5}},
+      stages:{final:{model_version:'test-v1',totals:{status:'complete',points_mean:190},totals_origin:'saved_forecast',game_total_error:8,team_total_errors:[]}},play_by_play_available:true}]}};
+  response.daily_review_recurrence={window:{nights:14,dates:['2026-10-19','2026-10-20','2026-10-21']},policy:'Final-stage forecasts in the saved nightly reviews.',
+    queue:[{code:'recurring_minutes',player_id:'7',title:'Role Changer: minutes over by 6+ on 3 straight nights',evidence:[{date:'2026-10-19'},{date:'2026-10-20'},{date:'2026-10-21'}]}]};
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));await page.goto('/');
+  await page.getByRole('button',{name:'Performance',exact:true}).click();
+  const review=page.getByLabel('Daily forecast review');
+  await expect(review).toContainText('6.4 expected minutes lost');
+  await review.getByText('Where the error came from',{exact:true}).click();
+  await expect(review.getByLabel('Miss classes')).toContainText('shooting variance');
+  await expect(review.getByLabel('Miss classes').locator('tbody tr')).toHaveCount(7);
+  await expect(review.getByLabel('Margins against the market')).toContainText('+3.5');
+  await expect(review).toContainText('lost 5 to the close');
+  await review.getByText('Explained by the game (1)',{exact:true}).click();
+  await expect(review).toContainText('Hurt Starter');
+  await expect(review).toContainText('early exit');
+  await expect(review.getByLabel('Repeating misses')).toContainText('Role Changer: minutes over by 6+ on 3 straight nights');
+  await expect(review.getByLabel('Repeating misses')).toContainText('2026-10-19, 2026-10-20, 2026-10-21');
+});
+
 test("player details show applied environment effects and empirical interval evidence",async({page})=>{
   const response=structuredClone(dashboard);
   response.games[0].forecast.predictions[0].components={game_environment:{expected_possessions:101.2,pace_factor:1.01,defense_factor:.98,context_factor:.993},
