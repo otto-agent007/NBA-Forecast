@@ -8,7 +8,8 @@ Each step is idempotent, so a second run after a success changes nothing:
 2. build the refined model artifact bound to that package digest from the active
    model's 0.5.0 parent (``refinement_upgrade.build_artifact``) and install it;
 3. back up the activation pointer under ``activation-backups/`` and point it at
-   the new artifact;
+   the new artifact, holding the tick's lock so a running tick finishes first
+   and cannot write its refit of the old artifact over the new one;
 4. rewrite ``WorkingDirectory`` in the user systemd units and reload them: the
    timer runs the new release on its next tick and the dashboard is restarted;
 5. write ``deployed.json``: the commit, package digest, release, artifact and time.
@@ -18,12 +19,15 @@ the prospective calibration, which is bound to the model key. Nothing under the
 production directory is edited by hand.
 """
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
+import time
 
 from .enhancements import _read, install_artifact
 from .files import atomic_bytes, atomic_json
@@ -66,6 +70,32 @@ def _active(directory, now):
     return pointer, active, base, parent_digest
 
 
+@contextmanager
+def _tick_lock(directory, wait):
+    """Hold the tick's own lock: a running tick finishes first, and none starts until the activation is written.
+
+    A tick that finished its work after reading the old activation would
+    otherwise refit its calibration and write the old artifact back over the
+    new one (this happened on 2026-10-26). A timer tick that fires meanwhile
+    exits with 'tick already running' and the next minute's runs.
+    """
+    handle = (Path(directory) / 'tick.lock').open('a')
+    deadline = time.monotonic() + wait
+    try:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ValueError(f'a tick has held the lock for more than {wait} seconds; retry later') from None
+                time.sleep(1)
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        handle.close()
+
+
 def _rewrite_unit(path, release):
     """Point a unit's WorkingDirectory at the release; the setting is a literal path, with % escaped."""
     text = path.read_text()
@@ -79,39 +109,46 @@ def _rewrite_unit(path, release):
     return True
 
 
-def deploy(directory, units, *, systemd=True, dry_run=False, package=PACKAGE):
-    directory, units = Path(directory).resolve(), Path(units)
-    now = datetime.now(timezone.utc).isoformat()
-    digest = package_digest(package)
+def _plan(directory, units, package, digest, now, dry_run):
     pointer, active, base, parent_digest = _active(directory, now)
     artifact = build_artifact(base, parent_digest, now)
     unchanged = (active.get('model_key') == artifact['model_key'] and active.get('runner_package_sha256') == digest)
-    release = directory / 'runner-releases' / digest
     commit, dirty = _git(package.parent)
-    plan = dict(deployed_at=now, commit=commit, dirty_worktree=dirty, package_sha256=digest, release=str(release),
+    plan = dict(deployed_at=now, commit=commit, dirty_worktree=dirty, package_sha256=digest,
+                release=str(directory / 'runner-releases' / digest),
                 model_version=artifact['model_version'], model_key=artifact['model_key'],
                 previous=dict(artifact_sha256=pointer['artifact_sha256'], model_key=active.get('model_key'),
                               package_sha256=active.get('runner_package_sha256')),
                 units=[str(units / name) for name in UNITS], unchanged=unchanged, dry_run=dry_run)
+    return plan, pointer, artifact
+
+
+def deploy(directory, units, *, systemd=True, dry_run=False, package=PACKAGE, wait=600):
+    directory, units = Path(directory).resolve(), Path(units)
+    now = datetime.now(timezone.utc).isoformat()
+    digest = package_digest(package)
     if dry_run:
-        return plan
-    release = pin_release(package, directory / 'runner-releases')
-    if unchanged:
-        plan['artifact_sha256'] = pointer['artifact_sha256']
-    else:
-        plan['artifact_sha256'] = installed = install_artifact(directory, artifact)
-        backup = directory / 'activation-backups' / installed
-        atomic_json(backup / 'previous-model-upgrade-active.json', pointer)
-        activation = dict(artifact_sha256=installed, activated_at=now)
-        atomic_json(backup / 'activation.json', activation)
-        atomic_json(directory / 'model-upgrade-active.json', activation)
-    rewritten = [name for name in UNITS if _rewrite_unit(units / name, release)]
-    plan['units_rewritten'] = rewritten
-    if systemd and rewritten:
-        subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
-        if 'nba-dashboard.service' in rewritten:
-            subprocess.run(['systemctl', '--user', 'restart', 'nba-dashboard.service'], check=True)
-    atomic_json(directory / 'deployed.json', plan)
+        return _plan(directory, units, package, digest, now, dry_run)[0]
+    with _tick_lock(directory, wait):
+        # Read the activation only once no tick can move it, and write everything before one can start.
+        plan, pointer, artifact = _plan(directory, units, package, digest, now, dry_run)
+        release = pin_release(package, directory / 'runner-releases')
+        if plan['unchanged']:
+            plan['artifact_sha256'] = pointer['artifact_sha256']
+        else:
+            plan['artifact_sha256'] = installed = install_artifact(directory, artifact)
+            backup = directory / 'activation-backups' / installed
+            atomic_json(backup / 'previous-model-upgrade-active.json', pointer)
+            activation = dict(artifact_sha256=installed, activated_at=now)
+            atomic_json(backup / 'activation.json', activation)
+            atomic_json(directory / 'model-upgrade-active.json', activation)
+        rewritten = [name for name in UNITS if _rewrite_unit(units / name, release)]
+        plan['units_rewritten'] = rewritten
+        if systemd and rewritten:
+            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
+        atomic_json(directory / 'deployed.json', plan)
+    if systemd and 'nba-dashboard.service' in rewritten:
+        subprocess.run(['systemctl', '--user', 'restart', 'nba-dashboard.service'], check=True)
     return plan
 
 

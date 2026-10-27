@@ -704,6 +704,22 @@ def _refresh_derived(folder,db,schedule,active_model,model_digest,report):
     report['derived_reports']=dict(status='rebuilt',computed_at=computed)
 
 
+def _activate(folder,expected,digest,report):
+    """Point the activation at ``digest`` only while it still names ``expected``, the artifact this tick loaded.
+
+    A deploy that ran during the tick already moved the pointer to an artifact
+    bound to the new release; a refit of the old one must not move it back.
+    """
+    path=folder/'model-upgrade-active.json'
+    current=_read(path,{}).get('artifact_sha256')
+    if current!=expected:
+        report['warnings'].append(dict(task='activation',expected=expected,found=current,
+            action='The activation moved during this tick (a deploy); the refit calibration was installed but not activated.'))
+        return False
+    atomic_json(path,dict(artifact_sha256=digest,activated_at=_now()))
+    return True
+
+
 def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     """Ledger summaries, calibration, postgame and daily reviews, rebuilt from saved evidence."""
     performance=performance_report(db)
@@ -722,8 +738,8 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
             updated['calibration']=assessed
             updated['known_at']=_now()
             digest=install_artifact(folder,updated)
-            atomic_json(folder/'model-upgrade-active.json',dict(artifact_sha256=digest,activated_at=_now()))
-            active_model,model_digest=updated,digest
+            if _activate(folder,model_digest,digest,report):
+                active_model,model_digest=updated,digest
         margin_assessed=fit_prospective_margin(folder,active_model['model_key'],_now())
         atomic_json(folder/'prospective-margin-calibration-status.json',margin_assessed)
         report['prospective_margin_calibration']={k:margin_assessed.get(k) for k in ('status','reason','sample_count','training_games','validation_games')}
@@ -736,8 +752,8 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
                 updated['margin_calibration']=margin_assessed
                 updated['known_at']=_now()
                 digest=install_artifact(folder,updated)
-                atomic_json(folder/'model-upgrade-active.json',dict(artifact_sha256=digest,activated_at=_now()))
-                active_model,model_digest=updated,digest
+                if _activate(folder,model_digest,digest,report):
+                    active_model,model_digest=updated,digest
             else:
                 report['errors'].append(dict(task='prospective_margin_calibration',
                     detail='Ready correction did not replay against saved forecasts and original finals'))

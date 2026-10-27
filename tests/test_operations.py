@@ -397,3 +397,22 @@ class EvidenceTickTests(unittest.TestCase):
         self.assertEqual(snapshot['review_input'],before)
         self.assertEqual(json.loads(review_path.read_text()),before)
         self.assertTrue(any(w.get('kind')=='superseded_review_availability' and w.get('player_id')==self.pid for w in result['warnings']))
+
+
+class ActivationTests(unittest.TestCase):
+    def test_a_refit_does_not_move_an_activation_a_deploy_changed(self):
+        import json,tempfile
+        from pathlib import Path
+        from nba_forecast.operations import _activate
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)
+            pointer=folder/'model-upgrade-active.json'
+            pointer.write_text(json.dumps(dict(artifact_sha256='a'*64,activated_at='2026-10-27T03:00:00Z')))
+            report=dict(warnings=[])
+            self.assertTrue(_activate(folder,'a'*64,'b'*64,report))
+            self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],'b'*64)
+            # A deploy moved the pointer meanwhile: the tick's refit of its old artifact stays installed, not active.
+            pointer.write_text(json.dumps(dict(artifact_sha256='d'*64,activated_at='2026-10-27T03:01:00Z')))
+            self.assertFalse(_activate(folder,'b'*64,'c'*64,report))
+            self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],'d'*64)
+            self.assertEqual(report['warnings'][0]['task'],'activation')

@@ -59,6 +59,19 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(again['artifact_sha256'], result['artifact_sha256'], 'the same code deploys to the same artifact')
             self.assertEqual(again['units_rewritten'], [])
 
+    def test_deploy_waits_for_a_running_tick_and_gives_up_after_the_wait(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            with (root / 'tick.lock').open('a') as held:
+                fcntl.flock(held, fcntl.LOCK_EX)  # a tick is running
+                with self.assertRaisesRegex(ValueError, 'held the lock'):
+                    D.deploy(root, units, systemd=False, wait=1)
+                self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active)
+                fcntl.flock(held, fcntl.LOCK_UN)
+            result = D.deploy(root, units, systemd=False, wait=1)
+            self.assertNotEqual(result['artifact_sha256'], old_active)
+
     def test_a_unit_without_one_working_directory_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
