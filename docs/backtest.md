@@ -216,8 +216,15 @@ model by −0.5 per ten minutes, about three standard errors the wrong way.
 
 What it still cannot see: the replay runs the baseline path (`model.py`), not
 production's (`candidate.py`: rotation redistribution of absent players'
-minutes, pace and defense volume budgets, rest and travel context). The WAS @
-CHA player sum (+13.8 against the close's +3.5) came from the redistribution.
+minutes, pace and defense volume budgets, rest and travel context). Rerunning
+the 24 live games of 2026-10-24..27 that ran the production path both ways with
+the same inputs, the extra layers move each player little (0.27 points on
+average) but in the same direction across a team: team totals move 2.5 points
+(bias −0.84 → −2.79) and the player-sum margin 2.8. On those games they did not
+help (player-sum MAE 10.61 → 10.66, team points 9.38 → 9.52), a sample too small
+to decide. In WAS @ CHA every player's minutes were the same on both paths; the
+team-level factors took the player sum from CHA +8.1 to +13.7 (close +2.5,
+actual +7).
 
 ## Two seasons
 
