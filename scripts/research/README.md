@@ -9,6 +9,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `gap_breakdown.py` | Where the model's margin MAE is lost against the close: compression, month, back-to-backs, size of disagreement, spread size, underdog lean, team-seasons | a backtest reference's `rows.json.gz`, team games, closing lines |
 | `absence_minutes.py` | How much the margin misses per ten minutes of reported-out regulars, home minus away; the measurement behind `margins.absence_adjustment` | the same, plus the histories and T−30 injury reports |
 | `clv.py` | Closing-line value: does a night-before forecast move the opener? With the point-differential placebo | a night-before replay's `rows.json.gz`, closing lines, the archived ESPN odds responses under `data/market-history/` (gitignored) |
+| `line_lag.py` | How stale the ESPN closing line is against Kalshi's price at tip, on the live captures | `production/market/game-lines`, finals, Kalshi's public API (cached under `data/research/kalshi`) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 
 ## Reproduced on 2026-10-26
@@ -41,3 +42,12 @@ leaves 2025-26's within its error; both remain short of the 0.8 points a bet
 needs to clear the vig. The replays themselves are not committed (two seasons,
 about eight minutes each); rerun the backtest with the night-before statuses to
 regenerate them.
+
+`line_lag.py` on 2026-10-27, 23 games of 2026-10-24 to 2026-10-26 (first week; seven
+had their last ESPN change more than 90 minutes before tip): spread staleness
+ESPN minus Kalshi at tip, median 0.33 points, mean 0.53, mean signed +0.07; the
+part that moved after ESPN's last change, median 0.16, mean 0.19, never a full
+point; book difference at the same moment, median 0.30. One outlier, MEM@UTA,
+where ESPN's spread (UTA −1.5) disagreed with its own even moneyline and Kalshi
+had MEM −1.5. Win probability: median 0.8 points, four games over 2. Against the
+results on those games: ESPN close MAE 8.15, Kalshi at tip 8.07, model 11.62.
