@@ -53,7 +53,8 @@ def forecast_candidate(snapshot,history):
         original[p['player_id']]=dict(minutes=minutes,rates=rates,minute_cap=manual.get('minutes_cap',48.),
             locked_rates=bool(manual),locked_minutes=bool(manual))
     if parameters.get('rotation_enabled',True):
-        inputs,allocations=redistribute(snapshot['roster']['players'],profiles['players'],original,usable,snapshot['as_of'])
+        inputs,allocations=redistribute(snapshot['roster']['players'],profiles['players'],original,usable,snapshot['as_of'],
+            season=snapshot['season'])
     else:
         inputs,allocations=deepcopy(original),{}
     # A full baseline rotation can already absorb some vacancy shots. Bound any

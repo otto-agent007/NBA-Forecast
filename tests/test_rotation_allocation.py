@@ -39,6 +39,16 @@ class RedistributionTests(unittest.TestCase):
     def run_allocation(self, working=None):
         return redistribute(self.players, self.profiles, working or {'p':inputs()}, self.history, CUTOFF)
 
+    def test_a_replay_names_its_season_instead_of_the_clocks(self):
+        live, _ = self.run_allocation()
+        # A replay runs years later: by the clock these 2025-26 games are two seasons old and unused.
+        later = '2028-01-10T12:00:00Z'
+        stale, _ = redistribute(self.players, self.profiles, {'p': inputs()}, self.history, later)
+        named, _ = redistribute(self.players, self.profiles, {'p': inputs()}, self.history, later, season='2025-26')
+        self.assertGreater(live['p']['minutes'], 20)
+        self.assertEqual(stale['p']['minutes'], 20)
+        self.assertEqual(named, live)
+
     def test_extra_minutes_attempts_are_subtracted_before_rate_allocation(self):
         adjusted, audit=self.run_allocation()
         self.assertEqual(adjusted['p']['minutes'], 30)
