@@ -153,6 +153,18 @@ class BacktestTests(unittest.TestCase):
         self.assertIsNotNone(legacy_winner['mean'])
         self.assertEqual(backtest.compare(legacy, rows)['winner'].get('n'), 0)
 
+    def test_team_totals_agree_with_the_margin_location(self):
+        with unittest.mock.patch.object(backtest, 'MARGIN_PRIOR_MIN_GAMES', 10), tempfile.TemporaryDirectory() as d:
+            backtest.run_backtest(self.history, self.records, Path(d) / 's', warmup_fraction=.5, as_of=AS_OF)
+            rows = backtest.read_json(Path(d) / 's' / 'rows.json.gz')
+        teams = {(t[0], t[2]): t[3] for t in rows['teams']}
+        scales = {}
+        for g in (dict(zip(rows['game_fields'], g)) for g in rows['games']):
+            self.assertAlmostEqual(teams[(g['game_id'], True)] - teams[(g['game_id'], False)], g['projected_margin'])
+            scales.setdefault(g['game_id'][:3], set()).add(g['prior_sd'])
+        # The scale is the outcome prior of earlier finals: one per day, never a player's points SD.
+        self.assertEqual({len(s) for s in scales.values()}, {1})
+
     def test_market_metrics_score_the_close_and_a_naive_rating_on_the_same_games(self):
         rows = backtest.read_json(self.output / 'rows.json.gz')
         games = [dict(zip(backtest.GAME_FIELDS, g)) for g in rows['games']]
@@ -283,7 +295,8 @@ class BacktestTests(unittest.TestCase):
         records = [dict(r, game_id='X' + r['game_id'], season='2024-25', game_time=earlier(r['game_time']),
                         known_at=earlier(r['known_at'])) for r in self.records]
         later = [dict(r, season='2025-26') for r in self.records]
-        with tempfile.TemporaryDirectory() as d:
+        # The location is checked against the player model's own totals, so they stay unscaled here.
+        with tempfile.TemporaryDirectory() as d, unittest.mock.patch.object(backtest, 'reconcile', lambda *a, **k: None):
             cold = backtest.run_seasons([dict(history=self.history, records=later)], Path(d) / 'cold',
                                         warmup_fraction=0., as_of=AS_OF)
             seeded = backtest.run_seasons([dict(history=self.history, records=later, previous_history=history,
