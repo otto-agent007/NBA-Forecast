@@ -59,6 +59,24 @@ class EvaluationTests(unittest.TestCase):
         store.evaluate_run(self.db,self.run_id,[actual('P2')])
         self.assertEqual(self.evaluate()['evaluated_runs'],1)
 
+    def test_a_forecast_player_the_final_leaves_out_is_scored_as_not_playing(self):
+        def latest():
+            with sqlite3.connect(self.db) as conn:
+                return json.loads(conn.execute('SELECT report_json FROM evaluations ORDER BY revision DESC LIMIT 1').fetchone()[0])
+        teammate=dict(actual('P2'),player_id='P29',name='Not forecast')
+        self.finals([actual(),teammate])
+        self.evaluate()
+        report=latest()
+        absent=next(r for r in report['matched'] if r['player_id']=='P2')
+        self.assertEqual((absent['actual_status'],absent['played'],absent['actual_points']),('dnp',False,0))
+        self.assertEqual(report['sample_counts']['pending'],0)
+        # Off-slate players (no_game) are not added, nor a team the final does not cover; a later
+        # final that lists the player replaces the absence.
+        self.assertEqual({r['player_id'] for r in report['matched']},{'P1','P2'})
+        self.finals([actual(),teammate,dict(actual('P2'),known_at='2026-10-22T22:00:00Z')])
+        self.evaluate()
+        self.assertTrue(next(r for r in latest()['matched'] if r['player_id']=='P2')['played'])
+
     def test_failed_scoring_is_retried(self):
         self.finals([dict(actual(),opponent_id='T9')])
         self.assertEqual(len(self.evaluate()['errors']),1)

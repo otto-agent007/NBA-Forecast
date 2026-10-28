@@ -20,7 +20,7 @@ from .store import save_run,evaluate_run,performance_report
 from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check,reported_unavailable
 from .preflight import run_preflight,PREFLIGHT_VERSION
-from .validation import parse_time,validate_history,validate_inputs,_source
+from .validation import COUNTS,parse_time,validate_history,validate_inputs,_source
 from .enhancements import load_active,prepare
 from .boxscore_model import VERSION as BOX_MODEL_VERSION
 from .shot_profiles import prepare_shot_profiles
@@ -610,6 +610,29 @@ def _missed_finals(state,schedule,report):
                 report['missed_final_games'].append(game['game_id'])
 
 
+def _absent_from_final(rows,predictions):
+    """Forecast players a saved final leaves out, as explicit did-not-play rows.
+
+    A saved final is the game's complete box score (every player who played, with
+    reconciled team scores), so a forecast player it does not list did not play:
+    on assignment, waived, traded, or inactive without a listing. Scored like any
+    other DNP instead of staying pending forever; ``absent_from_final`` marks them.
+    """
+    listed={r['player_id'] for r in rows}
+    known=max(r['known_at'] for r in rows)
+    absent=[]
+    for p in predictions:
+        team=[r for r in rows if r['team_id']==p['team_id']]
+        if p['player_id'] in listed or p['status'] in ('no_game','needs_review') or not team:
+            continue
+        like=team[0]
+        absent.append(dict(game_id=like['game_id'],season=like['season'],season_type=like['season_type'],
+            game_time=like['game_time'],known_at=known,source_url=like['source_url'],player_id=p['player_id'],
+            name=p['name'],team_id=p['team_id'],opponent_id=like['opponent_id'],status='dnp',minutes=0,
+            **{field:0 for field in COUNTS},participation_reason='Not in the final box score',absent_from_final=True))
+    return absent
+
+
 def _evaluate_runs(folder,db,report):
     """Score live runs whose final files or evaluation revisions changed since they were last scored.
 
@@ -650,7 +673,9 @@ def _evaluate_runs(folder,db,report):
         for gid in games:
             raw=final(gid)[1]
             if raw is not None:
-                actuals.extend(r for r in json.loads(raw) if (r['game_id'],r['player_id'],r['team_id']) in keys)
+                rows=json.loads(raw)
+                actuals.extend(r for r in rows if (r['game_id'],r['player_id'],r['team_id']) in keys)
+                actuals.extend(_absent_from_final(rows,[p for p in prediction['predictions'] if p['game_id']==gid]))
         if actuals:
             try:
                 revision=evaluate_run(db,run_id,actuals)['revision']
