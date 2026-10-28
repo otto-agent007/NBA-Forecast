@@ -470,11 +470,18 @@ def _recover_runs(folder,db,state,report):
 
 
 def _merge_finals(history,cache):
-    """The input history plus every captured final, the newest known_at winning per player-game."""
+    """The input history plus every captured final, the newest known_at winning per player-game.
+
+    A captured final lists the game's players; an input row for a player it leaves out
+    (a stale-roster DNP the official box contradicted) is dropped.
+    """
     combined={(r['game_id'],r['player_id']):r for r in history}
     for p in sorted(cache.glob('*.json')):
         rows=json.loads(p.read_text())
         validate_history(rows)
+        players={r['player_id'] for r in rows}
+        for key in [k for k in combined if k[0]==p.stem and k[1] not in players]:
+            del combined[key]
         for row in rows:
             key=(row['game_id'],row['player_id'])
             old=combined.get(key)

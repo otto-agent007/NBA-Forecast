@@ -87,8 +87,15 @@ def _rows(page, game, metadata):
         players = team['players']
         if not isinstance(players, list) or not players:
             raise ValueError('Official NBA final player list is empty')
+        # The page lists inactive players only once it is republished, some time after the
+        # final: as players commented "Inactive - ...", or in a separate inactives list.
+        listed = {str(person['personId']) for person in players}
+        inactives = [dict(person, statistics={}, comment='Inactive', played='0', position='')
+                     for person in team.get('inactives') or [] if str(person['personId']) not in listed]
+        inactives_listed = bool(inactives) or any(
+            re.match(r'^Inactive(?:\s|$)', person.get('comment') or '', re.I) for person in players)
         team_rows = []
-        for person in players:
+        for person in players + inactives:
             pid = str(_integer(person['personId'], 'personId'))
             if pid in seen:
                 raise ValueError('Duplicate official NBA player identity')
@@ -128,7 +135,8 @@ def _rows(page, game, metadata):
                        team_id=str(team['teamId']), opponent_id=str(source[other+'Team']['teamId']),
                        game_period=source['period'], status='dnp' if dnp else 'played',
                        minutes=minutes, minutes_precision='not_played' if dnp else 'seconds',
-                       minutes_source_value=clock, optional_stat_errors={})
+                       minutes_source_value=clock, optional_stat_errors={},
+                       official_inactives_listed=inactives_listed)
             if overflow:
                 row['minutes_normalization'] = 'source seconds value 60 carried into the next minute; original string retained'
             if dnp_comment and minutes and not dnp:
@@ -138,6 +146,9 @@ def _rows(page, game, metadata):
                 if person['starter'] not in ('0','1'):
                     raise ValueError('Official NBA starter flag is invalid')
                 row['starter'] = person['starter']=='1'
+            elif isinstance(person.get('position'), str):
+                # The game page has no starter flag; it gives a position to the starting five only.
+                row['starter'] = bool(person['position'])
             for field, key in STAT_FIELDS.items():
                 row[field] = 0 if dnp else _integer(stats[key], field)
             for field, key in OPTIONAL_STAT_FIELDS.items():
@@ -428,12 +439,18 @@ def _reconcile_final_rows(rows,official_rows,*,allow_corrections):
     for team_id in teams:
         if sum(r['pts'] for r in rows if r['team_id']==team_id) != sum(r['pts'] for r in official_rows if r['team_id']==team_id):
             raise ValueError('Full box revision final team scores disagree')
+    listed = {r['team_id']:r.get('official_inactives_listed') for r in official_rows}
     enriched = []
     for original in rows:
         key = original['team_id'],original['player_id']
         if key not in index:
             if original['status'] != 'dnp':
                 raise ValueError('Full box enrichment lacks an exact NBA player/team identity')
+            # The official box lists every coach's-decision DNP, and once its inactive list is
+            # published, everyone on the team that night. A DNP it leaves out came from another
+            # source's stale roster (an ESPN DNP for a player who was on another team).
+            if listed[original['team_id']] or re.search(r"coach.?s decision", str(original.get('participation_reason') or ''), re.I):
+                continue
             retained=copy.deepcopy(original)
             retained['full_boxscore_enrichment']=dict(status='original_dnp_absent_from_official',
                 original_source_url=original['source_url'],
@@ -442,6 +459,7 @@ def _reconcile_final_rows(rows,official_rows,*,allow_corrections):
                 if retained.get(field) is None:
                     retained[field]=0
             retained.update(shooting_percentages(retained))
+            retained['official_inactives_listed']=listed[original['team_id']]
             enriched.append(retained)
             continue
         source = index[key]
@@ -488,7 +506,20 @@ def _reconcile_final_rows(rows,official_rows,*,allow_corrections):
         row.setdefault('source_provenance',{})['nba_full_boxscore'] = copy.deepcopy(source['source_provenance']['nba_full_boxscore'])
         row['full_boxscore_enrichment'] = audit
         row['minutes_source_url'] = source['source_url']
+        for field in ('starter','official_inactives_listed'):
+            if field in source:
+                row[field] = source[field]
         enriched.append(row)
-    _share_official_team_metadata(enriched,rows,official_rows)
+    # Players only the official box lists (inactive players, which ESPN's box omits) did not
+    # play: the played identities agree above.
+    originals = {(r['team_id'],r['player_id']) for r in rows}
+    for source in official_rows:
+        if (source['team_id'],source['player_id']) not in originals:
+            row = copy.deepcopy(source)
+            row['full_boxscore_enrichment'] = dict(status='official_dnp_absent_from_original',
+                source_url=source['source_url'], source_sha256=source['source_sha256'], retrieved_at=source['known_at'],
+                identity_basis='exact NBA game/team/person IDs')
+            enriched.append(row)
+    _share_official_team_metadata(enriched,rows+[r for r in official_rows if (r['team_id'],r['player_id']) not in originals],official_rows)
     validate_history(enriched)
     return enriched

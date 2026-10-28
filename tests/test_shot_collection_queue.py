@@ -147,3 +147,68 @@ class ShotCollectionQueueTests(unittest.TestCase):
         self.assertEqual(out['full_box_games_pending'],1)
         self.assertEqual(second['shot_games_attempted'],0)
         self.assertTrue(json.loads((self.folder/'shots/0022600001.json').read_text())['next_retry_at'])
+
+    def inactive_page(self):
+        page=copy.deepcopy(self.page)
+        page['game']['homeTeam']['inactives']=[dict(personId=30,firstName='Home',familyName='Inactive',jerseyNum='3')]
+        page['game']['awayTeam']['players'].append(dict(personId=31,firstName='Away',familyName='Injured',
+            comment='Inactive - Injury/Illness',statistics={'minutes':''}))
+        return page
+
+    def test_a_page_without_inactive_players_is_fetched_again_until_it_lists_them(self):
+        self.roster['observed_at']='2026-10-19T00:00:00Z'
+        self.meta=dict(self.meta,retrieved_at='2026-10-20T02:30:00Z')
+        for r in self.rows:
+            r['known_at']=self.meta['retrieved_at']
+        self.schedule([self.game])
+        self.clock.now.return_value=datetime(2026,10,20,3,tzinfo=timezone.utc)
+        with patch('nba_forecast.player_sync.fetch_official_game_page',return_value=(self.page,self.meta)):
+            first=self.run_sync()
+            second=self.run_sync()
+        saved=json.loads((self.folder/'shots/0022600001.json').read_text())
+        self.assertEqual(first['full_box_games_pending'],1)
+        self.assertEqual(saved['next_retry_at'],'2026-10-20T03:30:00+00:00')
+        self.assertEqual(second['shot_games_attempted'],0)
+        self.clock.now.return_value=datetime(2026,10,20,3,31,tzinfo=timezone.utc)
+        later=dict(self.meta,retrieved_at='2026-10-20T03:31:00Z')
+        with patch('nba_forecast.player_sync.fetch_official_game_page',return_value=(self.inactive_page(),later)):
+            third=self.run_sync()
+            fourth=self.run_sync()
+        final={r['player_id']:r for r in json.loads((self.folder/'finals/0022600001.json').read_text())}
+        self.assertEqual(third['shot_games_attempted'],1)
+        self.assertEqual((final['30']['status'],final['30']['team_id'],final['31']['participation_reason']),
+                         ('dnp','1','Inactive - Injury/Illness'))
+        self.assertTrue(all(r['official_inactives_listed'] for r in final.values()))
+        self.assertEqual((third['full_box_games_pending'],fourth['shot_games_attempted']),(0,0))
+
+    def test_a_day_after_tip_a_page_without_inactive_players_is_accepted(self):
+        self.roster['observed_at']='2026-10-19T00:00:00Z'
+        self.schedule([self.game])
+        self.clock.now.return_value=datetime(2026,10,21,0,1,tzinfo=timezone.utc)
+        with patch('nba_forecast.player_sync.fetch_official_game_page',return_value=(self.page,self.meta)) as fetch:
+            out=self.run_sync()
+            self.clock.now.return_value=datetime(2026,10,22,tzinfo=timezone.utc)
+            self.run_sync()
+        self.assertEqual((out['full_box_games_pending'],fetch.call_count),(0,1))
+
+    def test_a_final_reconciled_before_inactive_lists_gains_them_and_loses_stale_dnps(self):
+        dnp_page=copy.deepcopy(self.page)
+        dnp_page['game']['homeTeam']['players'].append(dict(personId=99,firstName='Stale',familyName='Espn',
+            comment="DNP - Coach's Decision",statistics={'minutes':''}))
+        stale=next(r for r in normalize_official_page(dnp_page,self.game,self.meta) if r['player_id']=='99')
+        stale.update(source_url='https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=1',
+                     participation_reason="COACH'S DECISION")
+        old=[dict(r) for r in self.rows]+[stale]
+        for r in old:
+            r.pop('official_inactives_listed')
+        (self.folder/'finals').mkdir()
+        (self.folder/'finals/0022600001.json').write_text(json.dumps(old))
+        self.schedule([self.game])
+        with patch('nba_forecast.player_sync.fetch_official_game_page',return_value=(self.inactive_page(),self.meta)) as fetch:
+            out=self.run_sync(old)
+            self.run_sync(old)
+        final={r['player_id']:r for r in json.loads((self.folder/'finals/0022600001.json').read_text())}
+        self.assertNotIn('99',final)
+        self.assertEqual({'30','31'}&set(final),{'30','31'})
+        self.assertEqual(final['30']['full_boxscore_enrichment']['status'],'official_dnp_absent_from_original')
+        self.assertEqual((fetch.call_count,len(out['final_revisions'])),(1,1))
