@@ -392,7 +392,8 @@ def _participation(player, rows, team_games, role_minutes, unavailable=frozenset
     """Probability the player appears with positive minutes, from the team's last ten games.
 
     Team games before the player's first appearance with the team do not count
-    against him; absence from a box score does. Games his official injury report
+    against him; absence from a box score does. A player in none of the team's
+    box scores is absent from every game since his last one for another team. Games his official injury report
     listed him out of (``unavailable``) do not count either way: the current
     report already says whether he is out, so the rate is his chance of playing
     when available, not a second count of the same injury. A reported
@@ -405,6 +406,11 @@ def _participation(player, rows, team_games, role_minutes, unavailable=frozenset
     if len(team_games) < PARTICIPATION_MIN_TEAM_GAMES:
         team_games = []
     first = next((i for i, (_, gid) in enumerate(team_games) if gid in appearances), None)
+    if first is None:
+        # Not in any of the team's box scores, not even as inactive (a G League assignee):
+        # the team's games since his last game for another team count as absences.
+        left = max((_time(r["game_time"]) for r in rows if r["team_id"] != team), default=None)
+        first = next((i for i, (t, _) in enumerate(team_games) if left is None or t > left), None)
     since = [gid for _, gid in team_games[first:]] if first is not None else []
     window = [gid for gid in since if gid not in unavailable][-PARTICIPATION_WINDOW:]
     # Reported-out games inside the span the window reaches back over.
