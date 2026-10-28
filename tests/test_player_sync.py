@@ -54,3 +54,22 @@ class PlayerSyncTests(unittest.TestCase):
    self.assertEqual(page['prediction_history'],[])
    with self.assertRaises(ValueError):
        player_payload(d,'../forecast.sqlite')
+
+ def test_starter_comes_from_livedata_after_a_stat_correction_and_finals_decide_a_games_players(self):
+  from nba_forecast.player_sync import enrich_final_cache
+  from nba_forecast.operations import _merge_finals
+  from tests.test_model import row
+  final=row(season='2026-27',game_id='0022600001',pid='1',team='1610612738',opponent_id='1610612752',reb=None)
+  live=dict(final,fga=final['fga']+1,reb=4,starter=True,known_at='2025-03-02T00:00:00+00:00')
+  with tempfile.TemporaryDirectory() as d:
+   folder=Path(d)
+   (folder/'finals').mkdir()
+   (folder/'finals/0022600001.json').write_text(json.dumps([final]))
+   with patch('nba_forecast.player_sync.enrich_archive',return_value=[live]):
+    enrich_final_cache(folder)
+   saved=json.loads((folder/'finals/0022600001.json').read_text())[0]
+   # The corrected attempt count does not block the starter flag, but keeps optional counts out.
+   self.assertEqual((saved['starter'],saved['fga'],saved['reb']),(True,final['fga'],None))
+   stale=dict(final,player_id='2',name='Stale',status='dnp',minutes=0,fgm=0,fga=0,fg3m=0,fg3a=0,ftm=0,fta=0,tov=0,pts=0)
+   merged=_merge_finals([stale,dict(final,game_id='0022600002')],folder/'finals')
+   self.assertEqual(sorted((r['game_id'],r['player_id']) for r in merged),[('0022600001','1'),('0022600002','1')])

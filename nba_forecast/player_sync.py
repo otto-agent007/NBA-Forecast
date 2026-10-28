@@ -42,9 +42,12 @@ def enrich_final_cache(folder):
         changed=False
         for row in rows:
             raw=evidence.get((row['game_id'],row['player_id']))
-            if not raw or any(row[k]!=raw[k] for k in required):
+            if not raw or any(row[k]!=raw[k] for k in ('team_id','opponent_id','status')):
                 continue
-            for field in ('reb','ast','stl','blk','starter'):
+            # Starting is identity evidence; a later stat correction (counts that no longer
+            # match the cached final) does not make it doubtful.
+            counted=all(row[k]==raw[k] for k in required)
+            for field in ('reb','ast','stl','blk','starter') if counted else ('starter',):
                 if row.get(field) is None and raw.get(field) is not None:
                     row[field]=raw[field]
                     changed=True
@@ -89,27 +92,45 @@ def _shot_state(result, rows):
     return True,located==coverage['attempts'] and coverage.get('located_attempts')==located
 
 
-def _needs_official_final(rows):
+# The official page lists a game's inactive players once it is republished, usually within
+# hours of the final; a page still without them is fetched again, every half hour, for a day.
+INACTIVE_WAIT=timedelta(hours=24)
+INACTIVE_RETRY_SECONDS=1800
+
+
+def _waiting_for_inactives(rows,now):
+    return (all('official_inactives_listed' in r for r in rows) and not all(r['official_inactives_listed'] for r in rows)
+            and parse_time(now)<parse_time(rows[0]['game_time'])+INACTIVE_WAIT)
+
+
+def _needs_official_final(rows,now):
     fields=('reb','ast','stl','blk','oreb','dreb','pf','plus_minus')
-    return any(r['status']=='played' and (not(r.get('full_boxscore_enrichment')
+    return (any(r['status']=='played' and (not(r.get('full_boxscore_enrichment')
                or r.get('source_url')==f'https://www.nba.com/game/{r["game_id"]}/box-score')
                or r.get('minutes_precision')!='seconds' or any(r.get(k) is None for k in fields)) for r in rows)
+            or any('official_inactives_listed' not in r for r in rows) or _waiting_for_inactives(rows,now))
+
+
+def _keep_final_players(combined,gid,rows):
+    """A saved final lists the game's players; drop other rows for that game."""
+    players={r['player_id'] for r in rows}
+    for key in [k for k in combined if k[0]==gid and k[1] not in players]:
+        del combined[key]
 
 
 def _save_official_final(folder,gid,rows,official,metadata):
     """Archive the exact previous cache bytes before any audited replacement."""
     compare=('status','team_id','opponent_id','minutes','minutes_precision','fgm','fga','fg3m','fg3a','ftm','fta','tov','pts',
-             'reb','ast','stl','blk','oreb','dreb','pf','plus_minus','team_boxscore')
-    index={r['player_id']:r for r in official}
+             'reb','ast','stl','blk','oreb','dreb','pf','plus_minus','team_boxscore','starter','official_inactives_listed')
     path=folder/'finals'/(gid+'.json')
     verified=all(r['status']=='dnp' or r.get('full_boxscore_enrichment') or
                  r.get('source_url')==metadata['source_url'] for r in rows)
-    if verified and all(r['status']=='dnp' or
-            (r['player_id'] in index and all(r.get(k)==index[r['player_id']].get(k) for k in compare)) for r in rows):
+    revised=revise_final_rows(rows,official)
+    substance=lambda values:{r['player_id']:[r.get(k) for k in compare] for r in values}
+    if verified and substance(rows)==substance(revised):
         if not path.exists():
             atomic_json(path,rows)
         return rows,None
-    revised=revise_final_rows(rows,official)
     previous=path.read_bytes() if path.exists() else (json.dumps(rows,sort_keys=True,indent=2)+'\n').encode()
     digest=hashlib.sha256(previous).hexdigest()
     archive=folder/'final-revisions'/gid/(digest+'.json')
@@ -147,7 +168,9 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
     enrich_final_cache(folder)
     combined={(r['game_id'],r['player_id']):r for r in history}
     for path in sorted((folder/'finals').glob('*.json')):
-        for row in json.loads(path.read_text()):
+        rows=json.loads(path.read_text())
+        _keep_final_players(combined,path.stem,rows)
+        for row in rows:
             key=(row['game_id'],row['player_id'])
             old=combined.get(key)
             if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):
@@ -171,7 +194,7 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
         old=json.loads(path.read_text()) if path.exists() else None
         cached[gid]=old
         reconciled,complete=_shot_state(old,rows)
-        if complete and (gid not in games or not _needs_official_final(rows)):
+        if complete and (gid not in games or not _needs_official_final(rows,now)):
             continue
         current=old and old.get('source_version')==SHOT_SOURCE_VERSION
         if current and old.get('next_retry_at') and parse_time(now)<parse_time(old['next_retry_at']):
@@ -213,6 +236,7 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                             item['team_turnover_audit']=dict(status='unavailable',reason=str(exc))
                     rows,revision=_save_official_final(folder,gid,rows,official,metadata)
                     targets[gid]=rows
+                    _keep_final_players(combined,gid,rows)
                     for row in rows:
                         combined[(gid,row['player_id'])]=row
                     if revision:
@@ -225,8 +249,10 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
             result=_pending_shots(gid,rows,now,str(exc))
             errors.append(dict(game_id=gid,error=str(exc)))
         result.update(source_version=SHOT_SOURCE_VERSION,attempt_count=attempts,last_attempt_at=now)
-        if not _shot_state(result,rows)[1] or (game is not None and _needs_official_final(rows)):
-            result['next_retry_at']=(parse_time(now)+timedelta(seconds=min(60*2**min(attempts-1,3),300))).isoformat()
+        if not _shot_state(result,rows)[1] or (game is not None and _needs_official_final(rows,now)):
+            wait=(INACTIVE_RETRY_SECONDS if _shot_state(result,rows)[1] and _waiting_for_inactives(rows,now)
+                  else min(60*2**min(attempts-1,3),300))
+            result['next_retry_at']=(parse_time(now)+timedelta(seconds=wait)).isoformat()
         cached[gid]=result
         atomic_json(path,result)
     shots=[json.loads(p.read_text()) for p in sorted(shots_dir.glob('*.json'))]
@@ -260,12 +286,12 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                  shot_games_attempted=fetched,final_revisions=revisions,errors=errors,
                  policy='Every completed regular-season game is queued; every played player is reconciled, including zero attempts. Missing locations remain explicit and are retried.')
     summary['shot_games_pending']=len(targets)-summary['shot_games_verified']
-    summary['full_box_games_pending']=sum(_needs_official_final(rows) for rows in targets.values())
+    summary['full_box_games_pending']=sum(_needs_official_final(rows,now) for rows in targets.values())
     summary['full_box_games_complete']=len(targets)-summary['full_box_games_pending']
     summary['shot_queue']=[dict(game_id=gid,game_time=rows[0]['game_time'],
-        status='complete' if _shot_state(cached.get(gid),rows)[1] and not _needs_official_final(rows) else 'pending',
+        status='complete' if _shot_state(cached.get(gid),rows)[1] and not _needs_official_final(rows,now) else 'pending',
         reason=(cached.get(gid) or {}).get('missing_reason') or ('Some attempt coordinates are unavailable' if not _shot_state(cached.get(gid),rows)[1] else
-                'Full box score has unavailable statistics or imprecise minutes' if _needs_official_final(rows) else None),
+                'Full box score has unavailable statistics, imprecise minutes or no inactive list yet' if _needs_official_final(rows,now) else None),
         next_retry_at=(cached.get(gid) or {}).get('next_retry_at'))
         for gid,rows in sorted(targets.items(),key=lambda item:(item[1][0]['game_time'],item[0]),reverse=True)]
     atomic_json(output/'index.json',summary)

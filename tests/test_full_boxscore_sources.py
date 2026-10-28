@@ -178,15 +178,46 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         self.assertEqual(change['before'],28)
         self.assertAlmostEqual(change['after'],31+7/60)
 
-    def test_an_unmatched_explicit_original_dnp_is_retained_without_claiming_an_nba_join(self):
+    def test_starters_come_from_position_and_inactive_players_from_either_listing(self):
+        page=copy.deepcopy(self.page)
+        game=page['props']['pageProps']['game']
+        game['homeTeam']['players'][0]['position']='F'
+        game['homeTeam']['players'][1]['position']=''
+        game['homeTeam']['inactives']=[dict(personId=12,firstName='home',familyName='Inactive',jerseyNum='1'),
+                                       dict(personId=11,firstName='home',familyName='Unused',jerseyNum='2')]
+        rows=self.normalize(page)
+        by_id={r['player_id']:r for r in rows}
+        self.assertIs(by_id['10']['starter'],True)
+        self.assertIs(by_id['11']['starter'],False)
+        self.assertNotIn('starter',by_id['20'])
+        self.assertEqual((by_id['12']['status'],by_id['12']['minutes'],by_id['12']['participation_reason'],by_id['12']['name']),
+                         ('dnp',0,'Inactive','home Inactive'))
+        self.assertEqual([r['player_id'] for r in rows].count('11'),1)
+        self.assertEqual((by_id['10']['official_inactives_listed'],by_id['20']['official_inactives_listed']),(True,False))
+        game['awayTeam']['players'][1]['comment']='Inactive - Injury/Illness'
+        self.assertTrue({r['player_id']:r for r in self.normalize(page)}['20']['official_inactives_listed'])
+
+    def test_an_unmatched_original_dnp_is_retained_only_where_the_official_box_cannot_contradict_it(self):
         official=self.normalize()
         old=copy.deepcopy(official)
-        old[1]['player_id']='999'
-        old[1]['name']='Original DNP'
-        row=sources.enrich_final_rows(old,official)[1]
+        old[1].update(player_id='999',name='Original DNP',participation_reason='Inactive - Injury/Illness')
+        rows=sources.enrich_final_rows(old,official)
+        row=rows[1]
         self.assertEqual(row['player_id'],'999')
         self.assertEqual(row['full_boxscore_enrichment']['status'],'original_dnp_absent_from_official')
         self.assertNotIn('identity_basis',row['full_boxscore_enrichment'])
+        # The official box's own DNP, which the original lacked, is added.
+        added=[r for r in rows if r['player_id']=='11']
+        self.assertEqual([r['full_boxscore_enrichment']['status'] for r in added],['official_dnp_absent_from_original'])
+        self.assertEqual((added[0]['status'],added[0]['team_id']),('dnp','1610612738'))
+        # The official box lists every coach's-decision DNP, and everyone once its inactive list is out.
+        stale=copy.deepcopy(old)
+        stale[1]['participation_reason']="COACH'S DECISION"
+        self.assertNotIn('999',[r['player_id'] for r in sources.enrich_final_rows(stale,official)])
+        page=copy.deepcopy(self.page)
+        page['props']['pageProps']['game']['homeTeam']['inactives']=[dict(personId=12,firstName='home',familyName='Inactive',jerseyNum='1')]
+        listed=self.normalize(page)
+        self.assertNotIn('999',[r['player_id'] for r in sources.revise_final_rows(old,listed)])
 
     def test_enrichment_preserves_original_sources_and_updates_knowledge_time(self):
         official = self.normalize()
@@ -330,7 +361,7 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         for row in official:
             row['team_boxscore'].update(team_turnovers=2,total_turnovers=3)
         old=copy.deepcopy(official)
-        old[1].update(player_id='999',name='Retained original DNP')
+        old[1].update(player_id='999',name='Retained original DNP',participation_reason='Inactive - Injury/Illness')
         for row in old:
             row['team_boxscore'].update(reb=None,team_turnovers=1,total_turnovers=2)
         for operation in (sources.enrich_final_rows,sources.revise_final_rows):
