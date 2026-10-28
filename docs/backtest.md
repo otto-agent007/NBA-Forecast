@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-27-scoreline
+  --reference datasets/backtest-2026-10-28-participation
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -144,7 +144,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-27-scoreline-midday
+  --reference datasets/backtest-2026-10-28-participation-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -666,3 +666,22 @@ expected to show up live after enough games, and both are reported.
 When a change is merged, run the full backtest, commit its two files as
 `datasets/backtest-<date>/`, and point `AGENTS.md` and the CI step at it. The
 old reference stays in the repository.
+
+## Reference: 2026-10-28 (roster players absent from every box score)
+
+`datasets/backtest-2026-10-28-participation/` (T-minus-30) and
+`datasets/backtest-2026-10-28-participation-midday/` (preliminary): the
+scoreline references with one participation change. A player in none of his
+team's box scores, not even as inactive, now counts the team's games since his
+last game for another team as absences instead of keeping his role prior
+alone. Live, that is a G League assignee such as Micah Peavy, projected at
+0.70 and 0.82 to play with 16–19 minutes in two OKC games he was not part of.
+
+The replay's roster is each game's own box score, so the players this targets
+never appear in it; it sees only debuts, a player's first row with a team.
+Against the scoreline references every metric is within noise: participation
+Brier +0.0002 ± 0.0001 at T-minus-30 (floor 0.0004) and +0.0001 ± 0.0001
+preliminary (floor 0.0006), points, minutes, team points, margin, winner Brier,
+the interval score and the three biases unchanged to the reported precision.
+Its benefit can only be measured live, on the projected players a final box
+score leaves out (scored since `absent_from_final`).
