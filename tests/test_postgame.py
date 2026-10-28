@@ -64,19 +64,20 @@ class VerifiedPostgameTests(unittest.TestCase):
                 next(e for e in a if e['actionType']=='substitution')['personId']=999999
             with self.subTest(kind=kind),self.assertRaises(ValueError):
                 self.analyze(p)
-    def test_actions_resent_after_the_game_end_go_back_in_place(self):
+    def test_actions_logged_out_of_game_order_go_back_in_place(self):
         import copy
-        p=copy.deepcopy(self.fixture['pbp'])
-        actions=p['game']['actions']
-        moved=[actions.pop(100),actions.pop(100)]
-        actions.extend(moved)
-        report=self.analyze(p)
         expected=self.analyze()
-        self.assertEqual((report['timeline'],report['substitutions']),(expected['timeline'],expected['substitutions']))
-        broken=copy.deepcopy(self.fixture['pbp'])
-        broken['game']['actions'].insert(50,broken['game']['actions'].pop(100))
-        with self.assertRaisesRegex(ValueError,'Nonchronological'):
-            self.analyze(broken)
+        resent=copy.deepcopy(self.fixture['pbp'])
+        actions=resent['game']['actions']
+        actions.extend([actions.pop(100),actions.pop(100)])
+        early=copy.deepcopy(self.fixture['pbp'])
+        early['game']['actions'].insert(50,early['game']['actions'].pop(100))
+        late=copy.deepcopy(self.fixture['pbp'])
+        late['game']['actions'].insert(300,late['game']['actions'].pop(100))
+        for name,p in (('after the game end',resent),('earlier',early),('later',late)):
+            with self.subTest(name):
+                report=self.analyze(p)
+                self.assertEqual((report['timeline'],report['substitutions']),(expected['timeline'],expected['substitutions']))
     def test_closing_marker_labelled_overtime_is_ignored_only_at_the_final_score(self):
         import copy
         p=copy.deepcopy(self.fixture['pbp'])
