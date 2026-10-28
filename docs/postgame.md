@@ -69,8 +69,8 @@ and the Brier. The `participation` queue item fires when either z-score is 2 or
 more; `participation_low` when far more players entered than expected. The raw
 `projected_dnp` count stays beside them.
 
-Each game with a verified final carries `market`: the model's margin and total
-(the market report's rows), the ESPN close, the Kalshi close and the actual. The
+Each game with a verified final carries `market`: the model's published margin
+and total (the market report's rows), the ESPN close, the Kalshi close and the actual. The
 top-level `market` gives the night's margin MAE for each and, for every game the
 model lost to the close by three points or more, each team's error with the
 signed points of model-class misses, noise-class misses and unprojected players.

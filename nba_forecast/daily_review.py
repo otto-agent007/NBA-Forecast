@@ -12,7 +12,7 @@ from .store import STAT_PROJECTIONS
 from .totals import game_totals
 from .validation import parse_time,validate_history
 
-VERSION='daily-review-1.1'
+VERSION='daily-review-1.2'
 PACIFIC=ZoneInfo('America/Los_Angeles')
 STATS={'pts':'points_mean','minutes':'expected_minutes',**STAT_PROJECTIONS}
 # Miss classes (_classify), first match wins. Noise is what the game's own events

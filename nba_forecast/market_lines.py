@@ -11,6 +11,7 @@ recommendation or a bet.
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
@@ -258,8 +259,10 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     For every finished game with a saved forecast, a closing line and a final
     box score: the model's margin and total against the spread and the total,
     the record of model leans at several edge thresholds, and the head-to-head
-    error of model versus market against the actual result. A lean is 'home'
-    when the model margin exceeds the market margin by the threshold.
+    error of model versus market against the actual result. The model margin is
+    the published one (``model_margin_basis``), with the player-sum difference
+    beside it. A lean is 'home' when the model margin exceeds the market margin
+    by the threshold.
     """
     from .daily_review import _selected
     from .kalshi_lines import closing_kalshi_line, read_kalshi_lines
@@ -286,9 +289,14 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
         teams = {t.get('side') or ('home' if t['team_id'] == game['home_team_id'] else 'away'): t for t in totals.get('teams', [])}
         if not teams.get('home') or not teams.get('away') or teams['home'].get('points_mean') is None or teams['away'].get('points_mean') is None:
             continue
-        model_margin = teams['home']['points_mean'] - teams['away']['points_mean']
+        player_sum_margin = teams['home']['points_mean'] - teams['away']['points_mean']
         model_total = teams['home']['points_mean'] + teams['away']['points_mean']
         margin_forecast = selection.get('margin_forecast') or {}
+        # The published margin is the margin forecast's location (the player sum blended with
+        # the team rating); a run without an estimated margin forecast published the player sum.
+        published = margin_forecast.get('mean_margin') if margin_forecast.get('status') == 'estimated' else None
+        basis = 'margin_forecast' if isinstance(published, (int, float)) and math.isfinite(published) else 'player_sum'
+        model_margin = published if basis == 'margin_forecast' else player_sum_margin
         model_home_win = margin_forecast.get('home_win_probability')
         if model_home_win is None and margin_forecast.get('status') == 'estimated':
             from .margins import probability_above
@@ -310,7 +318,8 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             market_margin = -spread if spread is not None else None
             row = dict(game_id=gid, start_time=game['start_time'], provider=line['provider'], provider_id=pid,
                        run_id=selection['run_id'], stage='final' if (gid, 'final') in chosen else 'preliminary',
-                       model_margin=model_margin, model_total=model_total, model_home_win=model_home_win,
+                       model_margin=model_margin, model_margin_basis=basis,
+                       player_sum_margin=player_sum_margin, model_total=model_total, model_home_win=model_home_win,
                        spread_home=spread, total_line=total, home_moneyline=home_ml, away_moneyline=away_ml,
                        actual_margin=actual_margin, actual_total=actual_total,
                        market_margin=market_margin, line_captured_at=line['captured_at'])
