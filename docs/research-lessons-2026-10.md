@@ -176,6 +176,42 @@ merged:
   within noise. It cannot run live without 2025-26 plus-minus, and whole-game
   plus-minus cannot separate teammates who share minutes.
 
+## What helped, measured (2026-10-27)
+
+Each merged model change against the reference just before it, on the same
+replayed games (`docs/backtest.md`, one "Reference" section each), ± two
+clustered standard errors where the scoreboard has them. Largest first:
+
+| # | Change | Against the version before |
+|---|---|---|
+| 1 | Participation probabilities weight the 240-minute budget; a DNP lowers a player's chance of playing instead of diluting his minutes when he plays (0.4.4, `backtest-2026-10-24-participation`) | points MAE 4.87 → 4.59, minutes 6.32 → 5.10, team points 10.08 → 9.73, winners 64.3% → 66.4% |
+| 2 | Games the official report listed a player out of leave his participation rate (0.4.7, `backtest-2026-10-25-reported-out`) | points −0.074 ± 0.010, minutes −0.130 ± 0.021, participation Brier 0.103 → 0.086, points bias +0.50 → +0.03 |
+| 3 | The margin blends the player sum half and half with a team rating (`backtest-2026-10-24-team-rating`) | margin −0.19 ± 0.12, winner Brier −0.0048 ± 0.0027; on 2024-25, which did not choose it, margin −0.62 ± 0.39 |
+| 4 | Reported-out regulars lower the team rating (`backtest-2026-10-26-absence`) | margin −0.186 ± 0.108 (11.48 → 11.29), winner Brier −0.0046 ± 0.0020; gap to the close 0.58 → 0.39 |
+| 5 | Opponent defense factor (production layer since 0.5.0; `docs/backtest.md`, "Production path") | switched off: team points +0.38 and winner Brier +0.0032, both worse |
+| 6 | Explicit home court (0.4.3, `backtest-2026-10-24-home-court`) | home margin bias −1.66 → −0.14; margin MAE −0.08 ± 0.10 |
+| 7 | Two-tailed intervals, then per-minutes-bucket tails (`backtest-2026-10-24-two-tailed`, `-minute-buckets`) | interval score −0.19 ± 0.13 and −0.20 ± 0.11; 80% coverage 76.8% → 79.6% |
+
+Small or nothing: the reported-status factors (T−30 points −0.0011 ± 0.0007;
+preliminary points −0.011 ± 0.002, minutes −0.017 ± 0.004), rest and travel
+(switched off, team points +0.08), pace at strength 0.25 (nothing
+measurable), the team usage budget (points −0.007 ± 0.003, team points
+−0.10 ± 0.09, but team-points bias −0.43 → −0.91; shipped for the week-one
+rosters the replay cannot see) and newcomer projections (minutes +0.009 ±
+0.004; shipped because withholding them blocked whole margins).
+
+One layer hurts: the minutes redistribution helps player points (switched
+off, +0.031 worse) but takes about three points off each team's total
+(team-points bias −0.15 without it, −3.11 with it).
+
+Start to now, 2025-26, the same 868 games: points MAE 4.87 → 4.49, minutes
+6.32 → 4.85, margin 12.25 → 11.48, winners 63.9% → 69.6%
+(`backtest-2026-10-24`, model 0.4.2, against the 2025-26 row of
+`backtest-2026-10-26-absence`). Part of it is the injury reports added to the
+replay, an input production already had: with the model unchanged they cut
+projected players who did not play from 35.7% to 15.8% and minutes by 0.10,
+with points and margin within noise (`docs/backtest.md`, "Injury reports").
+
 ## Set aside, and why
 
 These are low priority, not disproven. Each either showed no effect once the
@@ -206,6 +242,15 @@ too small for the gate to see.
   2025-26 model (11.97 MAE, 63.3% winners), no better than its points-per-game
   baseline, while a small MLP and its ensemble did best (11.42–11.45). The
   repo is standard-library only, so this was never cheap either.
+- **Clutch shooting.** Not a skill the data can see (2026-10-27,
+  `scripts/research/clutch.py`, NBA clutch archive `datasets/clutch-2026-10-22`).
+  Over 76 consecutive-season pairs with 40+ clutch shooting attempts in both
+  (median 66 a season), true shooting correlates 0.72 year to year over the
+  season but 0.19 in the clutch, and clutch minus season correlates 0.11
+  (95% bootstrap −0.12 to 0.32). Its spread across player-seasons, 0.068 of
+  TS%, is what chance gives on those attempts (0.067). Season efficiency, which
+  the model already uses, is the best guess for a player's late-game shooting.
+  And only 23–25% of games each season finished within five points.
 
 Situational effects in general are real but small: a 2-point correction on
 35% of games is worth about 0.04 points of margin MAE, z ≈ 0.9 on one season.
