@@ -20,8 +20,11 @@ summary returns in under a second. What differs from the official history:
   rounding cancels in a verdict; absolute minutes errors carry about a quarter
   minute of rounding.
 - **IDs are ESPN's**: games are `espn-<event>`, players `espn-<athlete>`; teams are
-  NBA team IDs matched by tricode. Players therefore do not link across seasons,
-  which the replay does not need (each season replays from its own history).
+  NBA team IDs matched by tricode. Players therefore do not link to 2025-26's
+  NBA IDs. `history-nba-ids.json.gz` is the same rows with 2025-26's player IDs
+  where the name matches exactly one 2025-26 player (28,888 of 32,554 rows), the
+  seed of the early-season 2025-26 replay; it is rebuilt by
+  `scripts/research/previous_ids.py` (sha256 `7ae8098b…`).
 - **ESPN omits some inactive players** that the official box score lists. The
   replay adds every player the official injury report lists for the game
   (`backtest._listed_absentees`), so reported absences are scored either way.

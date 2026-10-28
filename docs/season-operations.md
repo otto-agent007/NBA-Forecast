@@ -196,6 +196,18 @@ game totals and margins weight them by the probability (totals schema 3). The
 ledger scores the probability against actual participation (Brier, in
 `metrics.participation`), and the dashboard shows "N% to play" under 95%.
 
+Since 2026-10-27 the team totals agree with the margin forecast
+(`scoreline.py`). The margin is located from the player model's totals blended
+with the team rating; each team's projected players are then scaled so the
+two totals differ by that location and the game total is unchanged, each
+total moving half the gap. A player's points, their SD and interval and his
+expected makes (reallocated over the same attempts) scale together, and
+`components.scoreline` keeps his player-model mean, from which the margin is
+always located, so a saved forecast reproduces its own margin. On the
+three-season replay this cut team points MAE by 0.12 with player points
+unchanged (`docs/backtest.md`, reference 2026-10-27). The market report's
+`player_sum_margin` is the one the margin forecast saved.
+
 ## Market lines
 
 Each tick archives the sportsbook lines ESPN's game summary carries (spread,

@@ -183,7 +183,7 @@ def _add_rates(recipients, adjusted, remaining_attempts):
             remaining_attempts[field] -= attempts
 
 
-def redistribute(players, profiles, projection_inputs, history, as_of):
+def redistribute(players, profiles, projection_inputs, history, as_of, season=None):
     """Return ``(deepcopied_inputs, audits_by_team_id)`` without I/O or mutation.
 
     ``projection_inputs`` contains supported healthy players only, with minutes,
@@ -191,7 +191,9 @@ def redistribute(players, profiles, projection_inputs, history, as_of):
     Source-backed confirmed out players supply the only vacancy budget. Profiles
     must come from the same cutoff as these inputs. History is independently
     restricted to games AND observations strictly before the cutoff and the
-    inferred July-to-June current/prior NBA regular season.
+    forecast's ``season`` and the one before (by default the July-to-June season
+    of ``as_of``, which is the forecast's season in a live run; a replay passes
+    the replayed season).
 
     Each team audit reports donor sources, recipient caps and history, baseline
     and resulting minutes/attempts, additions from minutes versus rates, and
@@ -202,7 +204,7 @@ def redistribute(players, profiles, projection_inputs, history, as_of):
     are added and the excess is reported for the caller's normalization.
     """
     cutoff = parse_time(as_of)
-    season = _season(cutoff)
+    season = season or _season(cutoff)
     start = int(season[:4]) - 1
     seasons = {season, f'{start}-{(start + 1) % 100:02d}'}
     adjusted = deepcopy(projection_inputs)

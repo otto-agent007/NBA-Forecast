@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-26-absence
+  --reference datasets/backtest-2026-10-27-scoreline
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -144,7 +144,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-26-absence-midday
+  --reference datasets/backtest-2026-10-27-scoreline-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -155,6 +155,137 @@ they played 89.4% (probable, 1,199), 48.6% (questionable, 3,687) and 3.2%
 (doubtful, 650); 0.4% of the 15,112 listed out played. Midday metrics, model
 0.4.8: points MAE 4.59, minutes 5.03, participation Brier 0.119, projected
 players who did not play 21.9%, margin 11.53.
+
+## Early-season replay
+
+The gate keeps each season's first 30% of dates as history because a season
+replays alone. Live forecasts never start alone: opening night reads last
+season's box scores and the team ratings carry last season's prior.
+`--previous-history` and `--previous-team-games` (one per season) seed the
+replay the same way: the player history, the ratings' prior and the margin
+dispersion start from the previous season, and `--warmup-fraction 0` scores the
+season from opening night:
+
+```bash
+python -m nba_forecast backtest \
+  --history datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
+  --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
+  --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
+  --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
+  --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
+  --reference datasets/backtest-2026-10-27-early-season
+python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
+```
+
+2025-26 uses NBA player IDs and 2024-25 ESPN's, so its seed is 2024-25 under
+2025-26's IDs, matched by name (`scripts/research/previous_ids.py`; 28,888 of
+32,554 rows; the rest are players who left the league). Without the two flags
+the replay is unchanged: on 2026-10-27 the gate reproduced every row of
+`datasets/backtest-2026-10-26-absence`.
+
+Reference `datasets/backtest-2026-10-27-early-season/`, 2026-10-27, model 0.4.8
+baseline path, 3,676 games; the 3,674 with T-minus-30 reports and closing lines
+(the gate's closes) by window:
+
+| Window | Games | Model margin MAE | Close | Gap | Team-points bias |
+|---|---|---|---|---|---|
+| Weeks 1–2 | 270 | 10.71 | 10.33 | +0.38 | −0.96 |
+| Weeks 3–4 | 313 | 9.74 | 9.35 | +0.39 | −0.87 |
+| Weeks 5–8 | 470 | 10.41 | 10.29 | +0.12 | −0.72 |
+| Gate window | 2,621 | 11.23 | 10.90 | +0.33 | −0.85 |
+
+The reference was rerun after team totals were reconciled to the margin
+(reference 2026-10-27, team totals agree with the margin): margins and every
+bias are identical, so the table stands; team points MAE −0.102 ± 0.040.
+
+The replayed model is no worse against the close early than late. Seeding also
+moves the gate window: against the reference (± two standard errors, as the
+gate prints), 2023-24 and 2024-25 together improve on margin (−0.086 ± 0.075),
+winner Brier (−0.0019 ± 0.0013), team
+points and team-points bias (−0.98 → −0.63); 2025-26 is within noise
+everywhere. The unseeded gate therefore slightly understates the model that runs
+live, which always has last season.
+
+What the 2026-10-26 WAS @ CHA case suggested, absent players with no minutes for
+the team this season (the absence adjustment counts them as zero while the
+rating still carries last season's prior), is not a systematic miss. Over the
+first 30% of dates, 696 of 1,053 games have a reported-out player who averaged
+15+ minutes for the team last season and has not played for it yet (29 minutes
+a game); per ten such minutes, home minus away, the model misses by −0.04 ±
+0.16 points and the close by +0.08 ± 0.16 (one date-clustered standard error),
+the close sitting 0.12 ± 0.04 below the model. Counting those minutes at the live 0.1 a minute would move the
+model by −0.5 per ten minutes, about three standard errors the wrong way.
+
+What it still cannot see: the replay runs the baseline path (`model.py`), not
+production's (`candidate.py`: rotation redistribution of absent players'
+minutes, pace and defense volume budgets, rest and travel context). Rerunning
+the 24 live games of 2026-10-24..27 that ran the production path both ways with
+the same inputs, the extra layers move each player little (0.27 points on
+average) but in the same direction across a team: team totals move 2.5 points
+(bias −0.84 → −2.79) and the player-sum margin 2.8. On those games they did not
+help (player-sum MAE 10.61 → 10.66, team points 9.38 → 9.52), a sample too small
+to decide. In WAS @ CHA every player's minutes were the same on both paths; the
+team-level factors took the player sum from CHA +8.1 to +13.7 (close +2.5,
+actual +7).
+
+## Production path
+
+The gate replays `model._baseline_forecast`. Production runs
+`candidate.forecast_candidate`, which adds the redistribution of absent
+players' minutes to teammates, pace and defense factors with team volume
+budgets, and the fitted rest and travel context. `--production-path ARTIFACT`
+replays that path: each game gets the pace and defense environment built from
+the team games of earlier dates (a labelled historical reconstruction), the
+rest and travel context from the season calendar, and the artifact's
+parameters and fitted context model. `datasets/model-upgrade-2026-10-23/artifact.json.gz`
+carries the same parameters and context model as the live 0.6.0 artifact.
+To replay it, add `--production-path datasets/model-upgrade-2026-10-23/artifact.json.gz`
+to the gate command; `AGENTS.md` still gates on the baseline path. Live-only inputs are still absent: recap role context, shot
+profiles, aggregate historical priors. The context model was fitted on
+2025-26, so that season is in-sample for it.
+
+First run, 2026-10-27, against `datasets/backtest-2026-10-26-absence` (the
+baseline path), ± two standard errors:
+
+| Metric | Production path minus baseline | Verdict |
+|---|---|---|
+| Player points MAE | −0.021 ± 0.005 | within the materiality floor |
+| Minutes MAE | −0.016 ± 0.005 | within the floor |
+| Team points MAE | +0.32 ± 0.16 | worse |
+| Team-points bias | −1.23 → −3.11 | worse |
+| Margin MAE | −0.018 ± 0.090 | within noise |
+| Winner Brier | −0.0020 ± 0.0018 | improved |
+
+Each layer switched off, against the full production path:
+
+| Off | Player points | Team points | Team-points bias | Winner Brier |
+|---|---|---|---|---|
+| Minutes redistribution | +0.031, worse | −0.34, improved | −3.11 → −0.15 | within noise |
+| Pace factor | within noise | within noise | within noise | within noise |
+| Defense factor | within noise | +0.38, worse | −3.34 | +0.0032, worse |
+| Rest and travel | within noise | +0.08, worse | −3.51, worse | within noise |
+
+The redistribution moves minutes to the right players but takes about three
+points off each team's projected total. The 24 live games of 2026-10-24..27
+rerun both ways show the same pattern (team-points bias −0.84 baseline, −2.79
+production). The defense factor earns its place; pace at strength 0.25 does
+nothing measurable.
+
+Rerun with team totals reconciled to the margin, against
+`datasets/backtest-2026-10-27-scoreline` (the reference
+`datasets/backtest-2026-10-27-production-path/` is this run): team points
++0.37 ± 0.16 and team-points bias −1.23 → −3.11, worse; winner Brier −0.0020 ±
+0.0018, improved; the rest as before. On this path the reconciliation itself
+cut team points by 0.074 ± 0.040 with everything else unchanged; it moves
+totals between the two teams, so the shortfall's bias is untouched. The
+layer table above predates it.
+
+`rotation_allocation.redistribute` inferred the season from `as_of`, which in a
+replay is the day it runs, so it found no history for 2023-24 and 2024-25 and
+moved no minutes there; it now takes the forecast's season, which is the same
+season live.
 
 ## Two seasons
 
@@ -176,6 +307,28 @@ the code before and after each 2026-10-24 change, without injury reports:
 On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
 (ESPN BET for every game) and the naive point-differential rating's 11.50; winner
 Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-27 (team totals agree with the margin)
+
+`datasets/backtest-2026-10-27-scoreline/` (T-minus-30) and
+`datasets/backtest-2026-10-27-scoreline-midday/` (preliminary): the absence
+references with each team's projected players scaled so the two team totals
+differ by the margin location and the game total is unchanged; each total
+moves half the gap (`scoreline.reconcile`). Points, their SD and interval and
+the expected makes scale together; the margin is still located from the
+player model's own totals, so it does not move.
+
+T-minus-30, against the absence reference (± two standard errors): team
+points −0.120 ± 0.042 (9.45 → 9.33), improved in each season (2023-24 −0.111,
+2024-25 −0.107, 2025-26 −0.142); margin, winner Brier, minutes and
+participation unchanged by construction; points −0.0015 ± 0.0016, interval
+score −0.011 ± 0.011 and the three biases within noise.
+Preliminary, against the absence midday reference: team points −0.081 ±
+0.042 (9.37 → 9.29), improved in each season; everything else unchanged or
+within noise. On the 2026-10-27 production forecast for POR @ LAL the totals
+went from 112.7–109.5 (Portland by 3.2, the player sum) to 111.4–110.7, the
+published Portland by 0.7, with the game total 222.2 and the margin
+unchanged; the largest change to a player was 0.33 points.
 
 ## Reference: 2026-10-26 (absences in the team rating)
 
@@ -502,8 +655,9 @@ The replay reads one report per game (T-minus-30, or 12:30 PM for the
 preliminary replay), not every edition a live run sees. No prior-season
 aggregate priors or archive-bound enhancements (pace, defense, rest, shot
 location, injury exits) are applied, so changes to those still need the live
-`performance.json` benchmarks. Each season replays without the previous one's
-box scores (2024-25 uses ESPN IDs), so the first weeks lack prior-season form.
+`performance.json` benchmarks. The gate replays each season without the previous
+one's box scores, so its first weeks are history only; the early-season replay
+above seeds them.
 A result here is necessary, not sufficient: a change that improves the replay is
 expected to show up live after enough games, and both are reported.
 

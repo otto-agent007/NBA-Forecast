@@ -378,7 +378,12 @@ def build_margin_forecasts(snapshot, result):
             if totals['status'] != 'complete':
                 value['reason'] = 'incomplete_team_totals'
                 continue
-            means = {t['team_id']: t['points_mean'] for t in totals['teams']}
+            # The location reads the player model's totals, before scoreline.reconcile scales
+            # them toward it; a reconciled forecast therefore reproduces its own margin.
+            from .scoreline import player_projections
+            unscaled = game_totals(game, player_projections(result['predictions']),
+                                   lineups=snapshot.get('preflight', {}).get('lineups'))
+            means = {t['team_id']: t['points_mean'] for t in unscaled['teams']}
             player_sum = means[game['home_team_id']] - means[game['away_team_id']]
             absence, absent = absence_adjustment(result['predictions'], game)
             raw_location, rating_margin = blended_location(player_sum, inputs['historical_mean_margin'],

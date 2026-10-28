@@ -2,10 +2,10 @@
 
 One season is replayed game by game with the current model code. For each game
 the roster is that box score's own players, all treated as available; the
-history is every box score from earlier Eastern dates; the forecast is the
-ordinary baseline model. Player metrics condition on actual positive
-participation, like the live calibration population; team totals and margins
-use full team scores. This measures the points and minutes model under the
+history is every box score from earlier Eastern dates, after the previous
+season's when it is supplied; the forecast is the ordinary baseline model.
+Player metrics condition on actual positive participation, like the live
+calibration population; team totals and margins use full team scores. This measures the points and minutes model under the
 information a live run has, except availability, which live runs get from
 injury reports and a replay cannot. Prior-season aggregate priors and the
 archive-bound enhancements are not available historically either.
@@ -29,7 +29,9 @@ from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
 from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, absence_adjustment, blended_location, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
 from .runner_release import package_digest
+from .scoreline import reconcile
 from .schedule import atomic_json, canonical
+from .totals import game_totals
 from .validation import parse_time
 
 VERSION = 'backtest-1'
@@ -160,27 +162,87 @@ def _availability(counts, roster, rows):
         counts[key][1] += p['player_id'] in played
 
 
-def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None):
+def _final_sample(game):
+    return dict(game_time=game['game_time'], home_team_id=game['home_team_id'], away_team_id=game['away_team_id'],
+                home_points=game['team_stats'][game['home_team_id']]['pts'],
+                away_points=game['team_stats'][game['away_team_id']]['pts'])
+
+
+def _final_margin(game):
+    return game['team_stats'][game['home_team_id']]['pts'] - game['team_stats'][game['away_team_id']]['pts']
+
+
+def _by_day(items, time):
+    """(day, items) in date order, the shape of the replay's running history."""
+    days = defaultdict(list)
+    for item in sorted(items, key=lambda i: parse_time(time(i))):
+        days[_day(time(item))].append(item)
+    return sorted(days.items())
+
+
+def _calendar(records):
+    """The season's games in the schedule shape ``schedule.game_context`` reads for rest and travel."""
+    return dict(games=[dict(game_id=r['game_id'], start_time=r['game_time'], status='final', home_team_id=r['home_team_id'],
+                            away_team_id=r['away_team_id'], venue=dict(timezone=r.get('venue_timezone'))) for r in records])
+
+
+def _production_forecast(snapshot, history, artifact, team_games, calendar):
+    """Production's path (``candidate.forecast_candidate``) with the inputs ``enhancements.prepare`` would give it.
+
+    The pace and defense environment comes from the team games of earlier dates
+    (labelled a historical reconstruction), the rest and travel context from the
+    season calendar, the parameters and fitted context model from ``artifact``.
+    Interval calibration stays the replay's own walk-forward one.
+    """
+    from .candidate import forecast_candidate
+    from .game_environment import build_environment
+    from .schedule import game_context
+    game = snapshot['games'][0]
+    environment = build_environment(team_games, game, game['start_time'], context=dict(evidence_kind='historical_reconstruction'),
+                                    parameters=artifact['parameters'].get('environment_parameters'))
+    enhancement = dict(model_version=artifact['model_version'], model_key=artifact['model_key'], known_at=artifact['known_at'],
+                       parameters=artifact['parameters'], context_model=artifact.get('context_model'), calibration=None,
+                       environment=environment, excluded_history_game_ids=artifact.get('excluded_history_game_ids', []))
+    return forecast_candidate(dict(snapshot, model_enhancements=enhancement,
+                                   schedule_context=game_context(calendar, game['game_id'])), history)
+
+
+def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None,
+           previous_history=(), previous_records=(), artifact=None):
     """Forecast each evaluation game from earlier game days only.
 
     ``injuries`` maps game IDs to their anchor report (``injury_history``); a
-    game without one keeps every box-score player available.
+    game without one keeps every box-score player available. The previous
+    season's box scores and finals (``previous_history``, ``previous_records``)
+    seed the player history, the team ratings' last-season prior and the margin
+    dispersion as production's multi-season history does, so with
+    ``warmup_fraction=0`` the season is scored from opening night. With a model
+    ``artifact`` each game is forecast on production's path
+    (``_production_forecast``) instead of the baseline.
     """
-    home_of = {r['game_id']: r['home_team_id'] for r in records}
+    home_of = {r['game_id']: r['home_team_id'] for r in (*previous_records, *records)}
+
+    def located(r):
+        return dict(r, home=r['team_id'] == home_of[r['game_id']]) if r['game_id'] in home_of and 'home' not in r else r
     by_game = defaultdict(list)
-    names = {r['player_id']: r['name'] for r in history}
+    names = {r['player_id']: r['name'] for r in (*previous_history, *history)}
     for r in history:
-        if r['game_id'] in home_of and 'home' not in r:
-            r = dict(r, home=r['team_id'] == home_of[r['game_id']])
-        by_game[r['game_id']].append(r)
+        by_game[r['game_id']].append(located(r))
     ordered, evaluated = evaluation_games(records, warmup_fraction)
     if limit:
         evaluated = evaluated[-limit:]
     targets = {g['game_id'] for g in evaluated}
     players, teams, games, skipped, prior = [], [], [], defaultdict(int), []
-    prior_days = []  # (day, rows) in order, so the history before a game is a prefix.
-    margin_days = []  # (day, final home margins), the same way.
-    finals = []  # (day, final sample) for the team ratings, at most the production window.
+    previous_days = _by_day(previous_records, lambda g: g['game_time'])
+    # (day, rows) in order, so the history before a game is a prefix.
+    prior_days = _by_day(map(located, previous_history), lambda r: r['game_time'])
+    # (day, final home margins), the same way.
+    margin_days = [(d, [_final_margin(g) for g in batch]) for d, batch in previous_days]
+    # (day, final sample) for the team ratings; ratings and dispersion read at most the production window.
+    finals = [(d, _final_sample(g)) for d, batch in previous_days for g in batch]
+    # (day, team-game record) for the production path's pace and defense environment.
+    record_days = [(d, g) for d, batch in previous_days for g in batch]
+    calendar = _calendar(records) if artifact else None
     rating_cache = {}
     residual_days = []  # (day, signed standardized residuals, game IDs) of earlier played forecasts.
     interval_cache = {}
@@ -210,7 +272,11 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                                 reported_unavailable={k: v for k, v in unavailable.items() if v},
                                 roster=dict(players=roster, observed_at=as_of, source_url=rows[0]['source_url'],
                                             complete=False, team_ids=[g['home_team_id'], g['away_team_id']]))
-                result = _baseline_forecast(snapshot, history_before)
+                if artifact:
+                    result = _production_forecast(snapshot, history_before, artifact,
+                                                  [g for d, g in record_days if d < day], calendar)
+                else:
+                    result = _baseline_forecast(snapshot, history_before)
                 if day not in interval_cache:
                     earlier = [(z, gids) for d, z, gids in residual_days if d < day]
                     signed = [v for z, _ in earlier for v in z]
@@ -225,6 +291,22 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                          if len(values) >= CALIBRATION_MIN_SAMPLES},
                         pooled=two_tailed_quantiles([v for v, _ in signed], CALIBRATION_ALPHA))}
                 calibrated = interval_cache[day]
+                # The margin is located from the player model's team totals; production then
+                # scales each team's players so the totals agree with it (scoreline.reconcile).
+                published = {t['team_id']: t['points_mean'] for item in result.get('game_totals') or [] for t in item['teams']}
+                location = margin_sd = None
+                if all(published.get(t) is not None for t in (g['home_team_id'], g['away_team_id'])):
+                    margin_sd = _margin_prior_sd([m for d, batch in margin_days if d < day for m in batch][-MARGIN_WINDOW:])
+                    if day not in rating_cache:
+                        window = [s for d, s in finals if d < day][-MARGIN_WINDOW:]
+                        edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
+                        rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
+                    edge, ratings = rating_cache[day]
+                    location, _ = blended_location(
+                        published[g['home_team_id']] - published[g['away_team_id']],
+                        edge, ratings, g['home_team_id'], g['away_team_id'], absence_adjustment(result['predictions'], g)[0])
+                    if reconcile(result['predictions'], g, location):
+                        result['game_totals'] = [game_totals(g, result['predictions'])]
                 actual = {r['player_id']: r for r in scored}
                 totals = defaultdict(lambda: dict(projected=0., count=0, covered=0.))
                 residuals = []
@@ -266,28 +348,18 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     teams.append([game['game_id'], tid, tid == g['home_team_id'], totals[tid]['projected'],
                                   stats['pts'] * 48 / (minutes / 5) if minutes else None, stats['pts'],
                                   totals[tid]['count'], totals[tid]['covered']])
-                if all(totals[t]['count'] for t in (g['home_team_id'], g['away_team_id'])):
-                    sd = _margin_prior_sd([m for d, batch in margin_days if d < day for m in batch])
-                    if day not in rating_cache:
-                        window = [s for d, s in finals if d < day][-MARGIN_WINDOW:]
-                        edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
-                        rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
-                    edge, ratings = rating_cache[day]
-                    location, _ = blended_location(
-                        totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected'],
-                        edge, ratings, g['home_team_id'], g['away_team_id'], absence_adjustment(result['predictions'], g)[0])
+                if location is not None:
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
-                    games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
-                                  _home_win_probability(location, sd) if sd else None])
+                    games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, margin_sd,
+                                  _home_win_probability(location, margin_sd) if margin_sd else None])
         anchor = (injuries or {}).get(game['game_id'])
         if anchor and anchor.get('report'):
             for pid, listed in anchor['statuses'].items():
                 if listed[0] == 'out':
                     reported_out[pid].append((day, game['game_id']))
-        final_margin = game['team_stats'][game['home_team_id']]['pts'] - game['team_stats'][game['away_team_id']]['pts']
-        finals.append((day, dict(game_time=game['game_time'], home_team_id=game['home_team_id'],
-                                 away_team_id=game['away_team_id'], home_points=game['team_stats'][game['home_team_id']]['pts'],
-                                 away_points=game['team_stats'][game['away_team_id']]['pts'])))
+        final_margin = _final_margin(game)
+        finals.append((day, _final_sample(game)))
+        record_days.append((day, game))
         if margin_days and margin_days[-1][0] == day:
             margin_days[-1][1].append(final_margin)
         else:
@@ -688,11 +760,15 @@ def _subset(rows, game_ids):
                 teams=[r for r in rows['teams'] if r[0] in game_ids], games=[r for r in rows['games'] if r[0] in game_ids])
 
 
-def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None):
+def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None,
+                artifact=None):
     """Replay each season on its own and score them together; write and return the scoreboard.
 
+    With a model ``artifact`` every season replays production's path (``replay``).
+
     Each season is a dict of ``history``, ``records`` and optional ``sources``,
-    ``market`` and ``injuries``. Metrics and the comparison pool every season's
+    ``market``, ``injuries`` and the previous season's ``previous_history`` and
+    ``previous_records`` (``replay``). Metrics and the comparison pool every season's
     rows: game dates never overlap, so the date clusters stay independent. With
     more than one season each also reports its own metrics, market comparison and
     verdict under ``seasons``; the gate is the pooled verdict.
@@ -700,8 +776,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     cutoff = parse_time(as_of)
     for season in seasons:
-        if (any(parse_time(r['known_at']) > cutoff for r in season['history'])
-                or any(parse_time(r['known_at']) > cutoff for r in season['records'])):
+        if any(parse_time(r['known_at']) > cutoff for key in ('history', 'records', 'previous_history', 'previous_records')
+               for r in season.get(key) or ()):
             raise ValueError('backtest cutoff cannot precede future-known sources')
     out = Path(output)
     if out.exists() and any(out.iterdir()):
@@ -711,7 +787,9 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
     parts, dates, totals, skipped = [], {}, dict(total=0, evaluated=0), defaultdict(int)
     for season in seasons:
         replayed = replay(season['history'], season['records'], as_of, warmup_fraction=warmup_fraction, limit=limit,
-                          progress=progress, injuries=season.get('injuries'))
+                          progress=progress, injuries=season.get('injuries'),
+                          previous_history=season.get('previous_history') or (),
+                          previous_records=season.get('previous_records') or (), artifact=artifact)
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})
@@ -733,11 +811,17 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         parts.append(part)
     with_injuries = all(season.get('injuries') is not None for season in seasons)
     scoreboard = dict(
-        schema_version=1, version=VERSION, created_at=as_of, model_version=MODEL_VERSION,
+        schema_version=1, version=VERSION, created_at=as_of,
+        model_version=artifact['model_version'] if artifact else MODEL_VERSION,
+        model_path='production' if artifact else 'baseline',
         code_sha256=package_digest(Path(__file__).parent),
         sources=parts[0]['sources'] if len(parts) == 1 else [p['sources'] for p in parts],
         parameters=dict(warmup_fraction=warmup_fraction, limit=limit,
-                        interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80),
+                        interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80,
+                        **({'previous_season_seeded': [bool(s.get('previous_records')) for s in seasons]}
+                           if any(s.get('previous_records') for s in seasons) else {}),
+                        **(dict(production_artifact=dict(model_version=artifact['model_version'], model_key=artifact['model_key'],
+                                                         parameters=artifact['parameters'])) if artifact else {})),
         games=dict(totals, skipped=dict(skipped)),
         metrics=summarize(rows['players'], rows['teams'], rows['games']),
         limitations=INJURY_LIMITATIONS if with_injuries else LIMITATIONS)
@@ -773,7 +857,7 @@ def format_scoreboard(board):
     """A short readable table for the terminal."""
     m = board['metrics']
     lines = []
-    lines.append(f"games evaluated {board['games']['evaluated']} of {board['games']['total']}  model {board['model_version']}  code {board['code_sha256'][:12]}")
+    lines.append(f"games evaluated {board['games']['evaluated']} of {board['games']['total']}  model {board['model_version']} ({board.get('model_path', 'baseline')} path)  code {board['code_sha256'][:12]}")
     lines.append(f"{'players (played)':18s} {'n':>6s} {'pts MAE':>8s} {'bias':>6s} {'min MAE':>8s} {'cov80':>6s} {'width':>6s}")
     for name, item in [('all', m['players']['all'])] + list(m['players']['by_expected_minutes'].items()):
         if item.get('n'):

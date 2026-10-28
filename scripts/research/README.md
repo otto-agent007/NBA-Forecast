@@ -10,6 +10,9 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `absence_minutes.py` | How much the margin misses per ten minutes of reported-out regulars, home minus away; the measurement behind `margins.absence_adjustment` | the same, plus the histories and T−30 injury reports |
 | `clv.py` | Closing-line value: does a night-before forecast move the opener? With the point-differential placebo | a night-before replay's `rows.json.gz`, closing lines, the archived ESPN odds responses under `data/market-history/` (gitignored) |
 | `line_lag.py` | How stale the ESPN closing line is against Kalshi's price at tip, on the live captures | `production/market/game-lines`, finals, Kalshi's public API (cached under `data/research/kalshi`) |
+| `early_season.py` | The model against the close by weeks since opening night, and whether players absent with no minutes for the team this season are a systematic margin miss | seeded early-season replays (`docs/backtest.md`, "Early-season replay"), team games, closing lines, histories, T−30 reports |
+| `previous_ids.py` | A previous season's box scores under the next season's player IDs, for seeding 2025-26 from ESPN's 2024-25 | the two histories |
+| `clutch.py` | Whether clutch shooting persists year to year beyond a player's season shooting, against what chance alone gives | the NBA clutch archive (`datasets/clutch-2026-10-22`), the gate's histories |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 
 ## Reproduced on 2026-10-26
@@ -53,3 +56,10 @@ had MEM −1.5. Win probability: median 0.8 points, four games over 2. Against t
 results on those games: ESPN close MAE 8.15, Kalshi at tip 8.07, model 10.97
 (the published margin; 11.62 was the player sum the market report scored
 before 2026-10-27).
+
+## Run on 2026-10-27
+
+`early_season.py` on the three seeded replays: gap to the close +0.38 in weeks
+1–2 (270 games), +0.39 in weeks 3–4, +0.12 in weeks 5–8 and +0.33 in the gate
+window; per ten uncounted last-season minutes over the first 30% of dates, model
+miss −0.04 ± 0.16, close −0.12 ± 0.04 relative to the model.
