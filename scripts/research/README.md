@@ -53,7 +53,9 @@ part that moved after ESPN's last change, median 0.16, mean 0.19, never a full
 point; book difference at the same moment, median 0.30. One outlier, MEM@UTA,
 where ESPN's spread (UTA −1.5) disagreed with its own even moneyline and Kalshi
 had MEM −1.5. Win probability: median 0.8 points, four games over 2. Against the
-results on those games: ESPN close MAE 8.15, Kalshi at tip 8.07, model 11.62.
+results on those games: ESPN close MAE 8.15, Kalshi at tip 8.07, model 10.97
+(the published margin; 11.62 was the player sum the market report scored
+before 2026-10-27).
 
 ## Run on 2026-10-27
 

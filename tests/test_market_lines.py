@@ -156,6 +156,26 @@ class ReportTests(unittest.TestCase):
         self.assertAlmostEqual(row['market_home_win'], 0.5721, places=3)
         self.assertEqual(s['winner']['model_pick_accuracy'], 1.0)
         self.assertAlmostEqual(s['winner']['model_brier'], .16)
+        # Without an estimated margin forecast the run published its player sum.
+        self.assertEqual((row['model_margin_basis'], row['player_sum_margin']), ('player_sum', 4))
+
+    def test_the_model_margin_is_the_published_one_not_the_player_sum(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            (folder / 'finals').mkdir()
+            M.record_game_lines(folder, M.extract_game_lines(summary(), GAME, '2026-27', META), '2026-10-23T21:00:30Z')
+            finals = [dict(game_id=GAME['game_id'], team_id='H', pts=115), dict(game_id=GAME['game_id'], team_id='A', pts=108)]
+            (folder / 'finals' / (GAME['game_id'] + '.json')).write_text(json.dumps(finals))
+            # Player sum +4; the published margin blends it with the team rating to +6.
+            selected = {(GAME['game_id'], 'final'): dict(run_id='r1', totals=dict(points_mean=224, teams=[
+                dict(team_id='H', side='home', points_mean=114), dict(team_id='A', side='away', points_mean=110)]),
+                margin_forecast=dict(status='estimated', mean_margin=6., home_win_probability=.6))}
+            report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z', selected=selected)
+        row = report['games'][0]
+        self.assertEqual((row['model_margin'], row['model_margin_basis'], row['player_sum_margin']), (6., 'margin_forecast', 4))
+        self.assertEqual((row['spread_edge'], row['margin_abs_error']), (3.5, dict(model=1., market=4.5)))
+        self.assertEqual(report['summary']['spread_leans']['edge>=3']['picks'], 1)
+        self.assertEqual(report['summary']['margin_abs_error']['model'], 1.)
 
 
 if __name__ == '__main__':
