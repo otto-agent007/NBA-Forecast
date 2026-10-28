@@ -29,7 +29,9 @@ from .intervals import HEURISTIC_Z80, INTERVAL_FAMILY
 from .margins import MAXIMUM_GAMES as MARGIN_WINDOW, absence_adjustment, blended_location, team_ratings
 from .model import MODEL_VERSION, _baseline_forecast
 from .runner_release import package_digest
+from .scoreline import reconcile
 from .schedule import atomic_json, canonical
+from .totals import game_totals
 from .validation import parse_time
 
 VERSION = 'backtest-1'
@@ -225,6 +227,22 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                          if len(values) >= CALIBRATION_MIN_SAMPLES},
                         pooled=two_tailed_quantiles([v for v, _ in signed], CALIBRATION_ALPHA))}
                 calibrated = interval_cache[day]
+                # The margin is located from the player model's team totals; production then
+                # scales each team's players so the totals agree with it (scoreline.reconcile).
+                published = {t['team_id']: t['points_mean'] for item in result.get('game_totals') or [] for t in item['teams']}
+                location = margin_sd = None
+                if all(published.get(t) is not None for t in (g['home_team_id'], g['away_team_id'])):
+                    margin_sd = _margin_prior_sd([m for d, batch in margin_days if d < day for m in batch])
+                    if day not in rating_cache:
+                        window = [s for d, s in finals if d < day][-MARGIN_WINDOW:]
+                        edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
+                        rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
+                    edge, ratings = rating_cache[day]
+                    location, _ = blended_location(
+                        published[g['home_team_id']] - published[g['away_team_id']],
+                        edge, ratings, g['home_team_id'], g['away_team_id'], absence_adjustment(result['predictions'], g)[0])
+                    if reconcile(result['predictions'], g, location):
+                        result['game_totals'] = [game_totals(g, result['predictions'])]
                 actual = {r['player_id']: r for r in scored}
                 totals = defaultdict(lambda: dict(projected=0., count=0, covered=0.))
                 residuals = []
@@ -266,19 +284,10 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     teams.append([game['game_id'], tid, tid == g['home_team_id'], totals[tid]['projected'],
                                   stats['pts'] * 48 / (minutes / 5) if minutes else None, stats['pts'],
                                   totals[tid]['count'], totals[tid]['covered']])
-                if all(totals[t]['count'] for t in (g['home_team_id'], g['away_team_id'])):
-                    sd = _margin_prior_sd([m for d, batch in margin_days if d < day for m in batch])
-                    if day not in rating_cache:
-                        window = [s for d, s in finals if d < day][-MARGIN_WINDOW:]
-                        edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
-                        rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
-                    edge, ratings = rating_cache[day]
-                    location, _ = blended_location(
-                        totals[g['home_team_id']]['projected'] - totals[g['away_team_id']]['projected'],
-                        edge, ratings, g['home_team_id'], g['away_team_id'], absence_adjustment(result['predictions'], g)[0])
+                if location is not None:
                     actual_margin = game['team_stats'][g['home_team_id']]['pts'] - game['team_stats'][g['away_team_id']]['pts']
-                    games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, sd,
-                                  _home_win_probability(location, sd) if sd else None])
+                    games.append([game['game_id'], g['home_team_id'], g['away_team_id'], location, actual_margin, margin_sd,
+                                  _home_win_probability(location, margin_sd) if margin_sd else None])
         anchor = (injuries or {}).get(game['game_id'])
         if anchor and anchor.get('report'):
             for pid, listed in anchor['statuses'].items():

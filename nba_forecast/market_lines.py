@@ -289,9 +289,13 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
         teams = {t.get('side') or ('home' if t['team_id'] == game['home_team_id'] else 'away'): t for t in totals.get('teams', [])}
         if not teams.get('home') or not teams.get('away') or teams['home'].get('points_mean') is None or teams['away'].get('points_mean') is None:
             continue
-        player_sum_margin = teams['home']['points_mean'] - teams['away']['points_mean']
         model_total = teams['home']['points_mean'] + teams['away']['points_mean']
         margin_forecast = selection.get('margin_forecast') or {}
+        # Reconciled team totals already differ by the margin (scoreline.py); the player
+        # model's own difference is the one the margin forecast saved.
+        saved = margin_forecast.get('player_sum_margin')
+        player_sum_margin = (saved if isinstance(saved, (int, float)) and math.isfinite(saved)
+                             else teams['home']['points_mean'] - teams['away']['points_mean'])
         # The published margin is the margin forecast's location (the player sum blended with
         # the team rating); a run without an estimated margin forecast published the player sum.
         published = margin_forecast.get('mean_margin') if margin_forecast.get('status') == 'estimated' else None

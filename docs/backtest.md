@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-26-absence
+  --reference datasets/backtest-2026-10-27-scoreline
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -144,7 +144,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-26-absence-midday
+  --reference datasets/backtest-2026-10-27-scoreline-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -176,6 +176,28 @@ the code before and after each 2026-10-24 change, without injury reports:
 On 2024-25 the model's margin MAE is 11.37 against the closing line's 10.69
 (ESPN BET for every game) and the naive point-differential rating's 11.50; winner
 Brier 0.2109 against 0.1964. The gap to the close, 0.68 points, matches 2025-26's.
+
+## Reference: 2026-10-27 (team totals agree with the margin)
+
+`datasets/backtest-2026-10-27-scoreline/` (T-minus-30) and
+`datasets/backtest-2026-10-27-scoreline-midday/` (preliminary): the absence
+references with each team's projected players scaled so the two team totals
+differ by the margin location and the game total is unchanged; each total
+moves half the gap (`scoreline.reconcile`). Points, their SD and interval and
+the expected makes scale together; the margin is still located from the
+player model's own totals, so it does not move.
+
+T-minus-30, against the absence reference (± two standard errors): team
+points −0.120 ± 0.042 (9.45 → 9.33), improved in each season (2023-24 −0.111,
+2024-25 −0.107, 2025-26 −0.142); margin, winner Brier, minutes and
+participation unchanged by construction; points −0.0015 ± 0.0016, interval
+score −0.011 ± 0.011 and the three biases within noise.
+Preliminary, against the absence midday reference: team points −0.081 ±
+0.042 (9.37 → 9.29), improved in each season; everything else unchanged or
+within noise. On the 2026-10-27 production forecast for POR @ LAL the totals
+went from 112.7–109.5 (Portland by 3.2, the player sum) to 111.4–110.7, the
+published Portland by 0.7, with the game total 222.2 and the margin
+unchanged; the largest change to a player was 0.33 points.
 
 ## Reference: 2026-10-26 (absences in the team rating)
 

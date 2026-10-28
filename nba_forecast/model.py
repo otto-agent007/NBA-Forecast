@@ -502,7 +502,15 @@ def forecast(snapshot, history):
     result=apply_shot_profiles(extend_boxscore(result,snapshot,history),snapshot)
     if uses_refinements(snapshot):
         from .margins import build_margin_forecasts
+        from .scoreline import reconcile
         result['margin_forecasts']=build_margin_forecasts(snapshot,result)
+        # Team totals then agree with the published margin (scoreline.py).
+        lineups=snapshot.get('preflight',{}).get('lineups')
+        games={g['game_id']:g for g in snapshot['games']}
+        for margin in result['margin_forecasts']:
+            if margin['status']=='estimated':
+                reconcile(result['predictions'],games[margin['game_id']],margin['mean_margin'],lineups=lineups)
+        result['game_totals']=[game_totals(g,result['predictions'],lineups=lineups) for g in snapshot['games'] if g['season_type']=='Regular Season']
     return result
 
 
