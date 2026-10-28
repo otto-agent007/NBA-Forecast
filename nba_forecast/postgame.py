@@ -75,16 +75,12 @@ def analyze_game(payload, boxscore, known_at, forecast=None):
     if (closing and closing['actionType']=='game' and closing.get('subType')=='end' and closing['period']>g['period']
             and (int(closing['scoreHome']),int(closing['scoreAway']))==(g['homeTeam']['score'],g['awayTeam']['score'])):
         actions=actions[:-1]
-    # The feed can re-send corrected actions after the game-end marker (0022600101 re-sent
-    # a first-quarter layup and the quarter's end); those go back by game clock. Every
-    # action before the marker keeps the strict chronology check below.
-    marker=next((i for i,a in enumerate(actions) if a['actionType']=='game' and a.get('subType')=='end'),None)
-    if marker is not None and marker<len(actions)-1:
-        head=actions[:marker+1]
-        for late in actions[marker+1:]:
-            t=elapsed(late)
-            head.insert(next((i for i,a in enumerate(head) if elapsed(a)>t or a is head[-1]),len(head)),late)
-        actions=head
+    # The feed lists actions in the order they were logged, not always game order: it re-sent
+    # a first-quarter layup after the game-end marker (0022600101) and listed first-quarter
+    # free throws after the quarter's end and inside the second (0022600009). Each action's
+    # clock and score are right, so actions go in clock order; the stable sort keeps the
+    # feed's order within a second, and the game-end marker stays last.
+    actions.sort(key=lambda a:(elapsed(a),a['actionType']=='game' and a.get('subType')=='end'))
     rows=normalize_boxscore(boxscore, f'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{gid}.json', known_at)
     end=2880+max(0,g['period']-4)*300
     points=[dict(elapsed=0,margin=0,home=0,away=0,period=1,clock='PT12M00.00S',action_number=None)]
@@ -104,8 +100,6 @@ def analyze_game(payload, boxscore, known_at, forecast=None):
             raise ValueError('Duplicate play-by-play event')
         seen.add(n)
         t=elapsed(a)
-        if t<previous:
-            raise ValueError('Nonchronological play-by-play')
         previous=t
         if a['actionType']=='period' and a.get('subType')=='end':
             periods.add(a['period'])
