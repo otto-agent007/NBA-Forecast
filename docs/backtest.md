@@ -196,6 +196,10 @@ baseline path, 3,676 games; the 3,674 with T-minus-30 reports and closing lines
 | Weeks 5–8 | 470 | 10.41 | 10.29 | +0.12 | −0.72 |
 | Gate window | 2,621 | 11.23 | 10.90 | +0.33 | −0.85 |
 
+The reference was rerun after team totals were reconciled to the margin
+(reference 2026-10-27, team totals agree with the margin): margins and every
+bias are identical, so the table stands; team points MAE −0.102 ± 0.040.
+
 The replayed model is no worse against the close early than late. Seeding also
 moves the gate window: against the reference (± two standard errors, as the
 gate prints), 2023-24 and 2024-25 together improve on margin (−0.086 ± 0.075),
@@ -268,6 +272,15 @@ points off each team's projected total. The 24 live games of 2026-10-24..27
 rerun both ways show the same pattern (team-points bias −0.84 baseline, −2.79
 production). The defense factor earns its place; pace at strength 0.25 does
 nothing measurable.
+
+Rerun with team totals reconciled to the margin, against
+`datasets/backtest-2026-10-27-scoreline` (the reference
+`datasets/backtest-2026-10-27-production-path/` is this run): team points
++0.37 ± 0.16 and team-points bias −1.23 → −3.11, worse; winner Brier −0.0020 ±
+0.0018, improved; the rest as before. On this path the reconciliation itself
+cut team points by 0.074 ± 0.040 with everything else unchanged; it moves
+totals between the two teams, so the shortfall's bias is untouched. The
+layer table above predates it.
 
 `rotation_allocation.redistribute` inferred the season from `as_of`, which in a
 replay is the day it runs, so it found no history for 2023-24 and 2024-25 and
