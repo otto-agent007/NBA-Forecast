@@ -1,0 +1,11 @@
+[Unit]
+Description=Rebuild NBA forecast derived reports every minute when their inputs changed
+
+[Timer]
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+Persistent=true
+Unit=nba-derived.service
+
+[Install]
+WantedBy=timers.target

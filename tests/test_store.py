@@ -339,3 +339,25 @@ class StoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LedgerConcurrencyTests(unittest.TestCase):
+    def test_a_long_read_does_not_block_a_write(self):
+        """The derived service and the dashboard read for minutes while the tick writes: write-ahead logging, read-only readers included."""
+        from nba_forecast.operations import _ledger_state
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / 'forecast.sqlite'
+            snapshot, history, forecast = inputs()
+            with patch('nba_forecast.store._now', return_value=NOW):
+                store.save_run(db, snapshot, history, forecast)
+            reader = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True)
+            self.assertEqual(reader.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            reader.execute('BEGIN')
+            cursor = reader.execute('SELECT run_id FROM runs')  # a report part-way through its read
+            with patch('nba_forecast.store._now', return_value=NOW):
+                store.save_run(db, snapshot, history, forecast)  # would wait out the 30 s timeout in rollback mode
+            self.assertEqual(len(cursor.fetchall()), 1, 'the reader keeps its snapshot')
+            reader.rollback()
+            self.assertEqual(reader.execute('SELECT COUNT(*) FROM runs').fetchone()[0], 2)
+            reader.close()
+            self.assertEqual(_ledger_state(db)[0][0], 2)

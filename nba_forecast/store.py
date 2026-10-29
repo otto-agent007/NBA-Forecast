@@ -178,6 +178,10 @@ def _connect(db_path):
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
+    # Write-ahead logging, stored in the file: the derived service and the dashboard
+    # read the ledger for minutes at a time while the tick writes, and in rollback
+    # mode one long read would hold the tick's commit past its 30 s timeout.
+    conn.execute('PRAGMA journal_mode = WAL')
     conn.executescript(_LEGACY_SCHEMA if _is_legacy(conn) else _SCHEMA)
     return conn
 
@@ -667,15 +671,17 @@ def dedupe_histories(db_path, backup_suffix='.pre-history-dedupe'):
     from pathlib import Path
     db = Path(db_path)
     backup, staging = db.with_name(db.name + backup_suffix), db.with_name(db.name + '.dedupe-tmp')
-    for suffix in ('-wal', '-journal'):
-        if db.with_name(db.name + suffix).exists():
-            raise ValueError(f'{db.name}{suffix} exists; recover the open transaction first')
+    if db.with_name(db.name + '-journal').exists():
+        raise ValueError(f'{db.name}-journal exists; recover the open transaction first')
     if backup.exists():
         raise ValueError(f'{backup} already exists')
     source = sqlite3.connect(db, timeout=30)
     try:
         if not _is_legacy(source):
             raise ValueError('ledger histories are already stored once')
+        # Fold the write-ahead log into the file, so the hard-linked original is complete on its own.
+        if source.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]:
+            raise ValueError('the write-ahead log could not be checkpointed; close the other connections first')
         source.execute('BEGIN IMMEDIATE')  # No other writer can commit until the swap.
         staging.unlink(missing_ok=True)
         target = sqlite3.connect(staging)

@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
-from nba_forecast.operations import run_tick
+from nba_forecast.operations import run_tick,run_derived,request_derived
 from nba_forecast.schedule import normalize_season
 from tests.test_schedule import payload,game
 from tests.test_store import inputs
@@ -103,6 +103,18 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result['status'],'complete')
         self.assertEqual(result['waiting_jobs'][0]['game_id'],'0022600001')
         self.assertFalse(result['errors'])
+
+    def test_the_tick_never_rebuilds_derived_reports_and_times_its_phases(self):
+        schedule=normalize_season(payload([game(start='2026-10-22T22:00:00Z')]),NOW)
+        schedule['version']='v1'
+        clock='2026-10-21T23:00:00Z'
+        with tempfile.TemporaryDirectory() as d,patch('nba_forecast.operations._now',return_value=clock),patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster'),\
+             patch('nba_forecast.operations._derived_reports',side_effect=AssertionError('the tick rebuilt the derived reports')):
+            result=run_tick(d,[])
+            self.assertFalse((Path(d)/'derived-reports.json').exists())
+        self.assertEqual(result['status'],'complete')
+        self.assertEqual(result['derived_reports'],dict(status='none',computed_at=None,service='nba-derived'))
+        self.assertTrue({'calendar','market_lines','forecasts','evaluate_runs','derived'}<=set(result['timings']))
     def setUp(self):
         self.daily=self.enterContext(patch('nba_forecast.operations.capture_daily',return_value={'state':'waiting'}))
         self.enterContext(patch('nba_forecast.operations.archive_daily_references',return_value=dict(sources=[],failures=[])))
@@ -237,7 +249,9 @@ class EvidenceTickTests(unittest.TestCase):
              patch('nba_forecast.prospective_margin_calibration.fit_prospective_margin',return_value=margin),\
              patch('nba_forecast.prospective_margin_calibration.verify_margin_calibration_sources',return_value=False),\
              patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}):
-            report=run_tick(self.folder,[])
+            run_tick(self.folder,[])
+            report=run_derived(self.folder)
+        self.assertEqual(report['status'],'rebuilt')
         self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],old)
         self.assertTrue(any(e.get('task')=='prospective_margin_calibration' for e in report['errors']))
 
@@ -271,6 +285,9 @@ class EvidenceTickTests(unittest.TestCase):
              patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}):
             result=run_tick(self.folder,[])
             self.assertFalse(result['errors'],result['errors'])
+            self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],old,'the tick itself activates nothing')
+            result=run_derived(self.folder)
+            self.assertFalse(result['errors'],result['errors'])
             updated=json.loads(pointer.read_text())['artifact_sha256']
             self.assertNotEqual(updated,old)
             archive=json.loads((self.folder/'model-artifacts'/(updated+'.json')).read_text())
@@ -279,6 +296,9 @@ class EvidenceTickTests(unittest.TestCase):
             self.assertEqual(status['applied_margin_calibration']['evidence_sha256'],margin['evidence_sha256'])
             margin['status']='not_ready'
             second=run_tick(self.folder,[])
+            self.assertFalse(second['errors'],second['errors'])
+            request_derived(self.folder,'test')
+            second=run_derived(self.folder)
             self.assertFalse(second['errors'],second['errors'])
             self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],updated)
             status=json.loads((self.folder/'model-status.json').read_text())
@@ -292,6 +312,8 @@ class EvidenceTickTests(unittest.TestCase):
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.schedule=normalize_season(payload([game()]),NOW)
         self.schedule['version']='v1'
+        (self.folder/'schedule').mkdir()
+        (self.folder/'schedule/latest.json').write_text(json.dumps(self.schedule))  # what the derived run reads
         self.roster=inputs()[0]['roster']
         self.roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
         for player,team in zip(self.roster['players'],self.roster['team_ids']):
@@ -328,13 +350,16 @@ class EvidenceTickTests(unittest.TestCase):
             self.assertEqual(first['created_runs'],1,first['errors'])
             saved=self.saved()[0]
             self.assertEqual(saved['model_enhancements']['artifact_sha256'],digest)
+            derived=run_derived(self.folder)
+            self.assertEqual(derived['status'],'rebuilt',derived['errors'])
             upgraded=pointer.read_bytes()
             status=json.loads((self.folder/'model-status.json').read_text())
             self.assertNotEqual(status['artifact_sha256'],digest)
             self.assertEqual(status['validation'],artifact['validation_report'])
             second=run_tick(self.folder,[])
             self.assertEqual(second['created_runs'],1,second['errors'])
-            self.assertEqual(pointer.read_bytes(),upgraded)
+            self.assertEqual(run_derived(self.folder)['status'],'rebuilt','the ledger changed')
+            self.assertEqual(pointer.read_bytes(),upgraded,'the same evidence is not refit')
             third=run_tick(self.folder,[])
             self.assertEqual(third['created_runs'],0,third['errors'])
 

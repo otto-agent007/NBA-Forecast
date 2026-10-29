@@ -16,9 +16,14 @@ pinned copy of the package (`docs/season-operations.md`). Each tick:
 - forecasts every pregame game whenever its evidence changes (report edition,
   ESPN injury list, roster), saving the whole input and output in an
   append-only SQLite ledger;
-- captures sportsbook lines from ESPN at the forecast cadence;
-- after finals, scores the saved forecasts and rebuilds the performance,
-  calibration, market and postgame reports the dashboard reads.
+- captures sportsbook lines from ESPN and Kalshi at the forecast cadence, every
+  minute in the last five before tip;
+- after finals, scores the saved forecasts.
+
+A second one-minute timer runs `python -m nba_forecast derived`, which rebuilds
+the performance, calibration, market, postgame and daily-review reports the
+dashboard reads whenever their inputs changed. It runs beside the tick, so a
+rebuild that takes minutes never delays a checkpoint forecast or a line capture.
 
 Deploy a merged change with `python3 -m nba_forecast.deploy --directory
 data/operations/production` (`--dry-run` first); it records the commit in
@@ -72,14 +77,14 @@ and the dashboard's unit, build and end-to-end checks.
 
 | Path | Holds |
 |---|---|
-| `nba_forecast/` | The package: `model`, `candidate`, `margins`, `totals` (the forecast); `operations`, `injuries`, `injury_capture`, `preflight`, `schedule`, `market_lines` (the tick); `store` (the ledger); `backtest`, `injury_history`, `espn_season`, `market_history` (the replay and its datasets); `dashboard`; `deploy` |
+| `nba_forecast/` | The package: `model`, `candidate`, `margins`, `totals` (the forecast); `operations`, `injuries`, `injury_capture`, `preflight`, `schedule`, `market_lines`, `kalshi_lines` (the tick and the derived service); `store` (the ledger); `backtest`, `injury_history`, `espn_season`, `market_history` (the replay and its datasets); `dashboard`; `deploy` |
 | `tests/` | `unittest` suites, offline, one per module |
 | `datasets/` | Committed replay inputs (box-score histories, team games, injury reports, closing lines) and every backtest reference scoreboard |
 | `data/` | Gitignored: production operations under `data/operations/production`, raw archives, the ledger; back it up |
 | `dashboard/` | The React page; `dist/` is served by the dashboard service |
 | `scripts/research/` | The analysis scripts behind the research-lessons numbers |
 | `docs/` | Guides; start at [`docs/README.md`](docs/README.md) |
-| `deploy/systemd/` | Unit templates; `scripts/install_services.py` writes them for a host |
+| `deploy/systemd/` | Unit templates (tick, derived reports, dashboard); `scripts/install_services.py` writes them for a host from `nba_forecast/units.py` |
 
 Rules of the data: production data is never edited by hand, every ingested
 source is archived with its hash and retrieval time, and nothing is read from

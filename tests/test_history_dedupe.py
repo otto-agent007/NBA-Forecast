@@ -114,11 +114,12 @@ class HistoryDedupeTests(unittest.TestCase):
             row = list(conn.execute(f'SELECT {",".join(store._RUN_COLUMNS)} FROM runs').fetchone())
             row[0], row[6] = 'conflict', '[]'
             conn.execute(f'INSERT INTO runs VALUES ({",".join("?" * 12)})', row)
-        before = self.db.read_bytes()
+        before = ledger_rows(self.db)
         with self.assertRaisesRegex(ValueError, 'different content'):
             store.dedupe_histories(self.db)
-        self.assertEqual(self.db.read_bytes(), before)
-        self.assertEqual(sorted(p.name for p in self.folder.iterdir()), ['forecast.sqlite'])
+        self.assertEqual(ledger_rows(self.db), before, 'the original is left in place')
+        # The open connection above keeps the write-ahead log and its index beside the file.
+        self.assertEqual(sorted(p.name for p in self.folder.iterdir() if not p.name.endswith(('-wal', '-shm'))), ['forecast.sqlite'])
 
     def test_scoring_never_loads_the_input_history(self):
         run_id = self.save(history('X' * (4 * 1024 * 1024)))
