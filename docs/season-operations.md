@@ -482,7 +482,9 @@ final windows. Configure your host monitor to flag nonzero exit status and a
 stale heartbeat (no finished tick for 10 minutes; no finished derived run for
 an hour).
 No email/Slack messages are sent. Back up the entire persistent operations
-directory, especially `forecast.sqlite`, schedule versions and raw evidence.
+directory, especially `forecast.sqlite` with its write-ahead log
+(`forecast.sqlite-wal` and `-shm`, present while a connection is open; a copy
+without them lacks the latest commits), schedule versions and raw evidence.
 Do not expire raw files referenced by stored forecasts; plan retention/storage
 before leaving minute-by-minute capture running for a season.
 
