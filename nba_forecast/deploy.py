@@ -11,12 +11,15 @@ Each step is idempotent, so a second run after a success changes nothing:
    the new artifact, holding the tick's and the derived service's locks so a
    running tick or rebuild finishes first and neither can write a refit of the
    old artifact over the new one;
-4. write the units this release needs that the host lacks (the derived service
+4. store write-ahead logging in the ledger (``PRAGMA journal_mode=WAL``), retrying
+   while a reader such as a dashboard request holds the file; the derived
+   service's long reads then never hold up the tick's commits;
+5. write the units this release needs that the host lacks (the derived service
    and its timer, from ``nba_forecast.units``), rewrite ``WorkingDirectory`` in
    every service unit, reload systemd, restart the dashboard and enable a new
    timer: the timers run the new release on their next tick;
-5. write ``deployed.json``: the commit, package digest, release, artifact, time
-   and the units written or rewritten.
+6. write ``deployed.json``: the commit, package digest, release, artifact, time,
+   the ledger's journal mode and the units written or rewritten.
 
 The next tick re-forecasts every pregame game under the new artifact; the next
 derived run refits the prospective calibration, which is bound to the model key.
@@ -30,6 +33,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -119,6 +123,27 @@ def _rewrite_unit(path, release):
     return True
 
 
+def _wal(directory, wait):
+    """Store write-ahead logging in the ledger; the switch needs the file to itself, so retry while a reader holds it."""
+    db = Path(directory) / 'forecast.sqlite'
+    if not db.exists():
+        return None
+    deadline = time.monotonic() + wait
+    while True:
+        conn = sqlite3.connect(db, timeout=1)
+        try:
+            mode = conn.execute('PRAGMA journal_mode = WAL').fetchone()[0]
+            if mode == 'wal':
+                return mode
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            conn.close()
+        if time.monotonic() >= deadline:
+            raise ValueError(f'the ledger could not be switched to write-ahead logging in {wait} seconds; a reader holds it')
+        time.sleep(1)
+
+
 def _missing_units(units):
     return [name for name in CREATED_BY_DEPLOY if not (units / name).exists()]
 
@@ -167,6 +192,7 @@ def deploy(directory, units, *, systemd=True, dry_run=False, package=PACKAGE, wa
             activation = dict(artifact_sha256=installed, activated_at=now)
             atomic_json(backup / 'activation.json', activation)
             atomic_json(directory / 'model-upgrade-active.json', activation)
+        plan['ledger_journal_mode'] = _wal(directory, wait)
         created = _create_units(units, release, directory)
         rewritten = [name for name in UNITS if _rewrite_unit(units / name, release)]
         plan['units_created'], plan['units_rewritten'] = created, rewritten

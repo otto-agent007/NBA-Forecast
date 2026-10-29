@@ -19,6 +19,11 @@ def production(root):
     old['runner_package_sha256'] = 'f' * 64  # the release being replaced
     active = install_artifact(root, old)
     (root / 'model-upgrade-active.json').write_text(json.dumps(dict(artifact_sha256=active, activated_at='2026-10-25T08:00:00Z')))
+    import sqlite3
+    ledger = sqlite3.connect(root / 'forecast.sqlite')  # a rollback-mode ledger from before this release
+    ledger.execute('CREATE TABLE marker (x)')
+    ledger.commit()
+    ledger.close()
     units = root / 'units'
     units.mkdir()
     for name in ('nba-forecast.service', 'nba-dashboard.service'):  # a host installed before the derived service existed
@@ -37,6 +42,8 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active, 'a dry run writes nothing')
             self.assertFalse((root / 'deployed.json').exists())
             self.assertFalse((units / 'nba-derived.timer').exists())
+            import sqlite3
+            self.assertEqual(sqlite3.connect(root / 'forecast.sqlite').execute('PRAGMA journal_mode').fetchone()[0], 'delete')
             result = D.deploy(root, units, systemd=False)
             digest = package_digest(D.PACKAGE)
             self.assertEqual(result['package_sha256'], digest)
@@ -62,6 +69,8 @@ class DeployTests(unittest.TestCase):
             self.assertEqual((recorded['package_sha256'], recorded['artifact_sha256']), (digest, result['artifact_sha256']))
             self.assertEqual(recorded['previous']['artifact_sha256'], old_active)
             self.assertEqual(recorded['units_created'], list(D.CREATED_BY_DEPLOY))
+            self.assertEqual(recorded['ledger_journal_mode'], 'wal')
+            self.assertEqual(sqlite3.connect(root / 'forecast.sqlite').execute('PRAGMA journal_mode').fetchone()[0], 'wal')
             again = D.deploy(root, units, systemd=False)
             self.assertTrue(again['unchanged'])
             self.assertEqual(again['artifact_sha256'], result['artifact_sha256'], 'the same code deploys to the same artifact')
@@ -80,6 +89,19 @@ class DeployTests(unittest.TestCase):
                     fcntl.flock(held, fcntl.LOCK_UN)
             result = D.deploy(root, units, systemd=False, wait=1)
             self.assertNotEqual(result['artifact_sha256'], old_active)
+
+    def test_deploy_waits_for_a_ledger_reader_and_gives_up_after_the_wait(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            reader = sqlite3.connect(root / 'forecast.sqlite')
+            reader.execute('BEGIN')
+            reader.execute('SELECT * FROM marker').fetchall()  # a dashboard request part-way through a read
+            with self.assertRaisesRegex(ValueError, 'write-ahead'):
+                D.deploy(root, units, systemd=False, wait=2)
+            reader.rollback()
+            reader.close()
+            self.assertEqual(D.deploy(root, units, systemd=False, wait=2)['ledger_journal_mode'], 'wal')
 
     def test_a_unit_without_one_working_directory_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

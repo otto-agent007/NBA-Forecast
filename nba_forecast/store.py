@@ -180,8 +180,16 @@ def _connect(db_path):
     conn.execute('PRAGMA foreign_keys = ON')
     # Write-ahead logging, stored in the file: the derived service and the dashboard
     # read the ledger for minutes at a time while the tick writes, and in rollback
-    # mode one long read would hold the tick's commit past its 30 s timeout.
-    conn.execute('PRAGMA journal_mode = WAL')
+    # mode one long read would hold the tick's commit past its 30 s timeout. The
+    # switch needs the file to itself; a reader holding it means this connection
+    # works in the stored mode and the next one tries again (deploy switches it
+    # once, with retries).
+    conn.execute('PRAGMA busy_timeout = 1000')
+    try:
+        conn.execute('PRAGMA journal_mode = WAL')
+    except sqlite3.OperationalError:
+        pass
+    conn.execute('PRAGMA busy_timeout = 30000')
     conn.executescript(_LEGACY_SCHEMA if _is_legacy(conn) else _SCHEMA)
     return conn
 

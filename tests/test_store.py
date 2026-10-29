@@ -361,3 +361,22 @@ class LedgerConcurrencyTests(unittest.TestCase):
             self.assertEqual(reader.execute('SELECT COUNT(*) FROM runs').fetchone()[0], 2)
             reader.close()
             self.assertEqual(_ledger_state(db)[0][0], 2)
+
+    def test_a_reader_holding_a_rollback_mode_ledger_delays_the_switch_but_not_the_connection(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / 'forecast.sqlite'
+            store._connect(db).close()  # a ledger with its schema, as production has
+            reader = sqlite3.connect(db)
+            self.assertEqual(reader.execute('PRAGMA journal_mode = DELETE').fetchone()[0], 'delete', 'as before this release')
+            reader.execute('BEGIN')
+            reader.execute('SELECT * FROM evaluations').fetchall()  # a shared lock, held until the transaction ends
+            started = datetime.now()
+            conn = store._connect(db)
+            self.assertLess((datetime.now() - started).total_seconds(), 10)
+            self.assertEqual(conn.execute('PRAGMA journal_mode').fetchone()[0], 'delete', 'still usable in the stored mode')
+            conn.close()
+            reader.rollback()
+            reader.close()
+            conn = store._connect(db)
+            self.assertEqual(conn.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            conn.close()
