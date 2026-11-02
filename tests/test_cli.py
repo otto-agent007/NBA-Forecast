@@ -77,6 +77,12 @@ class CliTests(unittest.TestCase):
                                   '--output', Path(folder) / 'rows.json', success=False)
             self.assertIn('SHA256', result.stderr)
 
+    def test_derived_command_waits_for_a_calendar_and_writes_its_report(self):
+        with tempfile.TemporaryDirectory() as d:
+            result = self.run_cli('derived', '--directory', d)
+            self.assertEqual(json.loads(result.stdout)['status'], 'waiting')
+            self.assertEqual(json.loads((Path(d) / 'last-derived.json').read_text())['status'], 'waiting')
+
     def test_no_command_prints_usage(self):
         self.assertIn('usage:', self.run_cli(success=False).stderr)
 

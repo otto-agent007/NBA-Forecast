@@ -84,11 +84,17 @@ class EvaluationTests(unittest.TestCase):
 
 
 class DerivedReportTests(unittest.TestCase):
+    """The derived service rebuilds only when its inputs changed; the tick carries its summary and rebuilds nothing."""
     def setUp(self):
         self.folder=Path(self.enterContext(tempfile.TemporaryDirectory()))
-        self.schedule=dict(season='2026-27',games=[dict(game_id='G1',start_time='2026-10-22T18:00:00Z')])
+        self.schedule=dict(version='v1',season='2026-27',games=[dict(game_id='G1',start_time='2026-10-22T18:00:00Z')])
+        self.save_schedule()
         self.builds=0
         self.clock='2026-10-22T20:00:00+00:00'
+
+    def save_schedule(self):
+        (self.folder/'schedule').mkdir(exist_ok=True)
+        (self.folder/'schedule/latest.json').write_text(json.dumps(self.schedule))
 
     def build(self,folder,db,schedule,active_model,model_digest,report):
         self.builds+=1
@@ -98,22 +104,25 @@ class DerivedReportTests(unittest.TestCase):
         report['daily_review']=dict(build=self.builds)
         report['errors'].append(dict(task='daily_review',date='x'))
 
-    def refresh(self,**extra):
-        report=dict(errors=[],warnings=[],**extra)
+    def refresh(self):
         with patch('nba_forecast.operations._derived_reports',side_effect=self.build),\
              patch('nba_forecast.operations._now',return_value=self.clock):
-            operations._refresh_derived(self.folder,self.folder/'forecast.sqlite',self.schedule,None,None,report)
-        return report
+            return operations.run_derived(self.folder)
 
-    def test_unchanged_inputs_reuse_reports_errors_and_summaries(self):
+    def test_unchanged_inputs_do_nothing_and_the_tick_carries_the_last_summary(self):
         first=self.refresh()
         second=self.refresh()
-        self.assertEqual(self.builds,1)
-        self.assertEqual(second['derived_reports']['status'],'unchanged')
-        self.assertEqual(second['daily_review'],first['daily_review'])
-        self.assertEqual(second['errors'],first['errors'])
+        self.assertEqual((first['status'],second['status'],self.builds),('rebuilt','unchanged',1))
+        self.assertEqual(second['computed_at'],first['computed_at'])
+        report=dict(errors=[],warnings=[])
+        operations._carry_derived(self.folder,None,report)
+        self.assertEqual(report['daily_review'],first['daily_review'])
+        self.assertEqual(report['errors'],first['errors'])
+        self.assertEqual(report['derived_reports'],dict(status='carried',computed_at=first['computed_at'],service='nba-derived'))
+        self.assertEqual(json.loads((self.folder/'last-derived.json').read_text())['status'],'unchanged')
+        self.assertEqual(len((self.folder/'derived.jsonl').read_text().splitlines()),2)
 
-    def test_new_evidence_missing_output_age_or_recovery_rebuilds(self):
+    def test_new_evidence_missing_output_age_or_request_rebuilds(self):
         self.refresh()
         (self.folder/'finals').mkdir()
         (self.folder/'finals/G1.json').write_text('[]')
@@ -122,8 +131,10 @@ class DerivedReportTests(unittest.TestCase):
         self.refresh()
         self.clock=at(self.clock,operations.DERIVED_REFRESH_SECONDS+1)
         self.refresh()
-        self.refresh(recovered_artifacts=1)
+        operations.request_derived(self.folder,'recovered_artifacts')
+        self.refresh()
         self.schedule['games'][0]['start_time']='2026-10-22T19:00:00Z'
+        self.save_schedule()
         self.refresh()
         self.assertEqual(self.builds,6)
         self.refresh()
@@ -147,8 +158,21 @@ class DerivedReportTests(unittest.TestCase):
     def test_cross_check_metadata_alone_does_not_rebuild(self):
         self.refresh()
         self.schedule['games'][0]['schedule_corroboration']=dict(observed_at=self.clock)
+        self.save_schedule()
         self.refresh()
         self.assertEqual(self.builds,1)
+
+    def test_no_calendar_or_a_held_lock_does_nothing(self):
+        import fcntl
+        (self.folder/'schedule/latest.json').unlink()
+        self.assertEqual(self.refresh()['status'],'waiting')
+        self.save_schedule()
+        with (self.folder/'derived.lock').open('a') as held:
+            fcntl.flock(held,fcntl.LOCK_EX)  # a deploy, or another run
+            busy=self.refresh()
+        self.assertEqual((busy['status'],self.builds),('busy',0))
+        self.assertEqual(json.loads((self.folder/'last-derived.json').read_text())['status'],'waiting')
+        self.assertEqual(self.refresh()['status'],'rebuilt')
 
 
 class DailyCalendarTests(unittest.TestCase):

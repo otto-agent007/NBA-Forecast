@@ -163,12 +163,22 @@ for the owner to delete. A conflicting history under one digest aborts it.
 An idle tick does little work. Live runs are rescored only when one of their
 `finals/` files or their latest evaluation revision changes
 (`evaluation-state.json`). Performance, benchmarks, calibration, postgame and
-daily reviews are rebuilt only when the ledger, finals contents, archived box
-scores or play-by-play, calendar games, active model, roster presence, Pacific
-date or code changes, and at least every six hours; otherwise the tick report carries the previous summary,
-errors and warnings (`derived_reports.status: unchanged`, see
-`derived-reports.json`). Outcome discovery still runs every tick and keeps the
-model status's outcome summary current.
+daily reviews are the derived service's job, not the tick's: `python -m
+nba_forecast derived` runs from its own one-minute timer (`nba-derived.timer`,
+at :30, below the tick's CPU priority) and rebuilds them only when the ledger,
+finals contents, archived box scores or play-by-play, calendar games, active
+model, roster presence, Pacific date, code or an explicit request
+(`derived-request.json`, written by a tick that recovered run artifacts)
+changes, and at least every six hours. A rebuild takes minutes (on 2026-10-28
+the performance report alone took 84 s and the ticks that rebuilt took 5 to 10
+minutes, so near-tip Kalshi captures were skipped and the T−30 checkpoints ran
+late); beside the tick it costs the checkpoints and captures nothing. The tick
+carries the last rebuild's summary, errors and warnings into its report
+(`derived_reports`, `derived-reports.json`); the service writes
+`last-derived.json` and appends `derived.jsonl`, and each tick report lists its
+phase `timings`. The ledger runs in SQLite's write-ahead log mode, so the
+service's long reads never hold up the tick's writes. Outcome discovery still
+runs every tick and keeps the model status's outcome summary current.
 
 ## Participation
 
@@ -425,16 +435,19 @@ pipeline produces this queue; it does not secretly invoke a paid model.
 
 ## Persistent execution
 
-The repository includes user-systemd service/timer templates in `deploy/systemd/`.
-On an always-on Linux host, replace both absolute repository paths in the service,
-ensure `/usr/bin/python3` is Python 3.11+, install Poppler, and run one tick first.
-Then copy the edited units into `~/.config/systemd/user/` and run:
+The repository includes user-systemd service/timer templates in `deploy/systemd/`
+(the tick, the derived-report service and their one-minute timers; the
+installer `scripts/install_services.py` writes all of them, and the dashboard's,
+from `nba_forecast/units.py`). On an always-on Linux host, replace the absolute
+paths in both service templates, ensure `/usr/bin/python3` is Python 3.11+,
+install Poppler, and run one tick first. Then copy the edited units into
+`~/.config/systemd/user/` and run:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now nba-forecast.timer
-systemctl --user list-timers nba-forecast.timer
-journalctl --user -u nba-forecast.service
+systemctl --user enable --now nba-forecast.timer nba-derived.timer
+systemctl --user list-timers nba-forecast.timer nba-derived.timer
+journalctl --user -u nba-forecast.service -u nba-derived.service
 ```
 
 User services need an active user manager; configure lingering on the host if
@@ -451,18 +464,27 @@ python3 -m nba_forecast.deploy --directory data/operations/production
 ```
 
 It pins the release, builds the refined model artifact bound to that package
-digest from the active model's parent, backs up and repoints the activation,
-rewrites `WorkingDirectory` in both user units, reloads systemd and restarts the
-dashboard, and writes `production/deployed.json` with the commit, package digest,
-release and artifact. Run it again and it changes nothing. The next tick
-re-forecasts every pregame game under the new artifact and refits the
-prospective interval calibration, which is bound to the model key.
+digest from the active model's parent, backs up and repoints the activation
+while holding the tick's and the derived service's locks (a running tick or
+rebuild finishes first; `--wait` sets how long to wait, 900 s by default),
+writes the derived service and its timer for a host that does not have them
+yet and enables the timer, rewrites `WorkingDirectory` in every service unit,
+reloads systemd and restarts the dashboard, and writes
+`production/deployed.json` with the commit, package digest, release, artifact
+and the units written or rewritten. Run it again and it changes nothing. The
+next tick re-forecasts every pregame game under the new artifact; the next
+derived run refits the prospective interval calibration, which is bound to the
+model key.
 
-`last-tick.json`, append-only `ticks.jsonl`, service exit status and journald
-surface failures and missed final windows. Configure your host monitor to flag
-nonzero exit status and a stale heartbeat (no finished tick for 10 minutes).
+`last-tick.json` and `last-derived.json`, the append-only `ticks.jsonl` and
+`derived.jsonl`, service exit status and journald surface failures and missed
+final windows. Configure your host monitor to flag nonzero exit status and a
+stale heartbeat (no finished tick for 10 minutes; no finished derived run for
+an hour).
 No email/Slack messages are sent. Back up the entire persistent operations
-directory, especially `forecast.sqlite`, schedule versions and raw evidence.
+directory, especially `forecast.sqlite` with its write-ahead log
+(`forecast.sqlite-wal` and `-shm`, present while a connection is open; a copy
+without them lacks the latest commits), schedule versions and raw evidence.
 Do not expire raw files referenced by stored forecasts; plan retention/storage
 before leaving minute-by-minute capture running for a season.
 

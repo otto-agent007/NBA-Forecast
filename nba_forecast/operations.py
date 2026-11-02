@@ -40,7 +40,11 @@ def _now():
 # tipoff. A failed check retries from five minutes, doubling, up to three hours.
 CALENDAR_CHECK_HOUR=8
 CALENDAR_RETRY_SECONDS=(300,3*3600)
-# Derived reports are rebuilt when their inputs change, and at least this often.
+# Derived reports (performance, calibration, postgame, daily reviews, market) are
+# rebuilt by the derived service, `python -m nba_forecast derived` on its own
+# one-minute timer, when their inputs change and at least this often. The tick
+# never rebuilds them: a rebuild takes minutes, and the tick's checkpoint
+# forecasts and line captures run to the minute.
 DERIVED_REFRESH_SECONDS=6*3600
 # A saved roster this recent serves preliminary forecasts; the T-30 final checkpoint
 # refreshes one older than fifteen minutes. Membership changes are an evidence change.
@@ -175,12 +179,11 @@ def _calendar(folder,season,report):
     saved=_read(folder/'schedule/latest.json',None)
     deferred=bool(state.get('next_attempt_at')) and now<parse_time(state['next_attempt_at'])
     if saved is not None and (deferred or not _calendar_due(state,now)):
-        verified=_read(folder/'schedule/secondary/verified-latest.json',None)
-        if state.get('source')=='espn' and verified and verified.get('crosscheck',{}).get('nba_base_version')==saved.get('version'):
-            report['schedule_source']='espn_verified_cached_nba'
-            return verified
-        report['schedule_source']='unverified_cached_nba' if state.get('consecutive_failures') else 'saved_nba'
-        return saved
+        schedule,source=saved_calendar(folder)
+        if source=='saved_nba' and state.get('consecutive_failures'):
+            source='unverified_cached_nba'
+        report['schedule_source']=source
+        return schedule
     # The daily check is also when the day's ESPN injury list and depth charts are archived.
     try:
         daily=archive_daily_references(folder/'references',now.astimezone(PACIFIC).date().isoformat())
@@ -213,6 +216,21 @@ def _calendar(folder,season,report):
             return saved
     atomic_json(path,dict(checked_at=now.isoformat(),source=source,consecutive_failures=0))
     return schedule
+
+
+def saved_calendar(folder):
+    """The calendar the ticks are using, from disk alone: the day's ESPN-verified copy while it is in use, else the saved NBA calendar.
+
+    Returns ``(schedule, source)``; the schedule is None until the first tick saves one.
+    """
+    saved=_read(folder/'schedule/latest.json',None)
+    if saved is None:
+        return None,None
+    state=_read(folder/'schedule/fetch-state.json',{})
+    verified=_read(folder/'schedule/secondary/verified-latest.json',None)
+    if state.get('source')=='espn' and verified and verified.get('crosscheck',{}).get('nba_base_version')==saved.get('version'):
+        return verified,'espn_verified_cached_nba'
+    return saved,'saved_nba'
 
 
 def ledger_runs(db):
@@ -330,8 +348,21 @@ def run_tick(directory,history):
     return report
 
 
+def _phases(report):
+    """Seconds each phase of a tick took, under ``report['timings']``: call the returned function as each phase ends."""
+    import time
+    timings=report['timings']={}
+    last=[time.monotonic()]
+    def mark(name):
+        now=time.monotonic()
+        timings[name]=round(now-last[0],3)
+        last[0]=now
+    return mark
+
+
 def _tick(folder,history,report):
     validate_history(history)
+    phase=_phases(report)
     # Daily evidence must still be collected when the calendar endpoint fails.
     now=parse_time(_now())
     year=now.year if now.month>=7 else now.year-1
@@ -340,8 +371,10 @@ def _tick(folder,history,report):
         report['daily_injuries']=capture_daily(folder,season,_now())
     except (ValueError,OSError) as exc:
         report['errors'].append(dict(task='daily_injuries',error=str(exc)))
+    phase('daily_injuries')
     schedule=_calendar(folder,season,report)
     report['schedule_version']=schedule['version']
+    phase('calendar')
     statepath=folder/'state.json'
     state=json.loads(statepath.read_text()) if statepath.exists() else {'jobs':{}}
     db=folder/'forecast.sqlite'
@@ -350,6 +383,9 @@ def _tick(folder,history,report):
     cache.mkdir(exist_ok=True)
     _recover_runs(folder,db,state,report)
     atomic_json(statepath,state)
+    if report.get('recovered_artifacts'):
+        request_derived(folder,'recovered_artifacts')
+    phase('recover_runs')
     from .player_sync import enrich_final_cache
     enrich_final_cache(folder)
     history=_merge_finals(history,cache)
@@ -359,6 +395,7 @@ def _tick(folder,history,report):
         if book.get('boxscore_fields_version')!=1:
             from .historical import expand_prior_fields
             atomic_json(prior_path,expand_prior_fields(book,folder))
+    phase('history')
     jobs=due_jobs(schedule,_now(),include_waiting=True)
     by_id={g['game_id']:g for g in schedule['games']}
     report['waiting_jobs']=[dict(game_id=j['game_id'],ready_at=j['ready_at'],reason='Waiting for the 9 AM Pacific initial forecast checkpoint.') for j in jobs if j.get('waiting')]
@@ -380,6 +417,7 @@ def _tick(folder,history,report):
         report['kalshi_lines']=capture_kalshi_lines(folder,upcoming,_now())
     except Exception as exc:
         report['warnings'].append(dict(task='kalshi_lines',error=f'{type(exc).__name__}: {exc}'))
+    phase('market_lines')
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.
     roster=_roster(folder,season,raw,jobs,report) if jobs else None
@@ -391,6 +429,7 @@ def _tick(folder,history,report):
         except (ValueError,OSError) as exc:
             checks[job['game_id']]=exc
     reviews=_job_keys(folder,jobs,checks,capture,roster,active_model,model_digest)
+    phase('evidence_checks')
     # A job that failed is retried after a pause instead of every minute.
     failed=state.setdefault('failed_jobs',{})
     for key in [k for k,v in failed.items() if (parse_time(_now())-parse_time(v['at'])).total_seconds()>86400]:
@@ -412,6 +451,7 @@ def _tick(folder,history,report):
             report['errors'].append(dict(task='forecast',game_id=job['game_id'],stage=job['stage'],error=f'{type(exc).__name__}: {exc}'))
             failed[job['key']]=dict(at=_now(),reason=type(exc).__name__)
     atomic_json(statepath,state)
+    phase('forecasts')
     # Prioritize pregame deadlines over downloads and postgame reporting.
     if active_model:
         from .outcome_sync import sync_finished_games
@@ -419,7 +459,9 @@ def _tick(folder,history,report):
         report['final_sync']=synced
         report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
         report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
+    phase('final_sync')
     _collect_finals(schedule,cache,raw,report)
+    phase('collect_finals')
     # Complete/revise player boxes before evaluating the frozen forecasts.
     if (folder/'roster.json').exists():
         try:
@@ -428,6 +470,7 @@ def _tick(folder,history,report):
             report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+    phase('player_sync')
     # LiveData play-by-play for the postgame recaps and the daily review's exit and blowout labels.
     try:
         from .postgame import collect_sources
@@ -435,10 +478,13 @@ def _tick(folder,history,report):
         report['warnings'].extend(dict(task='postgame_sources',**e) for e in report['postgame_sources']['errors'])
     except Exception as exc:
         report['errors'].append(dict(task='postgame_sources',error=f'{type(exc).__name__}: {exc}'))
+    phase('postgame_sources')
     _evaluate_runs(folder,db,report)
     _missed_finals(state,schedule,report)
     atomic_json(statepath,state)
-    _refresh_derived(folder,db,schedule,active_model,model_digest,report)
+    phase('evaluate_runs')
+    _carry_derived(folder,active_model,report)
+    phase('derived')
 
 
 def _recover_runs(folder,db,state,report):
@@ -704,17 +750,20 @@ def _derived_signature(folder,db,schedule,active_model,model_digest):
         schedule=dict(season=schedule.get('season'),games=games),
         model=[active_model['model_key'],model_digest] if active_model else None,
         finals=_contents(folder/'finals'),game_archives=_game_archives(folder/'raw'),
-        roster=(folder/'roster.json').exists()))).hexdigest()
+        roster=(folder/'roster.json').exists(),request=_read(folder/'derived-request.json',None)))).hexdigest()
 
 
-def _refresh_derived(folder,db,schedule,active_model,model_digest,report):
-    """Rebuild derived reports only when their inputs changed (or every DERIVED_REFRESH_SECONDS).
+def request_derived(folder,reason):
+    """Ask the derived service for a rebuild its inputs alone would not show, such as rewritten run artifacts."""
+    atomic_json(folder/'derived-request.json',dict(requested_at=_now(),reason=reason))
 
-    An unchanged rebuild would reproduce the same reports, so the saved summary,
-    errors and warnings are carried into this tick's report instead.
+
+def _derived_due(folder,db,schedule,active_model,model_digest):
+    """Whether the derived reports need rebuilding: an input changed, an output is missing, or they are DERIVED_REFRESH_SECONDS old.
+
+    Returns ``(due, signature, saved)``, ``saved`` being the summary of the last rebuild.
     """
-    path=folder/'derived-reports.json'
-    saved=_read(path,{})
+    saved=_read(folder/'derived-reports.json',{})
     signature=_derived_signature(folder,db,schedule,active_model,model_digest)
     outputs=[folder/'performance.json',folder/'benchmarks.json',folder/'daily-reviews/index.json',folder/'market/report.json']
     if active_model:
@@ -725,27 +774,84 @@ def _refresh_derived(folder,db,schedule,active_model,model_digest,report):
         age=(parse_time(_now())-parse_time(saved['computed_at'])).total_seconds()
     except (KeyError,TypeError,ValueError):
         age=None
-    if (saved.get('signature')==signature and not report.get('recovered_artifacts') and age is not None
-            and 0<=age<DERIVED_REFRESH_SECONDS and all(p.exists() for p in outputs)):
-        report.update(saved['report'])
-        report['errors'].extend(saved['errors'])
-        report['warnings'].extend(saved['warnings'])
-        report['derived_reports']=dict(status='unchanged',computed_at=saved['computed_at'])
-        # Outcome discovery runs every tick; keep its summary in the model status current.
-        status=folder/'model-status.json'
-        if active_model and status.exists():
-            current=json.loads(status.read_text())
-            if current.get('outcomes')!=report.get('final_sync'):
-                current['outcomes']=report.get('final_sync')
-                atomic_json(status,current)
+    current=(saved.get('signature')==signature and age is not None and 0<=age<DERIVED_REFRESH_SECONDS
+             and all(p.exists() for p in outputs))
+    return not current,signature,saved
+
+
+def run_derived(directory):
+    """One run of the derived service: rebuild the derived reports when their inputs changed, otherwise do nothing.
+
+    It runs from its own timer beside the tick, so a rebuild that takes minutes
+    never delays a checkpoint forecast or a line capture. It does not take the
+    tick's lock: the two share the ledger through SQLite's write-ahead log, and a
+    deploy holds both locks so neither interleaves with it. A run that finds the
+    lock held (another run, or a deploy) reports ``busy`` and does nothing.
+    """
+    folder=Path(directory)
+    folder.mkdir(parents=True,exist_ok=True)
+    import fcntl
+    handle=(folder/'derived.lock').open('a')
+    report=dict(started_at=_now(),status='running',errors=[],warnings=[])
+    try:
+        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        report.update(status='busy',finished_at=_now())
+        return report
+    try:
+        _derived(folder,report)
+    except Exception as exc:
+        report['errors'].append(dict(task='derived',error=f'{type(exc).__name__}: {exc}'))
+        report['status']='error'
+    finally:
+        report['finished_at']=_now()
+        try:
+            atomic_json(folder/'last-derived.json',report)
+            with (folder/'derived.jsonl').open('a') as f:
+                f.write(json.dumps(report,sort_keys=True)+'\n')
+        finally:
+            fcntl.flock(handle,fcntl.LOCK_UN)
+            handle.close()
+    return report
+
+
+def _derived(folder,report):
+    schedule,source=saved_calendar(folder)
+    if schedule is None:
+        report.update(status='waiting',reason='No saved calendar yet; the first tick saves one.')
         return
-    errors,warnings=len(report['errors']),len(report['warnings'])
+    report['schedule_source']=source
+    db=folder/'forecast.sqlite'
+    active_model,model_digest=load_active(folder,_now())
+    due,signature,saved=_derived_due(folder,db,schedule,active_model,model_digest)
+    if not due:
+        report.update(status='unchanged',computed_at=saved['computed_at'])
+        return
+    # The model status carries the tick's outcome discovery summary.
+    report['final_sync']=_read(folder/'last-tick.json',{}).get('final_sync')
     _derived_reports(folder,db,schedule,active_model,model_digest,report)
     computed=_now()
-    atomic_json(path,dict(signature=signature,computed_at=computed,
+    atomic_json(folder/'derived-reports.json',dict(signature=signature,computed_at=computed,
         report={k:report[k] for k in ('prospective_calibration','prospective_margin_calibration','postgame','daily_review','market') if k in report},
-        errors=report['errors'][errors:],warnings=report['warnings'][warnings:]))
-    report['derived_reports']=dict(status='rebuilt',computed_at=computed)
+        errors=list(report['errors']),warnings=list(report['warnings'])))
+    report.update(status='rebuilt',computed_at=computed)
+
+
+def _carry_derived(folder,active_model,report):
+    """Carry the derived service's latest summary, errors and warnings into this tick's report; the tick rebuilds nothing itself."""
+    saved=_read(folder/'derived-reports.json',{})
+    report.update(saved.get('report',{}))
+    report['errors'].extend(saved.get('errors',[]))
+    report['warnings'].extend(saved.get('warnings',[]))
+    report['derived_reports']=dict(status='carried' if saved else 'none',computed_at=saved.get('computed_at'),service='nba-derived')
+    # Outcome discovery runs every tick; keep its summary in the model status current.
+    status=folder/'model-status.json'
+    if active_model and status.exists():
+        current=json.loads(status.read_text())
+        if current.get('outcomes')!=report.get('final_sync'):
+            current['outcomes']=report.get('final_sync')
+            atomic_json(status,current)
 
 
 def _activate(folder,expected,digest,report):

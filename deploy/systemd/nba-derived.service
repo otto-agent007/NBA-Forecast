@@ -1,0 +1,15 @@
+[Unit]
+Description=NBA Forecast derived reports (performance, calibration, postgame, daily review, market)
+
+[Service]
+Type=oneshot
+# Pin with: python3 -m nba_forecast.runner_release --directory data/operations/production/runner-releases
+# Replace WorkingDirectory with the printed release path; keep data paths absolute.
+WorkingDirectory=/ABSOLUTE/PATH/PINNED-RUNNER-RELEASE
+# Below the tick's priority: a rebuild takes minutes and must not slow a checkpoint forecast.
+Nice=10
+ExecStart=/usr/bin/python3 -m nba_forecast derived --directory /ABSOLUTE/PATH/NBA-Forecast/data/operations/production
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

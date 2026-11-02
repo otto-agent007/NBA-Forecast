@@ -105,6 +105,9 @@ def _parser():
     tick.add_argument('--directory', required=True)
     tick.add_argument('--history', nargs='*', default=[])
     tick.add_argument('--output')
+    derived = sub.add_parser('derived', help='Rebuild the derived reports (performance, calibration, postgame, daily reviews, market) when their inputs changed; the derived service runs this every minute')
+    derived.add_argument('--directory', required=True)
+    derived.add_argument('--output')
     benchmarks = sub.add_parser('benchmarks')
     benchmarks.add_argument('--db', required=True)
     benchmarks.add_argument('--output')
@@ -229,6 +232,10 @@ def main(argv=None):
             from .operations import run_tick
             value=run_tick(args.directory,_rows(args.history))
             exit_code=0 if value['status']=='complete' and not value['missed_final_games'] else 2
+        elif args.command == 'derived':
+            from .operations import run_derived
+            value=run_derived(args.directory)
+            exit_code=0 if value['status']!='error' and not value['errors'] else 2
         elif args.command == 'benchmarks':
             from .benchmarks import benchmark_report
             value=benchmark_report(args.db)
@@ -264,11 +271,13 @@ def main(argv=None):
             import fcntl
             from .store import dedupe_histories
             folder=Path(args.directory)
-            with (folder/'tick.lock').open('a') as lock:
+            from .deploy import LOCKS
+            with (folder/LOCKS[0]).open('a') as lock,(folder/LOCKS[1]).open('a') as derived_lock:
                 try:
                     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    fcntl.flock(derived_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 except BlockingIOError as exc:
-                    raise ValueError('a tick is running; retry when it finishes') from exc
+                    raise ValueError('a tick or derived rebuild is running; retry when it finishes') from exc
                 value=dedupe_histories(folder/'forecast.sqlite')
         elif args.command == 'backfill':
             from .backfill import backfill_seasons
