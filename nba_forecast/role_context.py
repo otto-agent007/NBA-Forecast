@@ -13,6 +13,7 @@ import unicodedata
 
 from .data import MAX_BYTES, _NextDataParser
 from .full_boxscore_sources import decode_official_game_page, full_boxscore_url, normalize_official_page
+from . import replay_cache
 from .schedule import canonical
 from .validation import COUNTS, parse_time, validate_history
 
@@ -38,23 +39,55 @@ def _eligible(row, snapshot):
 
 
 def _history(snapshot, history):
+    """Each eligible game's latest rows, validated, keyed by game.
+
+    The map over the whole history is built once per history object and
+    filter (``replay_cache``); the slate's own games are left out of each
+    caller's copy, and an ambiguity or validation failure among the games
+    left in is raised exactly as building the map from those games would.
+    """
+    cutoff = parse_time(snapshot['as_of'])
+    year = int(snapshot['season'][:4])
+    seasons = {snapshot['season'], f'{year-1}-{str(year)[-2:]}'}
+    excluded = set(snapshot.get('excluded_history_game_ids', []))
+    excluded.update(snapshot.get('model_enhancements', {}).get('excluded_history_game_ids', []))
+    future = {g['game_id'] for g in snapshot.get('games', [])}
+    key = ('role_context', tuple(sorted(seasons)), tuple(sorted(excluded)), replay_cache.cutoff_key(history, cutoff))
+    latest, ambiguous, valid = replay_cache.league(history, key, lambda: _latest_rows(history, cutoff, seasons, excluded))
+    if ambiguous - future:
+        raise ValueError('Ambiguous same-time history for injury role context')
+    games = {gid: rows for gid, rows in latest.items() if gid not in future}
+    if not valid:
+        # The whole map fails; the games left in are validated on their own.
+        validate_history([row for rows in games.values() for row in rows])
+    return games
+
+
+def _latest_rows(history, cutoff, seasons, excluded):
     latest = {}
+    ambiguous = set()
     for row in history:
-        if not _eligible(row, snapshot):
+        if (row['season_type'] != 'Regular Season' or row['season'] not in seasons
+                or row['game_id'] in excluded
+                or not parse_time(row['game_time']) < parse_time(row['known_at']) <= cutoff):
             continue
         key = row['game_id'], row['player_id']
         old = latest.get(key)
         if old is not None and parse_time(old['known_at']) == parse_time(row['known_at']):
             fields = (*_IDENTITY, 'game_time', 'status', 'minutes', *COUNTS)
             if any(old.get(k) != row.get(k) for k in fields):
-                raise ValueError('Ambiguous same-time history for injury role context')
+                ambiguous.add(row['game_id'])
         if old is None or parse_time(old['known_at']) < parse_time(row['known_at']):
             latest[key] = row
-    validate_history(list(latest.values()))
+    try:
+        validate_history(list(latest.values()))
+        valid = True
+    except ValueError:
+        valid = False
     games = defaultdict(list)
     for row in latest.values():
         games[row['game_id']].append(row)
-    return games
+    return dict(games), ambiguous, valid
 
 
 def _prepared_snapshot(snapshot, supplied):
@@ -241,11 +274,31 @@ def _extract(page, rows, metadata):
 
 
 def _replay(directory, envelope, rows, snapshot):
+    """The recap's exit events for one archived source against one set of rows, replayed once per process (``replay_cache``)."""
     if not rows:
         raise ValueError('Injury source lacks eligible history')
     metadata = _metadata(envelope['metadata'])
     if parse_time(metadata['retrieved_at']) > parse_time(snapshot['as_of']):
         raise ValueError('Injury source is future-known')
+    key = ('recap', str(Path(directory).resolve()), replay_cache.digest(metadata), replay_cache.digest(envelope['game']),
+           replay_cache.digest(rows), replay_cache.stamp(_raw_paths(directory, metadata)))
+    return replay_cache.replay(key, lambda: _replay_source(directory, envelope, metadata, rows))
+
+
+def _raw_paths(directory, metadata):
+    """The raw page and its provenance a source's replay reads; ``_read_raw`` checks both."""
+    path = Path(directory)/'raw'/(metadata['sha256']+'.html')
+    return (path, path.with_suffix('.provenance.json'))
+
+
+def _source_envelope_game(directory, metadata, rows):
+    """The game identity a raw page states against one set of rows, read once per process (``replay_cache``)."""
+    key = ('recap-game', str(Path(directory).resolve()), replay_cache.digest(metadata), replay_cache.digest(rows),
+           replay_cache.stamp(_raw_paths(directory, metadata)))
+    return replay_cache.replay(key, lambda: _source_game(_read_raw(directory, metadata), metadata, rows))
+
+
+def _replay_source(directory, envelope, metadata, rows):
     raw = _read_raw(directory, metadata)
     game = _source_game(raw, metadata, rows)
     if canonical(game) != canonical(envelope['game']):
@@ -319,8 +372,7 @@ def prepare_role_context(directory, snapshot, history):
                 candidates[gid] = metadata
         records = []
         for gid, metadata in sorted(candidates.items()):
-            raw = _read_raw(directory, metadata)
-            envelope = dict(metadata=metadata, game=_source_game(raw, metadata, games[gid]))
+            envelope = dict(metadata=metadata, game=_source_envelope_game(directory, metadata, games[gid]))
             events, status = _replay(directory, envelope, games[gid], snapshot)
             encoded = canonical(envelope)
             digest = hashlib.sha256(encoded).hexdigest()

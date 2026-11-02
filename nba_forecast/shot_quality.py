@@ -133,8 +133,8 @@ def prepare_shot_quality(directory, snapshot, history):
         actuals = context['history'].get(gid, [])
         if not actuals:
             continue  # No independent eligible actuals: no usable reference evidence.
-        replay, raw_sources, known = _replay(directory, source, actuals, context)
         digest = hashlib.sha256(raw).hexdigest()
+        replay, raw_sources, known = _replay(directory, source, actuals, context, digest=digest)
         archived = Path(directory)/'shot-quality-evidence'/(digest+'.json')
         archived.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -179,7 +179,7 @@ def verify_shot_quality(snapshot, history, directory):
         source = _json(raw)
         if source['game_id'] != gid or source['season'] != prepared['season']:
             raise ValueError('Shot quality source game or season differs from archive')
-        replay, raw_sources, known = _replay(directory, source, context['history'].get(gid, []), context)
+        replay, raw_sources, known = _replay(directory, source, context['history'].get(gid, []), context, digest=digest)
         records.append((_manifest(source, digest, raw_sources, known), replay))
     if canonical(supplied) != canonical(_assemble(prepared, context, records)):
         raise ValueError('Supplied shot quality differs from archived source replay')

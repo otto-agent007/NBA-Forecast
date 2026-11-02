@@ -14,6 +14,7 @@ import re
 
 from .data import MAX_BYTES, boxscore_url
 from .full_boxscore_sources import decode_official_game_page, full_boxscore_url
+from . import replay_cache
 from .schedule import canonical
 from .shots import COORDINATE_SYSTEM, normalize_page_shots, normalize_shots, playbyplay_url
 from .validation import parse_time, validate_history
@@ -49,24 +50,53 @@ def _context(snapshot,history):
     teams={str(g[side+'_team_id']) for g in snapshot['games'] if g['season_type']=='Regular Season'
            for side in ('home','away')}
     roster={p['player_id']:str(p['team_id']) for p in snapshot['roster']['players'] if str(p['team_id']) in teams}
+    games=_latest_games(history,cutoff,seasons,excluded,future)
+    return dict(cutoff=cutoff,seasons=seasons,excluded=excluded,future=future,roster=roster,history=games)
+
+
+def _latest_games(history,cutoff,seasons,excluded,future):
+    """Each eligible game's latest final rows, validated, keyed by game.
+
+    The map over the whole history is built once per history object and
+    filter (``replay_cache``); the slate's own games are left out of each
+    caller's copy, and an ambiguity or validation failure among the games
+    left in is raised exactly as building the map from those games would.
+    """
+    key=('shot_profiles',tuple(sorted(seasons)),tuple(sorted(excluded)),replay_cache.cutoff_key(history,cutoff))
+    latest,ambiguous,valid=replay_cache.league(history,key,lambda:_latest_rows(history,cutoff,seasons,excluded))
+    if ambiguous-future:
+        raise ValueError('Ambiguous same-time actuals for shot profile reconciliation')
+    games={gid:rows for gid,rows in latest.items() if gid not in future}
+    if not valid:
+        # The whole map fails; the games left in are validated on their own.
+        validate_history([row for rows in games.values() for row in rows])
+    return games
+
+
+def _latest_rows(history,cutoff,seasons,excluded):
     latest={}
+    ambiguous=set()
     for row in history:
         if (row['season_type']!='Regular Season' or row['season'] not in seasons
-                or row['game_id'] in excluded or row['game_id'] in future
+                or row['game_id'] in excluded
                 or parse_time(row['game_time'])>=cutoff or parse_time(row['known_at'])>cutoff):
             continue
         key=row['game_id'],row['player_id']
         prior=latest.get(key)
         if prior and parse_time(prior['known_at'])==parse_time(row['known_at']):
             if any(prior[k]!=row[k] for k in ('team_id','opponent_id','game_time','status',*COUNT_FIELDS)):
-                raise ValueError('Ambiguous same-time actuals for shot profile reconciliation')
+                ambiguous.add(row['game_id'])
         if prior is None or parse_time(prior['known_at'])<parse_time(row['known_at']):
             latest[key]=row
-    validate_history(list(latest.values()))
+    try:
+        validate_history(list(latest.values()))
+        valid=True
+    except ValueError:
+        valid=False
     games=defaultdict(list)
     for row in latest.values():
         games[row['game_id']].append(row)
-    return dict(cutoff=cutoff,seasons=seasons,excluded=excluded,future=future,roster=roster,history=games)
+    return dict(games),ambiguous,valid
 
 
 def _source_times(source):
@@ -117,8 +147,13 @@ def _shot_signature(shots):
                   key=lambda s:(s['game_id'],s['action_number']))
 
 
-def _replay(directory,source,history,context):
-    """Reproduce locations and counts from byte-verified NBA raw sources."""
+def _replay(directory,source,history,context,*,digest=None):
+    """Reproduce locations and counts from byte-verified NBA raw sources.
+
+    The replay of one archived source against one set of final rows is the
+    same for every game that cites it, so it is done once per process
+    (``replay_cache``); ``digest`` is the archived source's content hash.
+    """
     gid=source['game_id']
     if not re.fullmatch(r'002\d{7}',gid) or not _eligible(source,context):
         raise ValueError('Shot profile source is outside the eligible historical cutoff')
@@ -126,6 +161,25 @@ def _replay(directory,source,history,context):
         raise ValueError('Shot source has no eligible final actuals for reconciliation')
     if any(parse_time(r['game_time'])!=parse_time(source['game_time']) for r in history):
         raise ValueError('Shot source and actual game times disagree')
+    key=('shot',str(Path(directory).resolve()),digest or replay_cache.digest(source),replay_cache.digest(history),
+         replay_cache.stamp(_raw_paths(directory,source)))
+    return replay_cache.replay(key,lambda:_replay_source(directory,source,history))
+
+
+def _raw_paths(directory,source):
+    """The raw archives and their provenance a source's replay reads; ``_read_raw`` checks each."""
+    paths=[]
+    for item in source.get('provenance') or []:
+        if not isinstance(item,dict) or not isinstance(item.get('sha256'),str):
+            continue
+        suffix='.html' if item.get('source_url')==full_boxscore_url(source['game_id']) else '.json'
+        path=Path(directory)/'raw'/(item['sha256']+suffix)
+        paths.extend((path,path.with_suffix('.provenance.json')))
+    return paths
+
+
+def _replay_source(directory,source,history):
+    gid=source['game_id']
     metadata=source.get('provenance')
     if not isinstance(metadata,list) or not metadata:
         raise ValueError('Shot source lacks raw provenance for replay')
@@ -278,8 +332,8 @@ def prepare_shot_profiles(directory,snapshot,history):
         rows=context['history'].get(gid,[])
         if not any(r['player_id'] in context['roster'] for r in rows):
             continue
-        replay,raw_sources,known=_replay(directory,source,rows,context)
         digest=hashlib.sha256(raw).hexdigest()
+        replay,raw_sources,known=_replay(directory,source,rows,context,digest=digest)
         archived=Path(directory)/'shot-evidence'/(digest+'.json')
         archived.parent.mkdir(parents=True,exist_ok=True)
         if archived.exists():
@@ -319,7 +373,7 @@ def verify_shot_profiles(snapshot,history,directory):
         rows=context['history'].get(gid,[])
         if not any(r['player_id'] in context['roster'] for r in rows):
             raise ValueError('Shot profile source has no eligible slate player history')
-        replay,raw_sources,known=_replay(directory,source,rows,context)
+        replay,raw_sources,known=_replay(directory,source,rows,context,digest=digest)
         records.append((_manifest(source,digest,raw_sources,known),replay))
     expected=_assemble(prepared_snapshot,context,records)
     if canonical(supplied)!=canonical(expected):

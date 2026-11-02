@@ -1,6 +1,7 @@
 """Full-roster role evidence. Vacated opportunities are review work, not allocation."""
 from collections import defaultdict
 from statistics import fmean
+from . import replay_cache
 from .model import _previous_season, _opportunities
 from .validation import parse_time, validate_history
 from .rotation import rotation_role
@@ -9,11 +10,19 @@ from .model_versions import uses_refinements
 
 
 def eligible_history(snapshot,history):
+    """The regular-season rows of the forecast's two seasons known before ``as_of``, in game order.
+
+    Filtered once per history object and cutoff (``replay_cache``): every game
+    of a tick, and every pass over one game, reads the same list, which no
+    caller changes.
+    """
     cutoff=parse_time(snapshot['as_of'])
     seasons={snapshot['season'],_previous_season(snapshot['season'])}
-    return sorted((r for r in history if r['season_type']=='Regular Season' and r['season'] in seasons
-                   and parse_time(r['known_at'])<=cutoff and parse_time(r['game_time'])<cutoff),
-                  key=lambda r:(parse_time(r['game_time']),r['game_id'],r['player_id']))
+    key=('eligible',tuple(sorted(seasons)),replay_cache.cutoff_key(history,cutoff))
+    return replay_cache.league(history,key,lambda:sorted(
+        (r for r in history if r['season_type']=='Regular Season' and r['season'] in seasons
+         and parse_time(r['known_at'])<=cutoff and parse_time(r['game_time'])<cutoff),
+        key=lambda r:(parse_time(r['game_time']),r['game_id'],r['player_id'])))
 
 
 def build_profiles(snapshot,history):

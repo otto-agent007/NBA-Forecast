@@ -180,6 +180,23 @@ phase `timings`. The ledger runs in SQLite's write-ahead log mode, so the
 service's long reads never hold up the tick's writes. Outcome discovery still
 runs every tick and keeps the model status's outcome summary current.
 
+A forecast job prepares the league-wide shot, shot-quality and recap evidence
+from the immutable archives and preflight replays the same archives to verify
+it. Each archived source replays to the same result whatever game is being
+forecast, so before 2026-11-02 every game of a slate replayed every source of
+the season twice: a forecast cost 30 to 35 s, 23 to 30 of them in that
+preparation, and a fifteen-game slate 8 minutes per injury-report edition,
+beyond the tick's ten-minute start limit (the NBA publishes an edition every
+fifteen minutes on a game day, and each edition re-forecasts the slate). Now
+each source is replayed once per tick process and each league-wide history
+map built once per history object (`nba_forecast/replay_cache.py`): the first
+game of a tick pays the replays (about 20 s), each further game 6 to 8 s, and
+the forecasts are byte-identical. The replay key carries the archive digests,
+the rows replayed against and each archive file's size and modification time,
+so a rewritten archive is replayed and rejected as before. The replay cost of
+that first game grows with the season's archives; a cache that outlives the
+process would be the next step.
+
 ## Participation
 
 Every projected player has a `participation_probability`: the share of the
