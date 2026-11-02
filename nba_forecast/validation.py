@@ -1,5 +1,6 @@
 """Fail-closed validation at the boundary of the forecasting system."""
 
+from functools import lru_cache
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -36,7 +37,9 @@ def _text(value, field):
     return value
 
 
+@lru_cache(maxsize=8192)
 def _source(value):
+    # Pure in the URL and called once per row of a 46,000-row history: the few thousand distinct URLs are checked once.
     _text(value, 'source_url')
     parsed = urlparse(value)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
