@@ -45,7 +45,7 @@ from math import sqrt
 from statistics import fmean, pvariance
 from .rotation import rotation_role
 from .historical import season_prior
-from .totals import RESIDUAL_MIN_PROJECTED, game_totals
+from .totals import RESIDUAL_MIN_PROJECTED, game_totals, short_bench
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY, HEURISTIC_Z80, HEURISTIC_Z80_BASIS, LEGACY_METHOD
 
@@ -333,12 +333,13 @@ def _team_usage_prior(team_id, complete):
             "pseudo_games": USAGE_PRIOR_PSEUDO_GAMES, "recency_decay_per_game": 0.90, "usage_per_240": usage}
 
 
-def _usage_budget(projected_team, prior, reproject, locked, *, pace=1.0, stage="baseline"):
+def _usage_budget(projected_team, prior, reproject, locked, *, pace=1.0, stage="baseline", short=False):
     """Scale the open players' attempt rates so the team's expected usage meets its prior.
 
     ``reproject(p, scale)`` must recompute player ``p`` from its unscaled rates
     times ``scale``. Locked players keep their numbers and count as fixed usage.
-    Raising needs a plausible rotation; lowering applies to any team.
+    Raising needs a plausible rotation: eight projected players, or a short
+    bench (``totals.short_bench``); lowering applies to any team.
     """
     if not projected_team:
         return None
@@ -350,13 +351,13 @@ def _usage_budget(projected_team, prior, reproject, locked, *, pace=1.0, stage="
     open_usage = sum(v for pid, v in usage.items() if pid not in locked)
     raw = (target - (before - open_usage)) / open_usage if open_usage > 0 else 1.
     factor = min(USAGE_BOUNDS[1], max(USAGE_BOUNDS[0], raw))
-    if len(projected_team) < RESIDUAL_MIN_PROJECTED:
+    if len(projected_team) < RESIDUAL_MIN_PROJECTED and not short:
         factor = min(1., factor)
     audit = {"method": "team_usage_budget", "stage": stage, "usage_prior": prior, "pace_factor": pace,
              "expected_minutes": expected_minutes, "residual_minutes": residual,
              "replacement_usage_per_minute": REPLACEMENT_USAGE_PER_MINUTE, "target": target, "before": before,
              "raw_factor": raw, "factor": factor, "bounds": list(USAGE_BOUNDS), "locked_player_ids": sorted(locked),
-             "minimum_projected_to_raise": RESIDUAL_MIN_PROJECTED}
+             "minimum_projected_to_raise": RESIDUAL_MIN_PROJECTED, "short_bench": short}
     if abs(factor - 1.) > 1e-9:
         for p in projected_team:
             if p["player_id"] in locked:
@@ -778,9 +779,13 @@ def _allocate_team(team_predictions, working, usage_prior):
     # At most 13 players dress, and a full team uses at least ten: scale the
     # team's probabilities into that range. Raising never passes 1 and never
     # touches a player whose reported status already lowered his probability.
+    # A short bench (``totals.short_bench``: fewer than eight projected, every
+    # other roster player explicitly out) has to play everyone available.
+    short = short_bench(team_predictions)
     active_sum = sum(working[p["player_id"]][7] for p in projected_team)
     goal = (ACTIVE_LIST_MAX if active_sum > ACTIVE_LIST_MAX else
-            ACTIVE_LIST_MIN_EXPECTED if active_sum < ACTIVE_LIST_MIN_EXPECTED and len(projected_team) >= ACTIVE_LIST_MIN_EXPECTED else None)
+            ACTIVE_LIST_MIN_EXPECTED if active_sum < ACTIVE_LIST_MIN_EXPECTED and len(projected_team) >= ACTIVE_LIST_MIN_EXPECTED else
+            len(projected_team) if short and active_sum < len(projected_team) else None)
     if goal is not None and active_sum:
         for _ in range(3):
             current_sum = sum(working[p["player_id"]][7] for p in projected_team)
@@ -815,13 +820,22 @@ def _allocate_team(team_predictions, working, usage_prior):
     # players' conditional minutes rise proportionally to fill the budget,
     # by at most a quarter and never past 48; any rest stays an explicit deficit.
     locked={p['player_id'] for p in projected_team if p['components'].get('manual_adjustment')}
-    # Filling needs a plausible rotation; a handful of supported players is left as a deficit.
-    for _ in range(4 if len(projected_team) >= 8 else 0):
+    # Filling needs a plausible rotation; a handful of supported players is left
+    # as a deficit, unless the bench is short: then the shortfall is forced on
+    # everyone available, shared equally up to 48 each, not in proportion to
+    # roles sized for a full roster. The eight replayed seven-player team-games
+    # averaged 42.6, 40.0, 39.0, 35.7, 33.9, 27.5 and 21.3 minutes by rank.
+    for _ in range((len(target) if short else 4) if len(projected_team) >= 8 or short else 0):
         shortfall=240.-sum(working[pid][7]*target[pid] for pid in target)
-        ceiling={pid:min(48.,(1.+UPLIFT_CAP[0 if pid in core else 1])*working[pid][0]) for pid in target}
+        ceiling={pid:48. if short else min(48.,(1.+UPLIFT_CAP[0 if pid in core else 1])*working[pid][0]) for pid in target}
         open_ids=[pid for pid in target if pid not in locked and target[pid]>0 and working[pid][7]>0 and target[pid]<ceiling[pid]-1e-9]
         if shortfall<=1e-9 or not open_ids:
             break
+        if short:
+            share=shortfall/sum(working[pid][7] for pid in open_ids)
+            for pid in open_ids:
+                target[pid]=min(ceiling[pid],target[pid]+share)
+            continue
         factor=1.+shortfall/sum(working[pid][7]*target[pid] for pid in open_ids)
         for pid in open_ids:
             target[pid]=min(ceiling[pid],target[pid]*factor)
@@ -831,11 +845,12 @@ def _allocate_team(team_predictions, working, usage_prior):
         pid=p['player_id']
         scale=(target[pid]/working[pid][0] if working[pid][0] else 1.) if pid in target else 1.
         p["components"]["rotation"] = {"team_minutes_before_scaling": total,
-            "regulation_budget": 240.0, "scale": scale, "unallocated_minutes": deficit,
+            "regulation_budget": 240.0, "scale": scale, "unallocated_minutes": deficit, "short_bench": short,
             "protected_rotation_player_ids":sorted(core),"protected_rotation_minutes":core_total,
             "budget_basis": "expected minutes: participation probability times minutes when playing",
             "method": "Preserve supported starters and high-minute rotation roles; scale excess bench estimates first. "
-                      "A shortfall raises supported players' conditional minutes by at most a quarter; the rest is an explicit deficit."}
+                      "A shortfall raises supported players' conditional minutes by at most a quarter; the rest is an explicit deficit. "
+                      "A short bench (every other roster player explicitly out) plays everyone and shares the shortfall equally, up to 48 each."}
         if deficit > 1e-8:
             p["flags"].append("team_minutes_unresolved")
         if p["status"] != "projected":
@@ -868,7 +883,7 @@ def _allocate_team(team_predictions, working, usage_prior):
         effective_scale = p["expected_minutes"] / minutes if minutes else 1.
         _project_numbers(p, p["expected_minutes"], {k: v * scale for k, v in rates.items()}, shooting, rows,
                          variance * effective_scale ** 2, factor, side_factor)
-    _usage_budget(projected_team, usage_prior, reproject, locked)
+    _usage_budget(projected_team, usage_prior, reproject, locked, short=short)
 
 
 def _review_queue(predictions):

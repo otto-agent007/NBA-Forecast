@@ -129,7 +129,7 @@ class ParticipationForecastTests(unittest.TestCase):
         total = next(t for t in result['game_totals'][0]['teams'] if t['team_id'] == 'A')
         self.assertEqual(total['projected_minutes'], expected)
         self.assertAlmostEqual(total['points_mean'], sum(p['participation_probability'] * p['points_mean'] for p in projected))
-        self.assertEqual(result['game_totals'][0]['schema_version'], 5)
+        self.assertEqual(result['game_totals'][0]['schema_version'], 6)
         self.assertAlmostEqual(total['expected_players'], sum(p['participation_probability'] for p in projected))
 
 

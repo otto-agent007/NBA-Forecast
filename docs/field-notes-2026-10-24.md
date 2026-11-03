@@ -118,7 +118,16 @@ week-one forecast.
   least eight players are projected (totals schema 4). Player projections are
   never raised for it. Withheld players whose only reasons are missing
   evidence are covered by the residual, not blocking; from schema 5 that
-  includes bench players with a reported tag (questionable rookies).
+  includes bench players with a reported tag (questionable rookies). From
+  schema 6 a short bench, fewer than eight projected with every other roster
+  player explicitly out, is not a roster in doubt: everyone available is
+  expected to play, the shortfall is shared equally up to 48 each, and the
+  rest is replacement production (Hawks at Pacers, 2026-11-02: the seven left
+  were projected for 115 minutes and 60.9 points, the margin went
+  unavailable; six played 34 to 45 minutes and scored 104; replayed under the
+  rule, 106.4 and Hawks by 11.9 against a 10.5 close). Nine of 7,406 replayed
+  team-games had seven or fewer players with minutes, so the gate cannot see
+  this rule; it is a bug fix.
 - Team possession budget, bounds .85–1.10, raising only with eight projected.
   The replay's own factor distribution was centred at .992 with 0.2% clipping
   either side; the small negative bias it introduced is real and accepted.

@@ -56,6 +56,8 @@ export default function ForecastTotals({ game }) {
             <span className={`total-state ${team.status}`}>{label(team.status)}</span>
             <p>{minutes(team.projected_minutes)} / 240 minutes · {team.projected_players} projected</p>
             {team.residual_minutes > 0 && <p>{minutes(team.residual_minutes)} unallocated minutes at the replacement rate · {points(team.residual_points)} pts</p>}
+            {team.unallocated_minutes > 0 && !(team.residual_minutes > 0) && <p>{minutes(team.unallocated_minutes)} unallocated minutes not scored · roster in doubt</p>}
+            {team.short_bench && <p>Short bench · every other roster player is out; the available players fill the minutes</p>}
             {!!team.cold_start_player_ids?.length && <p>{team.cold_start_player_ids.length} roster {team.cold_start_player_ids.length === 1 ? "player" : "players"} without playing or scoring evidence{team.residual_minutes > 0 ? " · covered by the replacement minutes" : ""}</p>}
             {!!unresolved(team) && <p>{unresolved(team)} withheld · Availability or role review</p>}
           </article>
