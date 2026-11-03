@@ -685,3 +685,22 @@ preliminary (floor 0.0006), points, minutes, team points, margin, winner Brier,
 the interval score and the three biases unchanged to the reported precision.
 Its benefit can only be measured live, on the projected players a final box
 score leaves out (scored since `absent_from_final`).
+
+## Reference: 2026-11-03 (short bench)
+
+The reference is unchanged. `fix/short-bench` lifts three rules that switch
+off below eight projected players (the minutes fill, the possession-budget
+raise and the replacement credit for unallocated minutes) when every other
+roster player is out on an explicit report status: such a team plays
+everyone, shares the shortfall equally up to 48 minutes each and scores any
+rest at the replacement rate (totals schema 6). The replay's roster is each
+game's box score plus the players the report lists, and nine of its 7,406
+team-games had seven or fewer players with minutes, none of them with every
+other player listed out, so the rule never fires: both replays, T-minus-30
+against `backtest-2026-10-28-participation` and preliminary against its
+midday reference, reproduce the reference rows byte for byte (`rows.json.gz`
+digests equal) and every metric reads `+0.0000 ± 0.0000`, within noise.
+The change is a bug fix measured live: Hawks at Pacers on 2026-11-02, the
+one short bench this season, replayed from its saved snapshot gives 106.4
+Pacers points and Hawks by 11.9 (actual 104 and Hawks by 4; close 10.5)
+where production showed 60.9 and no margin.
