@@ -82,6 +82,14 @@ class UsageBudgetTests(unittest.TestCase):
         self.assertLess(len(projected), RESIDUAL_MIN_PROJECTED)
         self.assertEqual(projected[0]['components']['team_usage']['factor'], 1.)
         self.assertFalse(any('team_usage_raised' in p['flags'] for p in projected))
+        # A short bench, every other roster player explicitly out, may rise.
+        outs = [dict(player(f'o{i}', status='out'), status_basis='explicit_report_status') for i in range(8)]
+        short = forecast(snapshot([player(f'p{i}') for i in range(5)] + outs), self.history(5, fga=5, fta=1, minutes=40))['predictions']
+        projected, _ = team_usage(short)
+        audit = projected[0]['components']['team_usage']
+        self.assertTrue(audit['short_bench'])
+        self.assertGreater(audit['factor'], 1)
+        self.assertTrue(all('team_usage_raised' in p['flags'] for p in projected))
 
     def test_the_enhanced_path_applies_the_budget_after_pace(self):
         snap = snapshot([player(f'p{i}') for i in range(10)])

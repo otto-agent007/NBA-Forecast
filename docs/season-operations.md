@@ -41,7 +41,16 @@ are still played by someone: totals schema 4 scores them at the replacement
 rate, 0.38 points per minute (the 2025-26 minutes-weighted rate of players
 averaging under 20 minutes), as a separate disclosed `residual_points` term,
 when at least eight players are projected; with fewer the deficit stays a
-disclosed partial. A withheld roster player outside the projected starting five
+disclosed partial, unless every other roster player is out on an explicit
+injury-report status (schema 6, `short_bench`): then the bench is short, not
+unknown. Everyone available is expected to play, the shortfall is shared
+equally among them up to 48 minutes each (the eight replayed seven-player
+team-games averaged 42.6, 40.0, 39.0, 35.7, 33.9, 27.5 and 21.3 minutes by
+rank), the possession budget may raise their rates, and whatever is left is
+replacement production. Hawks at Pacers on 2026-11-02 is the case: the 6 PM report put ten
+of seventeen Pacers out, the seven left were projected for 115 minutes, the
+total showed 60.9 and the margin went unavailable for the last ninety minutes
+before tip; six Pacers played 34 to 45 minutes and scored 104. A withheld roster player outside the projected starting five
 whose only reasons are missing evidence (`cold_start`,
 `no_scoring_opportunity_evidence`) and whose sourced status is available is
 covered by that residual and does not make the total partial. Schema 5 covers

@@ -124,6 +124,30 @@ class TotalsTests(unittest.TestCase):
         self.assertEqual((thin['status'],thin['residual_minutes'],thin['points_mean']),('partial',0,60))
         self.assertEqual(game_totals(GAME,rows,schema_version=3)['teams'][0]['status'],'partial')
 
+    def test_a_short_bench_of_explicit_outs_fills_the_minutes_and_scores_the_rest(self):
+        from nba_forecast.totals import EXPLICIT_OUT_BASIS, REPLACEMENT_POINTS_PER_MINUTE, short_bench
+        def out(pid,basis=EXPLICIT_OUT_BASIS):
+            return dict(player_id=pid,name=pid,game_id='g',team_id='A',status='out',points_mean=0,expected_minutes=0,
+                        components=dict(availability=dict(status='out',status_basis=basis)))
+        rows=[dict(player_id=f'A{i}',name=f'A{i}',game_id='g',team_id='A',status='projected',points_mean=12.,expected_minutes=30.) for i in range(7)]
+        rows+=[p for p in predictions() if p['team_id']=='H']
+        outs=[out(f'out{i}') for i in range(6)]
+        side=lambda rs: [p for p in rs if p['team_id']=='A']
+        self.assertTrue(short_bench(side(rows+outs)))
+        team=game_totals(GAME,rows+outs)['teams'][0]
+        self.assertEqual((team['status'],team['short_bench'],team['projected_players'],team['out_players']),('complete',True,7,6))
+        self.assertEqual((team['unallocated_minutes'],team['residual_minutes']),(30,30))
+        self.assertAlmostEqual(team['points_mean'],84+30*REPLACEMENT_POINTS_PER_MINUTE)
+        self.assertEqual(game_totals(GAME,rows+outs)['status'],'complete')
+        # Schema 5 kept the deficit. An out without the report's explicit status, a
+        # withheld player, or no outs at all leave the roster, not the bench, in doubt.
+        self.assertEqual(game_totals(GAME,rows+outs,schema_version=5)['teams'][0]['status'],'partial')
+        withheld=dict(out('new'),status='needs_review',flags=['cold_start'],components=dict(availability=dict(status='available')))
+        for edit in (outs[:5]+[out('late',basis='espn_injury_list')],outs+[withheld],[]):
+            self.assertFalse(short_bench(side(rows+edit)))
+            thin=game_totals(GAME,rows+edit)['teams'][0]
+            self.assertEqual((thin['status'],thin['short_bench'],thin['residual_minutes']),('partial',False,0))
+
     def test_withheld_players_without_evidence_are_covered_by_the_residual(self):
         rows=[dict(player_id=f'A{i}',name=f'A{i}',game_id='g',team_id='A',status='projected',points_mean=10.,expected_minutes=25.) for i in range(8)]
         rows+=[p for p in predictions() if p['team_id']=='H']

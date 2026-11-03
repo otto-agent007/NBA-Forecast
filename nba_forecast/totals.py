@@ -10,6 +10,12 @@ REPLACEMENT_POINTS_PER_MINUTE = .38
 # Below this many projected players the roster, not the rotation, is in doubt,
 # so missing minutes stay a disclosed deficit instead of replacement production.
 RESIDUAL_MIN_PROJECTED = 8
+# Unless every other roster player is out on an explicit injury-report status:
+# then the bench is short, not unknown, the available players play the minutes
+# (schema 6; the model fills them up to 48 each) and any rest is replacement
+# production. Hawks at Pacers, 2026-11-02: ten of seventeen out, seven
+# projected, six played 34 to 45 minutes; the partial sum showed 60.9 points.
+EXPLICIT_OUT_BASIS = 'explicit_report_status'
 # Withheld players whose only reasons are missing evidence are covered by the
 # residual: whatever minutes they get are among the unallocated ones.
 RESIDUAL_COVERED_FLAGS = {'cold_start', 'no_scoring_opportunity_evidence', 'team_minutes_unresolved'}
@@ -18,11 +24,21 @@ RESIDUAL_COVERED_FLAGS = {'cold_start', 'no_scoring_opportunity_evidence', 'team
 TAGGED_COVERED_FLAGS = RESIDUAL_COVERED_FLAGS | {'availability_questionable'}
 
 
-def game_totals(game, predictions, *, schema_version=5, lineups=None):
+def short_bench(rows):
+    """Fewer than eight projected players, every other roster player out on an explicit report status."""
+    projected=sum(p['status']=='projected' for p in rows)
+    others=[p for p in rows if p['status']!='projected']
+    return (0<projected<RESIDUAL_MIN_PROJECTED and bool(others)
+            and all(p['status']=='out' and p.get('components',{}).get('availability',{}).get('status_basis')==EXPLICIT_OUT_BASIS
+                    for p in others))
+
+
+def game_totals(game, predictions, *, schema_version=6, lineups=None):
     """Team and game point sums. Schema 3 weights each projection by its participation
     probability; schema 4 also scores unallocated minutes at the replacement rate;
-    schema 5 also covers tagged bench players without evidence."""
-    if type(schema_version) is not int or schema_version not in (1,2,3,4,5):
+    schema 5 also covers tagged bench players without evidence; schema 6 also
+    scores a short bench's unallocated minutes."""
+    if type(schema_version) is not int or schema_version not in (1,2,3,4,5,6):
         raise ValueError('Unsupported game totals schema version')
     def weight(p):
         if schema_version<3:
@@ -65,7 +81,8 @@ def game_totals(game, predictions, *, schema_version=5, lineups=None):
         unresolved=sorted(set(withheld)-set(cold))
         missing=max(0.,240.-minutes)
         blocking=withheld if schema_version==1 else unresolved
-        filled=schema_version>=4 and len(projected)>=RESIDUAL_MIN_PROJECTED
+        short=schema_version>=6 and short_bench(rows)
+        filled=schema_version>=4 and (len(projected)>=RESIDUAL_MIN_PROJECTED or short)
         residual=missing if filled else 0.
         status=('unavailable' if not projected else 'partial' if blocking or (missing>1e-7 and not filled) or len(projected)<5 else 'complete')
         teams.append(dict(team_id=tid,side=side,status=status,
@@ -82,6 +99,8 @@ def game_totals(game, predictions, *, schema_version=5, lineups=None):
             teams[-1].update(points_mean_projected=fsum(weight(p)*p['points_mean'] for p in projected) if projected else None,
                              residual_minutes=residual,residual_points=residual*REPLACEMENT_POINTS_PER_MINUTE,
                              replacement_points_per_minute=REPLACEMENT_POINTS_PER_MINUTE)
+        if schema_version>=6:
+            teams[-1].update(short_bench=short)
     available=all(t['points_mean'] is not None for t in teams)
     return dict(schema_version=schema_version,method='regulation_player_sum',game_id=game['game_id'],teams=teams,
         points_mean=fsum(t['points_mean'] for t in teams) if available else None,

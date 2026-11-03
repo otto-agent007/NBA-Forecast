@@ -7,7 +7,7 @@ from .rotation_allocation import redistribute
 from .context_effects import context_adjustment
 from .calibration import calibrated_interval
 from .intervals import INTERVAL_FAMILY
-from .totals import game_totals
+from .totals import game_totals, short_bench
 from .validation import parse_time
 from .model_versions import ENHANCED_VERSIONS
 
@@ -179,7 +179,8 @@ def forecast_candidate(snapshot,history):
         if prior is None:
             continue
         locked={p['player_id'] for p in team_predictions if p['components'].get('manual_adjustment') or p['player_id'] not in reprojection}
-        _usage_budget(team_predictions,prior,_reproject,locked,pace=team_pace.get(team,1.),stage='enhanced')
+        _usage_budget(team_predictions,prior,_reproject,locked,pace=team_pace.get(team,1.),stage='enhanced',
+            short=short_bench([p for p in result['predictions'] if p['team_id']==team]))
     totals={}
     for p in result['predictions']:
         if p['status']=='projected':
