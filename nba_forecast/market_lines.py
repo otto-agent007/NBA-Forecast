@@ -190,10 +190,18 @@ def capture_game_lines(folder, games, season, as_of):
 
 
 def closing_lines(records, start_time):
-    """The last capture per provider before tipoff."""
+    """The last capture per provider before tipoff.
+
+    A provider's recovered close (``recover_evidence``: ESPN's own record of
+    the close, fetched after the game) stands in for its pregame captures.
+    """
     tip = parse_time(start_time)
-    latest = {}
+    recovered = {r['provider_id']: r for r in records if r.get('recovered_close')}
+    names = {r['provider'] for r in recovered.values()}
+    latest = dict(recovered)
     for r in records:
+        if r.get('recovered_close') or r['provider_id'] in recovered or r['provider'] in names:
+            continue
         if parse_time(r['retrieved_at']) < tip:
             latest[r['provider_id']] = r
     return latest
@@ -326,7 +334,8 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                        player_sum_margin=player_sum_margin, model_total=model_total, model_home_win=model_home_win,
                        spread_home=spread, total_line=total, home_moneyline=home_ml, away_moneyline=away_ml,
                        actual_margin=actual_margin, actual_total=actual_total,
-                       market_margin=market_margin, line_captured_at=line['captured_at'])
+                       market_margin=market_margin, line_captured_at=line['captured_at'],
+                       close_recovered=bool(line.get('recovered_close')))
             if market_margin is not None:
                 row['spread_edge'] = model_margin - market_margin
                 cover = actual_margin + spread
@@ -393,5 +402,5 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                                  model_pick_accuracy=sum((r['model_margin'] > 0) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows),
                                  market_pick_accuracy=sum((r['market_home_win'] > .5) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows))
     return dict(version=VERSION, generated_at=as_of, summary=summary, games=rows, errors=errors,
-                policy='Closing line is the last capture before tipoff. Leans are descriptive; a win rate on a small sample is not an edge. '
+                policy='Closing line is the last capture before tipoff, or the provider\'s recorded close recovered after an outage (close_recovered). Leans are descriptive; a win rate on a small sample is not an edge. '
                        'Absolute errors compare the model and the market against the same final scores.')

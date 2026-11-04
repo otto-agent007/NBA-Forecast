@@ -101,6 +101,15 @@ def _parser():
     extract.add_argument('--injury-check', required=True)
     extract.add_argument('--cache-dir', default='data/raw')
     extract.add_argument('--output', required=True)
+    recover = sub.add_parser('recover-evidence', help='Fetch what an outage left uncaptured, as labeled late captures (docs/season-operations.md)')
+    recover.add_argument('--directory', required=True)
+    recover.add_argument('--games', nargs='*', default=[], help='Game IDs whose T-30 report record, closing line and Kalshi close to recover')
+    recover.add_argument('--daily-report', nargs='*', default=[], metavar='DATE', help='Pacific dates whose 9 AM daily report capture to recover')
+    recover.add_argument('--no-reports', action='store_true')
+    recover.add_argument('--no-closing-lines', action='store_true')
+    recover.add_argument('--no-kalshi', action='store_true')
+    recover.add_argument('--wait', type=int, default=900, help='Seconds to wait for a running tick or derived rebuild')
+    recover.add_argument('--output')
     tick = sub.add_parser('tick')
     tick.add_argument('--directory', required=True)
     tick.add_argument('--history', nargs='*', default=[])
@@ -228,6 +237,11 @@ def main(argv=None):
                     snapshot=apply_report(snapshot,parse_report(text,schedule,snapshot['roster'],evidence),[item['game_id']])
             validate_inputs(snapshot,[])
             value=snapshot
+        elif args.command == 'recover-evidence':
+            from .recover_evidence import recover
+            value=recover(args.directory,args.games,reports=not args.no_reports,closing_lines=not args.no_closing_lines,
+                          kalshi=not args.no_kalshi,daily_reports=args.daily_report,wait=args.wait)
+            exit_code=0 if not value['unresolved'] else 2
         elif args.command == 'tick':
             from .operations import run_tick
             value=run_tick(args.directory,_rows(args.history))

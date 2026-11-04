@@ -140,6 +140,18 @@ Later PDF editions are archived as
 separate evidence. To deliberately revise after a later change, provide new
 sourced review input before tipoff; the original run remains immutable.
 
+After an outage, `python -m nba_forecast recover-evidence --directory DIR
+--games ID... --daily-report DATE...` fetches what the ticks would have
+captured, as labeled late captures that never replace a live record: each
+game's T-30 report edition (`injuries/games/GAME_ID/final.json`, which later
+forecasts read for a player's reported-out games), ESPN's recorded closing line
+(`market/game-lines`, preferred to a stale pregame capture and flagged
+`close_recovered` in the market report), Kalshi's last pre-tip prices from its
+candlesticks (`market/kalshi`, timed by the exchange) and the 9 AM Pacific daily
+report. ESPN's injury list and game summaries as they stood at the time cannot
+be recovered, so a team the official report left uncovered stays unresolved.
+The missed checkpoints themselves stay on the record.
+
 Already-completed jobs are skipped. Changed tipoff times and changed review
 content trigger new keys. SQLite is authoritative if a process crashes after
 saving a forecast; lost output files are rebuilt from immutable run inputs.
