@@ -4,7 +4,7 @@ from statistics import fmean
 from . import replay_cache
 from .model import _previous_season, _opportunities
 from .validation import parse_time, validate_history
-from .rotation import rotation_role
+from .rotation import rotation_role, team_games
 from .historical import season_prior
 from .model_versions import uses_refinements
 
@@ -33,6 +33,8 @@ def build_profiles(snapshot,history):
         by_player[row['player_id']].append(row)
     profiles=[]
     teams=defaultdict(list)
+    games_by_team=team_games(eligible)
+    reported=snapshot.get('reported_unavailable') or {}
     for p in snapshot['roster']['players']:
         rows=by_player[p['player_id']]
         current=[r for r in rows if r['season']==snapshot['season']]
@@ -59,7 +61,8 @@ def build_profiles(snapshot,history):
             if not components['normal_role_supported']:
                 supported=False
                 flags.append('normal_role_unobserved')
-        rotation=rotation_role(p,rows,excluded_game_ids=excluded)
+        rotation=rotation_role(p,rows,excluded_game_ids=excluded,team_games=games_by_team.get(p['team_id'],[]),
+                               reported_out=reported.get(p['player_id']))
         profile=dict(player_id=p['player_id'],name=p['name'],team_id=p['team_id'],availability=p['status'],
                      previous_games=len(previous),current_games=len(current),recent_game_ids=[r['game_id'] for r in recent],
                      expected_minutes_baseline=minutes if supported else None,

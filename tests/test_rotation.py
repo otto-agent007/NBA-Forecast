@@ -44,3 +44,79 @@ class RotationTests(unittest.TestCase):
         page=build_player_pages([dict(player_id='1',team_id='NEW')],[row(pid='1',team='OLD',starter=True)],
                                 '2025-26','2026-01-10T12:00:00Z')['players']['1']
         self.assertEqual(page.get('rotation_role',{}).get('label'),'unknown')
+
+
+def returning_starter_case(reason=None, reported=()):
+    """Team A: s1..s5 started g0-g4; in g5 s1 was away and the bench player f started for him."""
+    from nba_forecast.rotation import rotation_role, team_games
+    starters = ['s1', 's2', 's3', 's4', 's5']
+    rows = [row(i, pid=p, team='A', season='2025-26', starter=True, minutes=34) for i in range(5) for p in starters]
+    rows += [row(i, pid='f', team='A', season='2025-26', starter=False, minutes=18) for i in range(5)]
+    rows += [row(5, pid=p, team='A', season='2025-26', starter=True, minutes=34) for p in starters[1:]]
+    rows += [row(5, pid='f', team='A', season='2025-26', starter=True, minutes=30)]
+    if reason is not None:
+        rows.append(row(5, pid='s1', team='A', season='2025-26', status='dnp', minutes=0, fgm=0, fga=0, fg3m=0, fg3a=0,
+                        ftm=0, fta=0, participation_reason=reason))
+    games = team_games(rows)['A']
+    players = [dict(player_id=p, name=p, team_id='A', status='available') for p in starters+['f']]
+    profiles = [dict(player_id=p['player_id'], expected_minutes_baseline=30 if p['player_id'] == 'f' else 33,
+                     rotation_role=rotation_role(p, [r for r in rows if r['player_id'] == p['player_id']], team_games=games,
+                                                 reported_out=reported if p['player_id'] == 's1' else ()))
+                for p in players]
+    return players, profiles
+
+
+class ReturningStarterTests(unittest.TestCase):
+    def five(self, reason=None, reported=(), s1_status='available'):
+        from nba_forecast.rotation import projected_lineups
+        players, profiles = returning_starter_case(reason, reported)
+        players[0]['status'] = s1_status
+        return set(projected_lineups(players, profiles)['A']['player_ids'])
+
+    def test_a_starter_away_since_his_last_start_takes_his_place_back_from_the_fill_in(self):
+        # ATL 2026-11-04: Jalen Johnson, reported out of 0022600160, ranked behind
+        # Luguentz Dort, who started that one game.
+        everyone = {'s1', 's2', 's3', 's4', 's5'}
+        for reason in ('Inactive', 'Inactive - Injury/Illness', 'DND - Rest', 'NWT - League Suspension'):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.five(reason), everyone)
+        with self.subTest('reported out on the official injury report, no box-score line'):
+            self.assertEqual(self.five(None, reported=('g5',)), everyone)
+
+    def test_a_coaching_decision_or_unexplained_absence_keeps_the_fill_in(self):
+        fill_in = {'f', 's2', 's3', 's4', 's5'}
+        for reason in ("DNP - Coach's Decision", "Inactive - Coach's Decision", "COACH'S DECISION", ''):
+            with self.subTest(reason=reason):
+                self.assertEqual(self.five(reason), fill_in)
+        with self.subTest('no box-score line and no report'):
+            self.assertEqual(self.five(None), fill_in)
+        with self.subTest('still out today'):
+            self.assertEqual(self.five('Inactive - Injury/Illness', s1_status='out'), fill_in)
+
+    def test_role_records_the_games_missed_since_the_last_appearance(self):
+        _, profiles = returning_starter_case('Inactive - Injury/Illness')
+        roles = {p['player_id']: p['rotation_role'] for p in profiles}
+        self.assertEqual((roles['s1']['missed_game_ids'], roles['s1']['absent_since_last_game']), (['g5'], True))
+        self.assertEqual((roles['f']['missed_game_ids'], roles['f']['absent_since_last_game']), ([], False))
+
+    def test_player_pages_use_box_score_absences(self):
+        from nba_forecast.rotation import projected_lineups
+        starters = ['s1', 's2', 's3', 's4', 's5']
+        rows = [row(i, pid=p, team='A', season='2025-26', starter=True, minutes=34) for i in range(5) for p in starters]
+        rows += [row(i, pid='f', team='A', season='2025-26', starter=False, minutes=18) for i in range(5)]
+        rows += [row(5, pid=p, team='A', season='2025-26', starter=True, minutes=34) for p in starters[1:]+['f']]
+        rows.append(row(5, pid='s1', team='A', season='2025-26', status='dnp', minutes=0, participation_reason='Inactive'))
+        roster = [dict(player_id=p, name=p, team_id='A') for p in starters+['f']]
+        pages = build_player_pages(roster, rows, '2025-26', '2026-01-10T12:00:00Z')['players']
+        self.assertTrue(pages['s1']['rotation_role']['absent_since_last_game'])
+        players = [dict(player_id=p, name=p, team_id='A') for p in pages]
+        self.assertEqual(set(projected_lineups(players, list(pages.values()))['A']['player_ids']), set(starters))
+
+    def test_profiles_read_reported_absences_from_the_snapshot(self):
+        from nba_forecast.profiles import build_profiles
+        from tests.test_store import inputs
+        s, h, _ = inputs()
+        s['reported_unavailable'] = {'P1': ['missed-game']}
+        profiles = {p['player_id']: p for p in build_profiles(s, h)['players']}
+        self.assertIn('absent_since_last_game', profiles['P1']['rotation_role'])
+        self.assertIn('missed_game_ids', profiles['P2']['rotation_role'])
