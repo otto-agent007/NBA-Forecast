@@ -480,7 +480,7 @@ def _tick(folder,history,report):
         report['errors'].append(dict(task='postgame_sources',error=f'{type(exc).__name__}: {exc}'))
     phase('postgame_sources')
     _evaluate_runs(folder,db,report)
-    _missed_finals(state,schedule,report)
+    _missed_finals(state,schedule,report,folder)
     atomic_json(statepath,state)
     phase('evaluate_runs')
     _carry_derived(folder,active_model,report)
@@ -650,17 +650,48 @@ def _collect_finals(schedule,cache,raw,report):
             report['errors'].append(dict(task='final_boxscore',game_id=game['game_id'],error=f'{type(exc).__name__}: {exc}'))
 
 
-def _missed_finals(state,schedule,report):
-    """Games that tipped since operations began without a final-stage run are missed, not an old season."""
+MISSED_FINAL_WINDOW_HOURS=48
+
+
+def _missed_finals(state,schedule,report,folder=None):
+    """Games that tipped since operations began without a final-stage run are missed, not an old season.
+
+    A miss is recorded once, under ``state['missed_finals']`` and mirrored to
+    ``missed-finals.json`` (game, tipoff, the tick that first saw it), and is
+    never backdated into a success. It marks the tick ``partial`` for
+    ``MISSED_FINAL_WINDOW_HOURS`` after the tipoff; older misses stay on the
+    record (``report['missed_final_record']``) without marking every later tick.
+    A miss whose final run turns up after all (a recovered run) leaves the record.
+    """
     # Only flag games occurring after operations were first started, not an entire
     # historical season as missed. Unknown/postponed start times cannot be due.
     state.setdefault('tracking_started_at',report['started_at'])
+    record=state.setdefault('missed_finals',{})
+    now=parse_time(_now())
+    changed=False
     for game in schedule['games']:
         start=game['start_time']
-        if start and game['status']!='postponed' and parse_time(state['tracking_started_at'])<parse_time(start)<=parse_time(_now()):
-            key=f"{game['game_id']}:{start}:final"
-            if not any(k==key or k.startswith(key+':') for k in state['jobs']):
-                report['missed_final_games'].append(game['game_id'])
+        if not (start and game['status']!='postponed' and parse_time(state['tracking_started_at'])<parse_time(start)<=now):
+            continue
+        key=f"{game['game_id']}:{start}:final"
+        if any(k==key or k.startswith(key+':') for k in state['jobs']):
+            if game['game_id'] in record:
+                del record[game['game_id']]
+                changed=True
+            continue
+        item=record.get(game['game_id'])
+        if item is None or item['start_time']!=start:
+            record[game['game_id']]=dict(start_time=start,first_seen_at=report['started_at'])
+            changed=True
+        if now-parse_time(start)<=timedelta(hours=MISSED_FINAL_WINDOW_HOURS):
+            report['missed_final_games'].append(game['game_id'])
+    report['missed_final_record']=dict(total=len(record),recent=len(report['missed_final_games']),
+                                       older=sorted(g for g in record if g not in report['missed_final_games']))
+    if folder is not None and (changed or not (Path(folder)/'missed-finals.json').exists()):
+        atomic_json(Path(folder)/'missed-finals.json',dict(schema_version=1,tracking_started_at=state['tracking_started_at'],
+            window_hours=MISSED_FINAL_WINDOW_HOURS,games=[dict(game_id=g,**v) for g,v in sorted(record.items())],
+            policy='A tipped game without its T-30 final run is recorded once and never backdated; '
+                   'it marks the tick partial for the window after tipoff and stays on the record after.'))
 
 
 def _absent_from_final(rows,predictions):
