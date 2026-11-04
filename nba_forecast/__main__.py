@@ -32,6 +32,18 @@ def _emit(value, output=None):
         print(text, end='')
 
 
+def _tick_summary(report):
+    """One line for journald: the timer runs a tick every minute, and the full
+    report (about 340 KB, mostly per-player summaries) is already saved as
+    last-tick.json and appended to ticks.jsonl."""
+    keys = ('started_at', 'finished_at', 'status', 'created_runs', 'evaluated_runs', 'recovered_runs',
+            'missed_final_games', 'errors', 'warnings', 'timings')
+    line = {key: report.get(key) for key in keys}
+    line['waiting_jobs'] = len(report.get('waiting_jobs') or [])
+    line['deferred_jobs'] = len(report.get('deferred_jobs') or [])
+    return line
+
+
 def _rows(paths):
     rows = []
     for path in paths or []:
@@ -113,7 +125,9 @@ def _parser():
     tick = sub.add_parser('tick')
     tick.add_argument('--directory', required=True)
     tick.add_argument('--history', nargs='*', default=[])
-    tick.add_argument('--output')
+    tick.add_argument('--output', help='Write the full report to this new file')
+    tick.add_argument('--full-report', action='store_true',
+                      help='Print the full report instead of the one-line summary')
     derived = sub.add_parser('derived', help='Rebuild the derived reports (performance, calibration, postgame, daily reviews, market) when their inputs changed; the derived service runs this every minute')
     derived.add_argument('--directory', required=True)
     derived.add_argument('--output')
@@ -246,6 +260,9 @@ def main(argv=None):
             from .operations import run_tick
             value=run_tick(args.directory,_rows(args.history))
             exit_code=0 if value['status']=='complete' and not value['missed_final_games'] else 2
+            if not args.output and not args.full_report:
+                print(json.dumps(_tick_summary(value), sort_keys=True, allow_nan=False))
+                return exit_code
         elif args.command == 'derived':
             from .operations import run_derived
             value=run_derived(args.directory)

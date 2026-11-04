@@ -121,6 +121,11 @@ python -m nba_forecast tick --directory data/operations/production \
 python -m nba_forecast benchmarks --db data/operations/production/forecast.sqlite
 ```
 
+A tick prints one line (status, run counts, missed finals, errors, warnings,
+job counts and phase timings) so the every-minute timer does not fill journald;
+the full report is saved as `last-tick.json` and appended to `ticks.jsonl`.
+`--full-report` prints it instead, and `--output FILE` writes it to a new file.
+
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:
 extraction failures block new forecasts and are retried. Injury captures remain
