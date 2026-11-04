@@ -60,6 +60,13 @@ class ShotTests(unittest.TestCase):
         out=normalize_shots(self.pbp,self.box,self.time)
         self.assertEqual(out['coverage'],{'attempts':2,'located_attempts':1,'reconciled':True})
         self.assertIsNone(out['shots'][1]['x'])
+    def test_not_with_team_comment_is_not_a_played_player_in_livedata(self):
+        from nba_forecast.shots import _box_players
+        zero={'fieldGoalsAttempted':0,'fieldGoalsMade':0,'threePointersAttempted':0,'threePointersMade':0}
+        self.box['game']['awayTeam']['players'].append({'personId':9,'comment':'NWT - League Suspension',
+                                                        'statistics':dict(zero,minutes='0:00')})
+        _,played=_box_players(self.box['game'])
+        self.assertEqual(played,{('1','7')})
     def test_reject_bad_evidence(self):
         for mutate in (lambda p:p['game']['actions'].pop(),lambda p:p['game']['actions'].append(copy.deepcopy(p['game']['actions'][0])),lambda p:p['game']['actions'][0].update(teamId=3),lambda p:p['game'].update(gameId='0022600002')):
             p=copy.deepcopy(self.pbp)

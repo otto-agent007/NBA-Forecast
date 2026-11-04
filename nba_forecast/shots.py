@@ -6,7 +6,7 @@ import math
 import re
 
 from .data import _fetch, _timestamp, boxscore_url
-from .full_boxscore_sources import fetch_official_game_page, full_boxscore_url, normalize_official_page
+from .full_boxscore_sources import DID_NOT_PLAY_COMMENT, fetch_official_game_page, full_boxscore_url, normalize_official_page
 from .validation import validate_history
 
 
@@ -49,7 +49,7 @@ def _box_players(game, validated_rows=None):
                 if participation not in ('0', '1'):
                     raise ValueError('Invalid boxscore participation')
                 did_play = participation == '1'
-            elif re.match(r'^(DNP|DND|Inactive)(?:\s|$)', person.get('comment') or '', re.I):
+            elif DID_NOT_PLAY_COMMENT.match(person.get('comment') or ''):
                 did_play = False
             else:
                 # Official pages list a minute clock even for a participant

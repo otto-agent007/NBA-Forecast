@@ -118,6 +118,17 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         self.assertEqual(rows[0]['minutes_source_value'],'PT31M07.00S')
         self.assertEqual(rows[1]['status'],'dnp')
 
+    def test_not_with_team_comment_is_a_dnp_not_a_missing_clock(self):
+        # 0022600160 (2026-11-02): a suspended player listed "NWT - League Suspension"
+        # with an empty clock; the page failed to parse and blocked every forecast.
+        unused=self.page['props']['pageProps']['game']['awayTeam']['players'][1]
+        unused['comment']='NWT - League Suspension'
+        row={r['player_id']:r for r in self.normalize()}['21']
+        self.assertEqual((row['status'],row['minutes'],row['participation_reason']),('dnp',0,'NWT - League Suspension'))
+        unused['comment']='Suspended'
+        with self.assertRaises(ValueError):
+            self.normalize()
+
     def test_positive_clock_overrides_stale_dnp_comment_with_explicit_audit(self):
         person=self.page['props']['pageProps']['game']['homeTeam']['players'][0]
         person['comment']="DNP - Coach's Decision"
