@@ -57,8 +57,9 @@ counts. The filter selects made/missed/all attempts. Each shot retains its sourc
 URL, retrieval time, event number and game ID; raw payload hashes are archived.
 
 A 403/500 or schema/reconciliation failure becomes a visible missing-data reason.
-Failure retries are deferred six hours; successful shot files are cached. Each
-runner tick fetches at most two missing shot games after pregame work. An explicit
+Failed games are retried after 1, 2 and 4 minutes, then every 5 minutes, and
+hourly once a game is six hours past tipoff (`docs/full-boxscore.md`); successful
+shot files are cached. Each runner tick fetches at most 16 queued games. An explicit
 sync can fetch up to 50. Coverage is captured games, not a claim of full-season
 completeness. NBA interfaces are undocumented and access varies by game/endpoint.
 
