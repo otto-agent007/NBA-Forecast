@@ -96,6 +96,21 @@ def _shot_state(result, rows):
 # hours of the final; a page still without them is fetched again, every half hour, for a day.
 INACTIVE_WAIT=timedelta(hours=24)
 INACTIVE_RETRY_SECONDS=1800
+# A failed game is retried after 1, 2 and 4 minutes, then every 5 minutes while its
+# sources are still being published. Six hours after tipoff a game still failing is
+# usually waiting on a source correction (team minutes that do not add up, a played
+# player without minutes); each attempt costs up to three 15 s page timeouts, so
+# after the first three quick retries it is retried hourly, without end, instead.
+RETRY_SECONDS=300
+STALE_AFTER=timedelta(hours=6)
+STALE_RETRY_SECONDS=3600
+
+
+def _retry_wait(attempts,game_time,now):
+    wait=min(60*2**min(attempts-1,3),RETRY_SECONDS)
+    if wait==RETRY_SECONDS and parse_time(now)>=parse_time(game_time)+STALE_AFTER:
+        return STALE_RETRY_SECONDS
+    return wait
 
 
 def _waiting_for_inactives(rows,now):
@@ -251,7 +266,7 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
         result.update(source_version=SHOT_SOURCE_VERSION,attempt_count=attempts,last_attempt_at=now)
         if not _shot_state(result,rows)[1] or (game is not None and _needs_official_final(rows,now)):
             wait=(INACTIVE_RETRY_SECONDS if _shot_state(result,rows)[1] and _waiting_for_inactives(rows,now)
-                  else min(60*2**min(attempts-1,3),300))
+                  else _retry_wait(attempts,rows[0]['game_time'],now))
             result['next_retry_at']=(parse_time(now)+timedelta(seconds=wait)).isoformat()
         cached[gid]=result
         atomic_json(path,result)

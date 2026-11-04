@@ -67,7 +67,10 @@ NBA final and play-by-play. Canceled games are excluded. Cached finals must stil
 match their scheduled game, tipoff and team identities.
 
 The player/shot collector attempts up to 16 games per tick. New games take priority; failures retry fairly
-with a bounded delay instead of blocking the backlog for six hours. Adapter
+with a bounded delay instead of blocking the backlog for six hours: after 1, 2
+and 4 minutes, then every 5 minutes, and hourly once the game is more than six
+hours past tipoff (a source that still fails then is usually waiting on a
+correction, and each attempt can cost three 15 s page timeouts). Adapter
 version changes invalidate old failure delays. Every played player is included,
 including zero-attempt appearances and players absent from the current roster.
 All FGA/FGM/3PA/3PM reconcile per player. Official team heaves are kept separately

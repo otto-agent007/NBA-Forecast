@@ -97,6 +97,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code,2)
         self.assertEqual(json.loads(stream.getvalue())['status'],'incomplete')
 
+    def tick_report(self):
+        return {'started_at':'2026-11-04T09:07:00+00:00','finished_at':'2026-11-04T09:13:03+00:00',
+                'status':'partial','created_runs':0,'evaluated_runs':2658,'recovered_runs':0,
+                'missed_final_games':['0022600157'],'errors':[],
+                'warnings':[{'game_id':'0022600142','task':'shot_data','error':'Still inconsistent'}],
+                'timings':{'evaluate_runs':354.2},'waiting_jobs':[{'game_id':'0022600173'}],'deferred_jobs':[],
+                'player_sync':{'player_summaries':{str(i):{'name':'x'*40} for i in range(500)}}}
+
+    def test_tick_prints_a_one_line_summary_for_the_journal(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from unittest.mock import patch
+        from nba_forecast.__main__ import main
+        with patch('nba_forecast.operations.run_tick',return_value=self.tick_report()), redirect_stdout(StringIO()) as stream:
+            code=main(['tick','--directory','unused'])
+        self.assertEqual(code,2)
+        lines=stream.getvalue().splitlines()
+        self.assertEqual(len(lines),1)
+        line=json.loads(lines[0])
+        self.assertEqual((line['status'],line['evaluated_runs'],line['missed_final_games'],line['waiting_jobs']),
+                         ('partial',2658,['0022600157'],1))
+        self.assertEqual(line['warnings'][0]['game_id'],'0022600142')
+        self.assertNotIn('player_sync',line)
+
+    def test_tick_full_report_flag_and_output_file_keep_the_whole_report(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from unittest.mock import patch
+        from nba_forecast.__main__ import main
+        report=self.tick_report()
+        with patch('nba_forecast.operations.run_tick',return_value=report), redirect_stdout(StringIO()) as stream:
+            main(['tick','--directory','unused','--full-report'])
+        self.assertEqual(json.loads(stream.getvalue()),report)
+        with tempfile.TemporaryDirectory() as folder, patch('nba_forecast.operations.run_tick',return_value=report), \
+                redirect_stdout(StringIO()) as stream:
+            output=Path(folder)/'tick.json'
+            main(['tick','--directory','unused','--output',str(output)])
+            self.assertEqual(json.loads(output.read_text()),report)
+        self.assertEqual(stream.getvalue(),'')
+
     def test_final_window_cli_restricts_schedule(self):
         from contextlib import redirect_stdout
         from datetime import datetime,timezone,timedelta

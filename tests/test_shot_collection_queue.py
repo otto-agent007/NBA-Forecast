@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from nba_forecast.full_boxscore_sources import normalize_official_page
 from nba_forecast.player_sync import sync_player_data
+from nba_forecast.shots import SHOT_SOURCE_VERSION
 from tests.test_shots import page_fixture
 
 
@@ -46,6 +47,36 @@ class ShotCollectionQueueTests(unittest.TestCase):
 
     def run_sync(self,rows=None,limit=1):
         return sync_player_data(self.folder,self.rows if rows is None else rows,roster=self.roster,max_shot_games=limit)
+
+    def failed_retry(self,now,attempt_count):
+        """Run one failing attempt for game 0022600001 (tipoff 2026-10-20 00:00 UTC)."""
+        self.clock.now.return_value=now
+        if attempt_count:
+            (self.folder/'shots').mkdir(exist_ok=True)
+            (self.folder/'shots/0022600001.json').write_text(json.dumps(dict(game_id='0022600001',season='2026-27',
+                game_time=self.game['start_time'],known_at='2026-10-20T03:00:00Z',shots=[],
+                missing_reason='Complete final team minutes or played-player count disagree',
+                source_version=SHOT_SOURCE_VERSION,attempt_count=attempt_count,
+                last_attempt_at='2026-10-20T03:00:00Z',next_retry_at='2026-10-20T03:05:00Z')))
+        with patch('nba_forecast.player_sync.fetch_game_shots',side_effect=ValueError('Still inconsistent')):
+            out=self.run_sync()
+        saved=json.loads((self.folder/'shots/0022600001.json').read_text())
+        self.assertEqual(out['shot_games_attempted'],1)
+        self.assertEqual(saved['attempt_count'],attempt_count+1)
+        return saved['next_retry_at']
+
+    def test_a_game_still_failing_six_hours_after_tipoff_is_retried_hourly(self):
+        self.assertEqual(self.failed_retry(datetime(2026,10,23,tzinfo=timezone.utc),12),'2026-10-23T01:00:00+00:00')
+
+    def test_a_failing_game_keeps_five_minute_retries_within_six_hours_of_tipoff(self):
+        self.roster['observed_at']='2026-10-19T00:00:00Z'
+        for r in self.rows:
+            r['known_at']='2026-10-20T02:30:00Z'
+        self.assertEqual(self.failed_retry(datetime(2026,10,20,5,tzinfo=timezone.utc),12),'2026-10-20T05:05:00+00:00')
+
+    def test_a_game_first_attempted_late_still_gets_the_quick_retries(self):
+        self.assertEqual(self.failed_retry(datetime(2026,10,23,tzinfo=timezone.utc),0),'2026-10-23T00:01:00+00:00')
+        self.assertEqual(self.failed_retry(datetime(2026,10,23,0,2,tzinfo=timezone.utc),2),'2026-10-23T00:06:00+00:00')
 
     def test_new_source_adapter_invalidates_recent_failure_backoff(self):
         (self.folder/'shots').mkdir()
