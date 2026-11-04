@@ -143,6 +143,9 @@ export default function Sidebar({ game, data, onReview, now }) {
         {!!data.runner?.missed_final_games?.length && <p className="warning">
           Missing final forecasts: {data.runner.missed_final_games.map(runnerGame).join(", ")}.
         </p>}
+        {!!data.runner?.missed_final_record?.older?.length && <p className="tiny">
+          {data.runner.missed_final_record.older.length} older missed final {data.runner.missed_final_record.older.length === 1 ? "checkpoint" : "checkpoints"} on record (missed-finals.json).
+        </p>}
         <p className="tiny">
           {stamp(data.runner?.finished_at)}. Refresh reloads saved evidence; it
           does not start the runner.
