@@ -17,6 +17,11 @@ from .data import (DEFAULT_CACHE, MAX_BYTES, OPTIONAL_STAT_FIELDS, STAT_FIELDS,
 from .validation import COUNTS, OPTIONAL_COUNTS, parse_time, shooting_percentages, validate_history
 
 
+# Comments NBA box scores give a listed player who did not play: Did Not Play,
+# Did Not Dress, Not With Team (e.g. "NWT - League Suspension"), Inactive.
+DID_NOT_PLAY_COMMENT = re.compile(r'^(DNP|DND|NWT|Inactive)(?:\s|$)', re.I)
+
+
 def full_boxscore_url(game_id):
     if not isinstance(game_id, str) or not re.fullmatch(r"002\d{7}", game_id):
         raise ValueError("Official full box requires a regular-season NBA game ID")
@@ -102,7 +107,7 @@ def _rows(page, game, metadata):
             seen.add(pid)
             stats = person['statistics']
             clock, comment = stats.get('minutes'), person.get('comment') or ''
-            dnp_comment = isinstance(comment, str) and bool(re.match(r'^(DNP|DND|Inactive)(?:\s|$)', comment, re.I))
+            dnp_comment = isinstance(comment, str) and bool(DID_NOT_PLAY_COMMENT.match(comment))
             overflow = isinstance(clock,str) and bool(re.fullmatch(r'\d+:60',clock))
             if isinstance(clock,str) and clock.startswith('PT'):
                 minutes = _minutes(clock)
