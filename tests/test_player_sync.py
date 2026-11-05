@@ -1,4 +1,4 @@
-import json,tempfile,unittest
+import hashlib,json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 from nba_forecast.player_sync import sync_player_data
@@ -73,3 +73,29 @@ class PlayerSyncTests(unittest.TestCase):
    stale=dict(final,player_id='2',name='Stale',status='dnp',minutes=0,fgm=0,fga=0,fg3m=0,fg3a=0,ftm=0,fta=0,tov=0,pts=0)
    merged=_merge_finals([stale,dict(final,game_id='0022600002')],folder/'finals')
    self.assertEqual(sorted((r['game_id'],r['player_id']) for r in merged),[('0022600001','1'),('0022600002','1')])
+
+ def test_archive_skips_a_box_read_before_it_turned_final(self):
+  # 0022600182: the shot collector archived LiveData at "END Q4" (gameStatus 2) after the
+  # official page had gone final; re-reading it stopped every tick for fourteen hours.
+  from nba_forecast.data import archive_payload,normalize_boxscore
+  from nba_forecast.player_sync import enrich_archive
+  examples=Path(__file__).resolve().parents[1]/'examples'/'verified'
+  url='https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022600001.json'
+  final=json.loads((examples/'boxscore_0022600001.json').read_text())
+  live=json.loads(json.dumps(final))
+  live['game'].update(gameStatus=2,gameStatusText='END Q4')
+  with tempfile.TemporaryDirectory() as d:
+   raw=Path(d)
+   final_bytes=json.dumps(final).encode()
+   archive_payload(final_bytes,url,'2026-10-22T01:40:00+00:00',raw)
+   archive_payload(json.dumps(live).encode(),url,'2026-10-22T01:45:00+00:00',raw)
+   archive_payload(b'<html>gateway</html>',url,'2026-10-22T01:50:00+00:00',raw)
+   archive_payload(b'[]',url,'2026-10-22T01:55:00+00:00',raw)
+   rows=enrich_archive(raw)
+   expected=normalize_boxscore(final,url,'2026-10-22T01:40:00+00:00')
+   self.assertEqual(len(rows),len(expected))
+   self.assertEqual({r['known_at'] for r in rows},{'2026-10-22T01:40:00+00:00'})
+   # A final archive that no longer matches its digest still raises.
+   (raw/(hashlib.sha256(final_bytes).hexdigest()+'.json')).write_bytes(final_bytes+b' ')
+   with self.assertRaisesRegex(ValueError,'hash mismatch'):
+    enrich_archive(raw)

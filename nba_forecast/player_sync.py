@@ -22,7 +22,17 @@ def enrich_archive(directory):
         raw=(path.parent/(meta['sha256']+'.json')).read_bytes()
         if hashlib.sha256(raw).hexdigest()!=meta['sha256']:
             raise ValueError('Archive hash mismatch: '+path.name)
-        for row in normalize_boxscore(json.loads(raw),meta['source_url'],meta['retrieved_at']):
+        # Every response is archived before it is checked, including a box the shot collector
+        # read before LiveData turned final (0022600182 at "END Q4"). One that is not a final
+        # box score adds nothing here; a final that does not normalize still raises.
+        try:
+            payload=json.loads(raw)
+        except (ValueError,UnicodeDecodeError):
+            continue
+        game=payload.get('game') if isinstance(payload,dict) else None
+        if not isinstance(game,dict) or game.get('gameStatus')!=3:
+            continue
+        for row in normalize_boxscore(payload,meta['source_url'],meta['retrieved_at']):
             key=(row['game_id'],row['player_id'])
             old=rows.get(key)
             if old is None or parse_time(old['known_at'])<parse_time(row['known_at']):

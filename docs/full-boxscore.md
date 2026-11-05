@@ -55,6 +55,12 @@ final scores, shot makes/attempts and rebound identities must reconcile. Complet
 official finals additionally require both teams' regulation/overtime minutes and
 on-court plus/minus sums to agree with the game.
 
+Each tick fills optional fields (rebounds, assists, steals, blocks, starter) into
+captured finals from archived LiveData finals. Every response is archived before
+it is checked, so the archive also holds boxes read before LiveData turned final;
+those are skipped. A failure in this step is reported as `enrich_finals` and the
+tick goes on to forecast, since it only adds optional fields.
+
 Source corrections retain the previous final cache by hash and record per-field
 before/after values. They create new evaluation revisions rather than rewriting
 forecasts. Explicit source-backed DNPs missing from the other source stay labeled
