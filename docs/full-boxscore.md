@@ -53,13 +53,46 @@ full boxes and play-by-play with NBA legacy shot coordinates. Source bytes,
 retrieval times and SHA256 hashes are retained. Game identity, played players,
 final scores, shot makes/attempts and rebound identities must reconcile. Complete
 official finals additionally require both teams' regulation/overtime minutes and
-on-court plus/minus sums to agree with the game.
+on-court plus/minus sums to agree with the game. Each player's time is given to the
+second, so a team's sum may miss the game by half a second per played player (at
+least 2 s): 0022600142 has both teams 3 s short, in LiveData and on the page alike.
+A missing or broken row costs minutes, not seconds.
+
+A listed player whose comment the parser does not recognize, with no clock and no
+counts, did not play: the row is a DNP that keeps the comment as its reason and a
+`participation_audit`. Counts with no clock still contradict each other and fail the
+page.
 
 Each tick fills optional fields (rebounds, assists, steals, blocks, starter) into
 captured finals from archived LiveData finals. Every response is archived before
 it is checked, so the archive also holds boxes read before LiveData turned final;
-those are skipped. A failure in this step is reported as `enrich_finals` and the
-tick goes on to forecast, since it only adds optional fields.
+those are skipped, and a damaged archive is left out and reported as an
+`enrich_finals` warning, since this step only adds optional fields.
+
+### One bad source costs one game
+
+Every response is archived before it is checked, and stat corrections, layout
+changes and republished pages arrive unannounced, so one game's source can stop
+replaying at any time. That costs that game, never the tick or every forecast:
+
+- **Merging captured finals** (`_merge_finals`): a final that cannot be read or
+  validated is left out and its game keeps the input history's rows; a final whose
+  season, tipoff or teams differ from the input history's replaces that game. Both
+  are tick errors (`finals_cache`), and the tick goes on. Player sync merges the
+  same way and lists them under `skipped_sources`.
+- **Forecast preparation**: a game whose recap page, shot collection or archives no
+  longer replay is left out of role context, shot profiles and shot quality, exactly
+  as if it had not been collected, and reported once per tick as a warning
+  (`role_context_source`, `shot_profile_source`, `shot_quality_source`). Role context
+  first falls back to the game's next newest pages, up to three. Preflight replays
+  what was prepared, so the run's evidence is still verified; bad evidence is never
+  used, only no longer fatal.
+- **Final sync and evaluation**: anything that escapes their per-game handling is a
+  tick error (`final_sync`, `evaluate_runs`); later steps still run.
+- **Postgame**: an unreadable provenance file is skipped by the archive scan.
+
+Called directly, the preparation and enrichment functions still raise on any source
+problem.
 
 Source corrections retain the previous final cache by hash and record per-field
 before/after values. They create new evaluation revisions rather than rewriting

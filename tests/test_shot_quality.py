@@ -219,6 +219,23 @@ class ShotQualityTests(unittest.TestCase):
         self.assertAlmostEqual(audit['families']['two_point']['current_attempts'], 11.91)
         self.assertEqual(changed['two_point']['current_weighted_attempts'], original['two_point']['current_weighted_attempts'])
 
+    def test_one_unreplayable_game_is_left_out_and_recorded(self):
+        # A collection that no longer replays (here a tampered location) costs only its game.
+        path = self.directory/'shots/0022600001.json'
+        source = json.loads(path.read_bytes())
+        source['shots'][0]['x'] = 200
+        atomic_json(path, source)
+        (self.directory/'shots/0022600099.json').write_bytes(b'{')
+        with self.assertRaises(ValueError):
+            self.prepare()
+        rejected = []
+        prepared = shot_quality.prepare_shot_quality(self.directory, self.snapshot, self.history, rejected=rejected)
+        self.assertEqual([s['game_id'] for s in prepared['sources']], ['0022600002', '0022600003'])
+        self.assertEqual([(r['task'], r['game_id']) for r in rejected],
+                         [('shot_quality_source', '0022600001'), ('shot_quality_source', '0022600099')])
+        self.snapshot['shot_quality'] = prepared
+        shot_quality.verify_shot_quality(self.snapshot, self.history, self.directory)
+
     def test_raw_normalized_location_and_source_hash_tampering_fail(self):
         path = self.directory/'shots/0022600001.json'
         source = json.loads(path.read_bytes())

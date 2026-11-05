@@ -294,6 +294,71 @@ class RoleContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Ambiguous|ambiguous|same-time'):
             self.prepare(history)
 
+    def tolerant(self, history):
+        rejected = []
+        prepared = role_context.prepare_role_context(self.directory, self.snapshot, history, rejected=rejected)
+        # Whatever was skipped, the context replays from the archives alone.
+        role_context.verify_role_context(dict(self.snapshot, role_context=prepared), history, self.directory)
+        return prepared, rejected
+
+    def test_an_unusable_newest_page_falls_back_to_the_previous_page(self):
+        # A page saved before it was final, or in a layout the parser does not know, costs
+        # nothing when an earlier version of the same game's page is good.
+        history, metadata = self.install()
+        broken = copy.deepcopy(self.page)
+        broken['game']['awayTeam']['players'] = 'invalid'
+        self.write_source(broken, self.game, observed='2026-10-24T06:40:00+00:00', replace=False)
+        with self.assertRaises(ValueError):
+            self.prepare(history)
+        prepared, rejected = self.tolerant(history)
+        self.assertEqual([s['source_sha256'] for s in prepared['sources']], [metadata['sha256']])
+        self.assertEqual([e['player_id'] for e in prepared['events']], ['1642843'])
+        self.assertEqual([(r['task'], r['game_id'], r['known_at']) for r in rejected],
+                         [('role_context_source', '0022600095', '2026-10-24T06:40:00+00:00')])
+
+    def test_one_unusable_game_costs_only_its_own_evidence(self):
+        missi_game, missi_page = page_fixture(True)
+        for change in ('tampered', 'provenance', 'unparseable', 'ambiguous', 'disagrees'):
+            with self.subTest(change=change):
+                self.directory = Path(tempfile.mkdtemp(dir=self.tmp.name))
+                history, metadata = self.install()
+                other, _ = self.install(missi_page, missi_game)
+                if change == 'tampered':
+                    Path(metadata['raw_path']).write_bytes(Path(metadata['raw_path']).read_bytes()+b' ')
+                if change == 'provenance':
+                    Path(metadata['provenance_path']).write_text('[]')
+                if change == 'unparseable':
+                    broken = copy.deepcopy(self.page)
+                    broken['game']['awayTeam']['players'][0]['statistics']['minutes'] = '17 min'
+                    self.write_source(broken, self.game)
+                if change == 'ambiguous':
+                    returned = copy.deepcopy(self.page)
+                    returned['story']['content'] = ['Flagg returned to the game after halftime.']
+                    self.write_source(returned, self.game, replace=False)
+                if change == 'disagrees':
+                    # A stat correction the cached final has not taken yet.
+                    history = [dict(r, minutes=r['minutes']+1) for r in history]
+                with self.assertRaises(ValueError):
+                    self.prepare(history+other)
+                prepared, rejected = self.tolerant(history+other)
+                self.assertEqual([e['game_id'] for e in prepared['events']], ['0022600100'])
+                self.assertEqual([s['game_id'] for s in prepared['sources']], ['0022600100'])
+                self.assertIn(dict(game_id='0022600095', status='source_unavailable'),
+                              prepared['coverage']['unconfirmed_games'])
+                self.assertTrue(rejected and all(r['task'] == 'role_context_source' for r in rejected))
+                self.assertTrue(all(r.get('game_id', '0022600095') == '0022600095' for r in rejected))
+
+    def test_at_most_three_pages_are_tried_per_game(self):
+        history, _ = self.install()
+        broken = copy.deepcopy(self.page)
+        broken['game']['awayTeam']['players'] = 'invalid'
+        for minute in range(31, 35):
+            broken['story']['content'] = [FLAGG+' '*minute]
+            self.write_source(broken, self.game, observed=f'2026-10-24T06:{minute}:00+00:00', replace=False)
+        prepared, rejected = self.tolerant(history)
+        self.assertEqual(prepared['sources'], [])
+        self.assertEqual([r['known_at'][11:16] for r in rejected], ['06:34', '06:33', '06:32'])
+
     def test_missing_raw_source_remains_unknown_without_rewriting_history(self):
         history, metadata = self.install()
         Path(metadata['raw_path']).unlink()

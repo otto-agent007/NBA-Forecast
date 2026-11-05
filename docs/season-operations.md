@@ -225,7 +225,10 @@ the forecasts are byte-identical. The replay key carries the archive digests,
 the rows replayed against and each archive file's size and modification time,
 so a rewritten archive is replayed and rejected as before. The replay cost of
 that first game grows with the season's archives; a cache that outlives the
-process would be the next step.
+process would be the next step. One game whose source no longer replays is left
+out of that preparation and reported, rather than failing every forecast
+(`full-boxscore.md`, "One bad source costs one game"); before 2026-11-05 one
+unparseable page (0022600160, 2026-11-04) withheld a whole slate.
 
 ## Participation
 

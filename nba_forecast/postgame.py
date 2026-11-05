@@ -158,9 +158,16 @@ def _archived(raw):
     """Latest archived LiveData box score and play-by-play provenance, keyed by (game, kind)."""
     sources={}
     for path in sorted(Path(raw).glob('*.provenance.json')):
-        meta=json.loads(path.read_text())
-        url=meta.get('source_url','')
-        match=re.search(r'/liveData/(boxscore|playbyplay)/\1_(002\d{7})\.json$',url)
+        # An unreadable provenance file names no game; the role-context and finals-enrichment
+        # scans report it, and it must not stop the recap of every game.
+        try:
+            meta=json.loads(path.read_text())
+            url=meta.get('source_url','') if isinstance(meta,dict) else ''
+            match=re.search(r'/liveData/(boxscore|playbyplay)/\1_(002\d{7})\.json$',url if isinstance(url,str) else '')
+            if match:
+                parse_time(meta['retrieved_at'])
+        except (ValueError,KeyError,TypeError,UnicodeError,OSError):
+            continue
         if not match:
             continue
         kind,gid=match.groups()
@@ -220,7 +227,7 @@ def collect_sources(directory,schedule,now,*,max_games=1,budget_seconds=40):
                 known=max((observed for _,observed in responses),key=parse_time)
             analyze_game(*payloads,known)
             state[gid]=dict(status='complete',attempts=item.get('attempts',0),verified_at=now,known_at=known)
-        except (ValueError,KeyError,TypeError,OSError) as exc:
+        except (ValueError,KeyError,TypeError,AttributeError,OSError) as exc:
             # An archived pair that fails is fetched again on the next attempt.
             item.setdefault('attempts',1)
             item.setdefault('last_attempt_at',now)
@@ -262,7 +269,7 @@ def build_postgames(directory):
             result['input_signature']=signature
             atomic_json(output/(gid+'.json'),result)
             count+=1
-        except (ValueError,KeyError,TypeError,OSError) as exc:
+        except (ValueError,KeyError,TypeError,AttributeError,OSError) as exc:
             errors.append(dict(game_id=gid,error=str(exc)))
             atomic_json(output/(gid+'.json'),dict(game_id=gid,missing_reason=str(exc)))
     index=dict(generated_at=datetime.now(timezone.utc).isoformat(),analysis_version=VERSION,games=count,errors=errors)

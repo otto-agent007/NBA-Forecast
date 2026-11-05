@@ -42,3 +42,19 @@ class CompleteOfficialFinalTests(unittest.TestCase):
             r['minutes']=48
         with self.assertRaises(ValueError):
             validate_complete_official_final(rows)
+
+    def test_rounding_to_the_second_allows_half_a_second_per_player(self):
+        # 0022600142: LiveData and the page both sum DAL's 13 and OKC's 11 players to 3 s
+        # short of 240 minutes; per-player seconds are rounded, and that is all it is.
+        def team(players,short_seconds):
+            rows=[row(pid='A'+str(i),team='A',minutes=240/players,fgm=6,game_period=4,plus_minus=None)
+                  for i in range(players)]
+            rows[0]['minutes']-=short_seconds/60
+            return rows+[row(pid='B'+str(i),team='B',minutes=48,fgm=6,game_period=4,plus_minus=None) for i in range(5)]
+        for players,short,ok in ((13,3,True),(13,6,True),(13,7,False),(5,2,True),(5,3,False),(9,-4,True),(9,-5,False)):
+            with self.subTest(players=players,short=short):
+                if ok:
+                    validate_complete_official_final(team(players,short))
+                else:
+                    with self.assertRaisesRegex(ValueError,'team minutes'):
+                        validate_complete_official_final(team(players,short))

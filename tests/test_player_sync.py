@@ -99,3 +99,8 @@ class PlayerSyncTests(unittest.TestCase):
    (raw/(hashlib.sha256(final_bytes).hexdigest()+'.json')).write_bytes(final_bytes+b' ')
    with self.assertRaisesRegex(ValueError,'hash mismatch'):
     enrich_archive(raw)
+   # The tick enriches tolerantly: the damaged archive is left out and recorded.
+   skipped=[]
+   self.assertEqual(enrich_archive(raw,skipped),[])
+   self.assertEqual([s['archive'] for s in skipped],[hashlib.sha256(final_bytes).hexdigest()+'.provenance.json'])
+   self.assertIn('hash mismatch',skipped[0]['error'])

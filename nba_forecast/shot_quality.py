@@ -118,31 +118,45 @@ def _assemble(snapshot, context, records):
             located_attempts=located, roster_players=len(players)))
 
 
-def prepare_shot_quality(directory, snapshot, history):
-    """Capture all eligible current source games, including off-slate peers."""
+_SOURCE_ERRORS = (ValueError, KeyError, TypeError, AttributeError, UnicodeError, OSError)
+
+
+def prepare_shot_quality(directory, snapshot, history, rejected=None):
+    """Capture all eligible current source games, including off-slate peers.
+
+    Without ``rejected`` any source problem raises. With a list, a game whose collection
+    or archives cannot be replayed is left out and recorded there, exactly as if it had
+    not been collected, so ``verify_shot_quality`` replays the same pool.
+    """
     context = _context(snapshot, history)
     records = []
     for path in sorted((Path(directory)/'shots').glob('*.json')):
-        raw = path.read_bytes()
-        source = _json(raw)
-        if source.get('season') != snapshot['season'] or not _eligible(source, context):
-            continue
-        gid = source['game_id']
-        if path.stem != gid:
-            raise ValueError('Shot quality collection filename and game identity disagree')
-        actuals = context['history'].get(gid, [])
-        if not actuals:
-            continue  # No independent eligible actuals: no usable reference evidence.
-        digest = hashlib.sha256(raw).hexdigest()
-        replay, raw_sources, known = _replay(directory, source, actuals, context, digest=digest)
-        archived = Path(directory)/'shot-quality-evidence'/(digest+'.json')
-        archived.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with archived.open('xb') as stream:
-                stream.write(raw)
-        except FileExistsError:
-            if archived.read_bytes() != raw:
-                raise ValueError('Immutable shot quality archive hash differs')
+            raw = path.read_bytes()
+            source = _json(raw)
+            if source.get('season') != snapshot['season'] or not _eligible(source, context):
+                continue
+            gid = source['game_id']
+            if path.stem != gid:
+                raise ValueError('Shot quality collection filename and game identity disagree')
+            actuals = context['history'].get(gid, [])
+            if not actuals:
+                continue  # No independent eligible actuals: no usable reference evidence.
+            digest = hashlib.sha256(raw).hexdigest()
+            replay, raw_sources, known = _replay(directory, source, actuals, context, digest=digest)
+            archived = Path(directory)/'shot-quality-evidence'/(digest+'.json')
+            archived.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with archived.open('xb') as stream:
+                    stream.write(raw)
+            except FileExistsError:
+                if archived.read_bytes() != raw:
+                    raise ValueError('Immutable shot quality archive hash differs')
+        except _SOURCE_ERRORS as exc:
+            if rejected is None:
+                raise
+            rejected.append(dict(task='shot_quality_source', game_id=path.stem, error=f'{type(exc).__name__}: {exc}'))
+            continue
         records.append((_manifest(source, digest, raw_sources, known), replay))
     return _assemble(snapshot, context, records)
 
