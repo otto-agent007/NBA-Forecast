@@ -57,6 +57,34 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result['schedule_unverified_games'],['0022600001'])
         self.assertNotIn('schedule_crosscheck',[e.get('task') for e in result['errors']])
 
+    def test_unreadable_archive_is_reported_and_the_tick_still_forecasts(self):
+        # Finals enrichment only fills optional fields; its failure must not stop the slate.
+        import hashlib
+        from nba_forecast.data import archive_payload
+        source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
+        source['version']='nba-source'
+        verified=deepcopy(source)
+        verified['crosscheck']=dict(status='verified',verified_game_ids=['0022600001'],blocked_game_ids=[])
+        box=(Path(__file__).resolve().parents[1]/'examples'/'verified'/'boxscore_0022600001.json').read_bytes()
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)/'schedule'
+            folder.mkdir()
+            (folder/'latest.json').write_text(json.dumps(source))
+            archive_payload(box,'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022600001.json',
+                            '2026-10-22T01:40:00+00:00',Path(d)/'raw')
+            (Path(d)/'raw'/(hashlib.sha256(box).hexdigest()+'.json')).write_bytes(box+b' ')
+            with patch('nba_forecast.operations._now',return_value='2026-10-24T16:00:00Z'),\
+                 patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
+                 patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified),\
+                 patch('nba_forecast.operations.fetch_roster',side_effect=ValueError('roster offline')) as roster,\
+                 patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
+                result=run_tick(d,[])
+        tasks=[e.get('task') for e in result['errors']]
+        self.assertIn('enrich_finals',tasks)
+        self.assertNotIn('tick',tasks)
+        self.assertIn('hash mismatch',next(e['error'] for e in result['errors'] if e['task']=='enrich_finals'))
+        roster.assert_called_once()
+
     def test_both_schedule_sources_unavailable_use_the_saved_calendar(self):
         source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')
         source['version']='nba-source'

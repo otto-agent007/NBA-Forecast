@@ -386,8 +386,13 @@ def _tick(folder,history,report):
     if report.get('recovered_artifacts'):
         request_derived(folder,'recovered_artifacts')
     phase('recover_runs')
-    from .player_sync import enrich_final_cache
-    enrich_final_cache(folder)
+    # Enrichment only fills optional fields (rebounds, assists, steals, blocks, starter)
+    # into captured finals; a failure is reported and the tick goes on to forecast.
+    try:
+        from .player_sync import enrich_final_cache
+        enrich_final_cache(folder)
+    except Exception as exc:
+        report['errors'].append(dict(task='enrich_finals',error=f'{type(exc).__name__}: {exc}'))
     history=_merge_finals(history,cache)
     prior_path=folder/'historical-priors.json'
     if prior_path.exists():
