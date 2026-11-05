@@ -1,7 +1,7 @@
 """Observed player pages; every denominator is explicit and cutoff bounded."""
 import math
 from .data import _timestamp
-from .rotation import rotation_role
+from .rotation import rotation_role, team_games
 
 FIELDS = ('minutes','pts','reb','ast','stl','blk','tov','fgm','fga','fg3m','fg3a','ftm','fta','oreb','dreb','pf','plus_minus')
 
@@ -40,6 +40,7 @@ def build_player_pages(roster, history, season, as_of, shots=None):
             raise ValueError('Duplicate player/game history evidence')
         seen.add(key)
         grouped.setdefault(key[0], []).append(row)
+    games_by_team = team_games([r for rows in grouped.values() for r in rows])
     shot_games = list(shots.values()) if isinstance(shots, dict) else list(shots or [])
     players = {}
     people={str(p['player_id']):p for p in (roster.get('players', []) if isinstance(roster, dict) else roster)}
@@ -91,5 +92,5 @@ def build_player_pages(roster, history, season, as_of, shots=None):
             'missing_reason': '; '.join(sorted(set(missing_reasons))) if missing_reasons else ('No captured appearances this season' if not played_games else None),
             'coordinate_system': 'NBA legacy coordinates; 10 units per foot, hoop origin', 'observed_only': True}
         recent = sorted((r for r in rows if r['season'] == season), key=lambda r: (r['game_time'], r['game_id']), reverse=True)[:10]
-        players[pid] = {**person, 'player_id': pid, 'rotation_role': rotation_role(person,rows), 'current_season': _summary(rows, season), 'prior_season': _summary(rows, prior), 'recent_games': [{**r, **{f: r.get(f) if r['status'] == 'played' else None for f in FIELDS}} for r in recent], 'shot_chart': chart}
+        players[pid] = {**person, 'player_id': pid, 'rotation_role': rotation_role(person,rows,team_games=games_by_team.get(person.get('team_id'),[])), 'current_season': _summary(rows, season), 'prior_season': _summary(rows, prior), 'recent_games': [{**r, **{f: r.get(f) if r['status'] == 'played' else None for f in FIELDS}} for r in recent], 'shot_chart': chart}
     return {'season': season, 'as_of': as_of, 'players': players}

@@ -355,7 +355,15 @@ saved run's gate result from the latest attempt; older saved runs are immutable
 and labeled unverified when they predate the gate.
 
 Player outlooks select one projected five per team, preferring the latest
-captured starters and then supported role/minutes evidence. Selection happens
+captured starters and then supported role/minutes evidence. A player who
+started his last appearance and was away from every team game since keeps his
+place over the player who filled in: a missed game counts as an absence when
+the official injury report listed him out of it, or its box score lists him as
+not dressed (Inactive, DND, NWT), never for a coach's decision. On the 83 games
+with a saved T-30 run (2026-10-23 to 11-02), this projected 94.0% of actual
+starters (72.9% exact fives), against 91.9% (66.9%) for latest starts alone.
+Starters only label the five and team totals' withheld-bench check; no player
+forecast depends on them. Selection happens
 before search, status filters or sorting. Sparse evidence leaves unresolved
 slots, never invented names. Team buttons expose either roster directly;
 observed Season PPG stays visible when projections are withheld, with season,
