@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-28-participation
+  --reference datasets/backtest-2026-11-06-participation
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -144,7 +144,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-28-participation-midday
+  --reference datasets/backtest-2026-11-06-participation-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -175,7 +175,7 @@ python -m nba_forecast backtest \
   --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
   --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
   --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-10-27-early-season
+  --reference datasets/backtest-2026-11-06-early-season
 python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 ```
 
@@ -704,3 +704,80 @@ The change is a bug fix measured live: Hawks at Pacers on 2026-11-02, the
 one short bench this season, replayed from its saved snapshot gives 106.4
 Pacers points and Hawks by 11.9 (actual 104 and Hawks by 4; close 10.5)
 where production showed 60.9 and no margin.
+
+## Reference: 2026-11-06 (rotation participation and the minutes budget)
+
+`datasets/backtest-2026-11-06-participation/` (T-minus-30),
+`datasets/backtest-2026-11-06-participation-midday/` (preliminary) and
+`datasets/backtest-2026-11-06-early-season/` (seeded from opening night; its
+scoreboard is paired with an unchanged-code control run the same day, because
+`backtest-2026-10-27-early-season` predates later changes). Model code
+`regular-season-baseline-0.4.8`, three changes:
+
+- Rotation priors `.79` / `.82` → `.98` / `.99` (`model.PARTICIPATION_PRIORS`,
+  20–28 and 28+ minutes). The window already leaves out reported-out games, so
+  the prior has to be the rate on games the player was available for; the
+  all-games rates counted injuries twice. Bench priors stay at `.18` / `.70`.
+- Expected minutes above 240 scale every player down alike. The protected
+  rotation used to keep its minutes and the bench took the whole excess.
+- The bench fill cap rises from a quarter to double (`model.UPLIFT_CAP`,
+  `(.10, 1.)`); the rotation cap stays at a tenth.
+
+Live before the change (0.6.0, 2,457 player-games selected by the daily
+reviews): mean P 0.765 against 0.824 who played, low in every probability
+bucket; untagged rotation players who had played every window game were
+forecast 0.95 and played 0.998. Players who played were over-projected by +1.2
+minutes (+1.8 at 30+ forecast minutes) and +0.60 points (`performance.json`):
+with probabilities low, the 240-minute budget inflates minutes when playing.
+The replay shows the same direction, smaller: 0.817 against 0.840 at T-minus-30,
+about 0.045 low in each season's first three weeks.
+
+| Replay, against its reference | Verdict | Participation Brier | Points | Minutes | Interval score | Points bias |
+|---|---|---|---|---|---|---|
+| T-minus-30 (gate) | improved | −0.0007 ± 0.0001 | −0.014 ± 0.009 | +0.002 ± 0.024 | −0.094 ± 0.043 | +0.07 → −0.09, within noise |
+| Preliminary (midday) | improved | −0.0007 ± 0.0002 | −0.035 ± 0.007, improved | −0.070 ± 0.019, improved | −0.163 ± 0.047, improved | +0.21 → +0.05, improved |
+| Early season, all weeks | improved | −0.0008 ± 0.0001 | −0.013 ± 0.007 | +0.000 ± 0.021 | −0.066 ± 0.036 | +0.15 → −0.04, improved |
+| Early season, weeks 1–2 | improved | −0.0020 ± 0.0009 | −0.038 ± 0.026, improved | −0.058 ± 0.060 | +0.013 ± 0.093 | +0.48 → +0.05, improved |
+
+Team points, margin, winner Brier and the team-point and margin biases are
+within noise in every replay. Mean P at T-minus-30 is 0.831 against 0.840 who
+played, within 0.03 in every minutes bucket; the early-season replay's first
+three weeks run about 0.02 low instead of 0.045. On its own, points bias is
+worse in two seasons: T-minus-30 2024-25 +0.02 → −0.11 and 2025-26 +0.03 →
+−0.15, and preliminary 2025-26 +0.05 → −0.17; it improves in the others.
+Grouped by the reference's forecast minutes, the same players at 30+ minutes
+go from points MAE 5.716 to 5.685 and bias +0.75 to +0.10, but their minutes
+MAE goes from 4.31 to 4.48 (bias +1.74 to +0.53); every bench group improves.
+
+The production path (`--production-path`, not gated), against the same code
+without the change: participation −0.0007 ± 0.0001, improved; points −0.004,
+minutes +0.015, team points +0.022 ± 0.011, within noise; points bias −0.10 →
+−0.27, worse. That path already projects below actual in the replay, while
+live it projects players who play +0.60 points and +1.2 minutes above actual,
+so the same shift moves live toward zero. Check it in `performance.json`
+after a week of games.
+
+Tried on the gate and not merged:
+
+| Variant | Minutes | Points bias | Verdict |
+|---|---|---|---|
+| Priors only: `.52/.82/.98/.99`, `.18/.70/.98/.99`, `.18/.82/.98/.99` | +0.037, +0.025, +0.032, worse | −0.20, −0.15, −0.18, worse | worse |
+| Proportional scale-down, rotation priors, caps `.10/.25` | −0.005 | −0.17, worse | worse |
+| Same, caps `.25/.50` | +0.027, worse | −0.10, worse | worse |
+| Same, caps `1/1` | +0.049, worse (30+ minutes MAE 4.74) | −0.07 | worse |
+| Same, caps `.10/.40`, `.10/.60` | within noise | −0.13, −0.11, worse | worse |
+
+The priors alone fail because the bench-only scale-down pushes the extra
+expected minutes onto the bench, already projected short. With the
+proportional scale-down, the team-games the budget pins at 240 (90% of rows)
+come out unbiased in minutes (+0.03), and the rest is the tenth of team-games
+left short of 240, mostly eight to ten projected players, whose minutes when
+playing ran two minutes low under the old bench cap. The 2026-10-25 note above
+("role priors measured on available games only") is the first of these.
+
+The live data had a second, smaller cause, fixed without a model change: the
+16 games of 2026-10-20..23 ran before the live checkpoints began, so they had
+no T-minus-30 report record and a player listed out in them counted as a DNP
+in his window. `recover-evidence` added the records on 2026-11-06 (82 roster
+players, 88 player-games); on the live rows that raised those players' rates
+from 0.53 to 0.62 against 0.73 who played, 0.003 overall.

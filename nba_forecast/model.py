@@ -67,10 +67,18 @@ EFFICIENCY_DEFAULTS = {
 HOME_COURT_PRIOR = 0.0145
 HOME_COURT_PSEUDO_GAMES = 200
 HOME_COURT_BOUNDS = (-0.02, 0.04)
-# Participation: 2025-26 next-game play rates by role (average minutes when
-# playing), toward which a player's own rate over the team's last ten games is
-# shrunk by three pseudo-games. A reported status scales the role rate.
-PARTICIPATION_PRIORS = ((10., .18), (20., .70), (28., .79), (float("inf"), .82))
+# Participation: next-game play rates by role (average minutes when playing),
+# toward which a player's own rate over the team's last ten games is shrunk by
+# three pseudo-games. A reported status scales the role rate. The window leaves
+# out games the official report listed a player out of, so a rotation role's
+# prior is its rate on games the player was available for (2024-25: 20-28
+# minutes .98, 28+ .99; 2025-26 within .01). The all-games rates (.79, .82)
+# counted injuries a second time: live, untagged rotation players who had
+# played every window game were forecast .95 and played .998. Bench roles keep
+# their all-games rates: the available-game ones (.52, .82) over-predict the
+# replay's deep bench (.52 against .48 who played), while these are within .03
+# of the played share in every minutes bucket.
+PARTICIPATION_PRIORS = ((10., .18), (20., .70), (28., .98), (float("inf"), .99))
 PARTICIPATION_PSEUDO_GAMES = 3
 PARTICIPATION_WINDOW = 10
 # The window stays inside the current season: last season's final games say
@@ -84,10 +92,13 @@ PARTICIPATION_MIN_TEAM_GAMES = 1
 # ESPN-only labels keep .5.
 STATUS_PARTICIPATION = {"probable": 1., "questionable": .64, "doubtful": .04, "day-to-day": .5, "game time decision": .5}
 # When expected minutes fall short of 240, conditional minutes rise by at most
-# these fractions (protected rotation, bench) and never past 48. Chosen on the
-# last 250 games of 2025-26: larger caps over-projected starters' minutes, no
-# fill left team totals short.
-UPLIFT_CAP = (.10, .25)
+# these fractions (protected rotation, bench) and never past 48. A larger
+# rotation cap over-projects starters (on the three-season replay a .25 cap
+# took their minutes error from 4.31 to 4.60). The bench cap is loose: with
+# rotation probabilities near one, the minutes a short team still lacks are
+# the bench's, and at .25 its players were projected two minutes short in the
+# tenth of team-games left below 240.
+UPLIFT_CAP = (.10, 1.)
 # NBA rule: at most 13 players are active for a game, so a team's participation
 # probabilities cannot sum past 13. Teams used at least ten players in three
 # quarters of 2025-26 games (mean 10.8), so with ten or more projected players
@@ -812,13 +823,17 @@ def _allocate_team(team_predictions, working, usage_prior):
           (p['components']['current_team_rotation'].get('last_game_started') is True or
            (working[p['player_id']][0]>=28 and (p['components']['current_team_rotation'].get('recent_minutes') or 0)>=24))}
     core_total=sum(expected[pid] for pid in core)
-    core_scale=min(1.,240./core_total) if core_total else 1.
-    bench_total=total-core_total
-    bench_scale=min(1.,max(0.,240.-core_total*core_scale)/bench_total) if bench_total else 1.
-    target={pid:working[pid][0]*(core_scale if pid in core else bench_scale) for pid in expected}
+    # Expected minutes above 240 scale every player down alike. Sparing the
+    # protected rotation put the whole excess on the bench, which was already
+    # projected short (-1.4 minutes under ten projected) while the rotation ran
+    # long (+1.7 at thirty and over); once rotation probabilities are near one
+    # the excess grows and the bench-only cut made minutes worse.
+    budget_scale=min(1.,240./total) if total else 1.
+    target={pid:working[pid][0]*budget_scale for pid in expected}
     # Expected minutes below 240 are still played by someone. Supported
-    # players' conditional minutes rise proportionally to fill the budget,
-    # by at most a quarter and never past 48; any rest stays an explicit deficit.
+    # players' conditional minutes rise proportionally to fill the budget, the
+    # rotation's by at most a tenth, and never past 48; any rest stays an
+    # explicit deficit.
     locked={p['player_id'] for p in projected_team if p['components'].get('manual_adjustment')}
     # Filling needs a plausible rotation; a handful of supported players is left
     # as a deficit, unless the bench is short: then the shortfall is forced on
@@ -848,8 +863,9 @@ def _allocate_team(team_predictions, working, usage_prior):
             "regulation_budget": 240.0, "scale": scale, "unallocated_minutes": deficit, "short_bench": short,
             "protected_rotation_player_ids":sorted(core),"protected_rotation_minutes":core_total,
             "budget_basis": "expected minutes: participation probability times minutes when playing",
-            "method": "Preserve supported starters and high-minute rotation roles; scale excess bench estimates first. "
-                      "A shortfall raises supported players' conditional minutes by at most a quarter; the rest is an explicit deficit. "
+            "method": "Expected minutes above 240 scale every player down alike. "
+                      "A shortfall raises supported players' conditional minutes, protected rotation roles by at most a tenth, "
+                      "bench roles by at most double and never past 48; the rest is an explicit deficit. "
                       "A short bench (every other roster player explicitly out) plays everyone and shares the shortfall equally, up to 48 each."}
         if deficit > 1e-8:
             p["flags"].append("team_minutes_unresolved")

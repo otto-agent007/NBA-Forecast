@@ -205,6 +205,20 @@ class ForecastTests(unittest.TestCase):
             self.assertGreater(usage, 1)
             self.assertAlmostEqual(p["expected_fga"], p["expected_minutes"] * 12 / 45 * usage)
 
+    def test_excess_minutes_scale_the_protected_rotation_and_the_bench_alike(self):
+        starters = [player(f"s{i}") for i in range(5)]
+        bench = [player(f"b{i}") for i in range(5)]
+        past = ([row(i, pid=p["player_id"], minutes=40, starter=True) for p in starters for i in range(10)] +
+                [row(i, pid=p["player_id"], minutes=22, starter=False) for p in bench for i in range(10)])
+        projections = forecast(snapshot(starters + bench), past)["predictions"]
+        rotation = projections[0]["components"]["rotation"]
+        self.assertEqual(sorted(rotation["protected_rotation_player_ids"]), [p["player_id"] for p in starters])
+        self.assertAlmostEqual(sum(p["participation_probability"] * p["expected_minutes"] for p in projections), 240, places=6)
+        scales = {p["player_id"]: p["components"]["rotation"]["scale"] for p in projections}
+        self.assertLess(max(scales.values()), 1)
+        self.assertAlmostEqual(min(scales.values()), max(scales.values()))
+        self.assertTrue(all("team_minutes_scaled" in p["flags"] for p in projections))
+
     def test_missing_rotation_minutes_are_flagged_not_invented(self):
         result = forecast(snapshot([player(), player("new")]), [row()])
         by_id = {p["player_id"]: p for p in result["predictions"]}
