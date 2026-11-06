@@ -39,6 +39,10 @@ picked 69% of winners at Brier 0.194 (RC); Dunks & Threes' live model 11.0
 (2024-26); NBA_AI's best 2025-26 ensemble 11.45 and 0.205; a points-per-game
 baseline 11.93, 68.3% and 0.211.
 
+The 2026-11-06 update, which uses the close as a low-noise teacher and tests
+the same situations over nineteen seasons of closing lines, is
+`docs/beating-the-close-2026-11-06.md`.
+
 ### Where the remaining gap is (2026-10-26)
 
 On the absence reference, pooled, the model trails the close by 0.39 points of
