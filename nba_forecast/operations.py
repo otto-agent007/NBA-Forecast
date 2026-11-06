@@ -5,6 +5,7 @@ from datetime import datetime,timedelta,timezone
 from types import SimpleNamespace
 import json
 import hashlib
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -61,6 +62,9 @@ JOB_RETRY_SECONDS=(900,300)
 # minutes late.
 CAPTURE_BUDGET_SECONDS=120
 TICK_SOFT_LIMIT_SECONDS=420
+# The tick's record of a player sync keeps its counts; these per-player blocks are
+# the sync's own players/index.json and made each ticks.jsonl row about 400 KB.
+PLAYER_SYNC_DETAIL_KEYS=('rotation_roles','player_summaries','shot_queue')
 PACIFIC=ZoneInfo('America/Los_Angeles')
 
 _CODE_DIGEST=None
@@ -491,8 +495,9 @@ def _tick(folder,history,report):
     if (folder/'roster.json').exists():
         try:
             from .player_sync import sync_player_data
-            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
-            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
+            synced=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
+            report['player_sync']=player_sync_summary(synced)
+            report['warnings'].extend(dict(task='shot_data',**e) for e in synced['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
     phase('player_sync')
@@ -513,6 +518,64 @@ def _tick(folder,history,report):
     phase('evaluate_runs')
     _carry_derived(folder,active_model,report)
     phase('derived')
+
+
+def player_sync_summary(synced):
+    """A player sync's counts and errors, without its per-player blocks (``PLAYER_SYNC_DETAIL_KEYS``),
+    which the sync writes to ``players/index.json`` and the dashboard reads from there."""
+    out={k:v for k,v in synced.items() if k not in PLAYER_SYNC_DETAIL_KEYS}
+    queue=synced.get('shot_queue')
+    if isinstance(queue,list):
+        out['shot_queue_games']=len(queue)
+        out['shot_queue_pending']=sum(1 for item in queue if item.get('status')!='complete')
+    out['detail']='players/index.json'
+    return out
+
+
+def compact_ticks(directory):
+    """Rewrite ``ticks.jsonl`` with each row's player sync reduced to ``player_sync_summary``.
+
+    Rows written before 2026-11-06 carried the whole sync, about 400 KB each. The
+    file is rewritten beside itself and renamed into place under the tick lock, so
+    no tick appends meanwhile; a line that is not JSON (a write a power loss cut
+    short) is kept as it is.
+    """
+    folder=Path(directory)
+    path=folder/'ticks.jsonl'
+    result=dict(rows=0,kept_lines=0,bytes_before=0,bytes_after=0)
+    if not path.exists():
+        return result
+    import fcntl
+    handle=(folder/'tick.lock').open('a')
+    try:
+        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise ValueError('tick already running') from exc
+    try:
+        result['bytes_before']=path.stat().st_size
+        tmp=path.with_name(path.name+'.compact')
+        with path.open('rb') as src,tmp.open('wb') as out:
+            for line in src:
+                if not line.strip():
+                    continue
+                try:
+                    row=json.loads(line)
+                    if isinstance(row,dict) and isinstance(row.get('player_sync'),dict):
+                        row['player_sync']=player_sync_summary(row['player_sync'])
+                    out.write((json.dumps(row,sort_keys=True)+'\n').encode())
+                    result['rows']+=1
+                except ValueError:
+                    out.write(line if line.endswith(b'\n') else line+b'\n')
+                    result['kept_lines']+=1
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp,path)
+        result['bytes_after']=path.stat().st_size
+        return result
+    finally:
+        fcntl.flock(handle,fcntl.LOCK_UN)
+        handle.close()
 
 
 def _recover_runs(folder,db,state,report):

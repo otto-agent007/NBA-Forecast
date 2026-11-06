@@ -166,6 +166,22 @@ class CliTests(unittest.TestCase):
             self.assertTrue(all(p['points_mean'] is None for p in predictions))
 
 
+class CompactTicksCommandTests(unittest.TestCase):
+    def test_compact_ticks_rewrites_the_log_and_reports_the_sizes(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from nba_forecast.__main__ import main
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'ticks.jsonl').write_text(json.dumps({'status': 'complete', 'player_sync': {'errors': [], 'player_summaries': {str(i): {'name': 'x' * 40} for i in range(500)}}}) + '\n')
+            with redirect_stdout(StringIO()) as stream:
+                code = main(['compact-ticks', '--directory', d])
+            self.assertEqual(code, 0)
+            result = json.loads(stream.getvalue())
+            self.assertEqual(result['rows'], 1)
+            self.assertLess(result['bytes_after'], result['bytes_before'] / 10)
+            row = json.loads((Path(d) / 'ticks.jsonl').read_text())
+            self.assertEqual(row['player_sync'], {'errors': [], 'detail': 'players/index.json'})
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -125,6 +125,12 @@ A tick prints one line (status, run counts, missed finals, errors, warnings,
 job counts and phase timings) so the every-minute timer does not fill journald;
 the full report is saved as `last-tick.json` and appended to `ticks.jsonl`.
 `--full-report` prints it instead, and `--output FILE` writes it to a new file.
+The report's `player_sync` block is the sync's counts and errors; its per-player
+blocks (rotation roles, player summaries, the shot queue) are the sync's own
+`players/index.json`. Rows written before 2026-11-06 repeated them, about 400 KB
+a tick; `python -m nba_forecast compact-ticks --directory DIR` rewrites those
+rows in place under the tick lock (run it between ticks; a tick that finds the
+lock held exits and the timer retries a minute later).
 
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:
