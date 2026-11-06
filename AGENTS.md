@@ -47,6 +47,9 @@ rosters, early participation), the market comparison to run instead,
 the measured constants behind the budgets, and the traps. Read
 `docs/research-lessons-2026-10.md` for what the field does, where the model
 stands against the close, and which ideas were tried or set aside.
+Read `docs/beating-the-close-2026-11-06.md` before any work aimed at the
+market: what the close can and cannot be beaten on, and the close-as-teacher
+measurements of what the model is missing.
 
 ## Other rules
 

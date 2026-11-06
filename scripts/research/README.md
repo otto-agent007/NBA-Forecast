@@ -13,6 +13,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `early_season.py` | The model against the close by weeks since opening night, and whether players absent with no minutes for the team this season are a systematic margin miss | seeded early-season replays (`docs/backtest.md`, "Early-season replay"), team games, closing lines, histories, T−30 reports |
 | `previous_ids.py` | A previous season's box scores under the next season's player IDs, for seeding 2025-26 from ESPN's 2024-25 | the two histories |
 | `clutch.py` | Whether clutch shooting persists year to year beyond a player's season shooting, against what chance alone gives | the NBA clutch archive (`datasets/clutch-2026-10-22`), the gate's histories |
+| `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 
 ## Reproduced on 2026-10-26
@@ -63,3 +64,19 @@ before 2026-10-27).
 1–2 (270 games), +0.39 in weeks 3–4, +0.12 in weeks 5–8 and +0.33 in the gate
 window; per ten uncounted last-season minutes over the first 30% of dates, model
 miss −0.04 ± 0.16, close −0.12 ± 0.04 relative to the model.
+
+## Run on 2026-11-06
+
+`close_teacher.py --reference datasets/backtest-2026-11-06-rating-weight`:
+slope of actual − close on model − close +0.121 ± 0.080 pooled, best blend
+weight on the model 0.1 for no gain; 6+ point disagreements 7.8% of games and
+47% of the gap, the model's side covering 48.5%; the teacher regression gives
+home back-to-back −1.17 ± 0.18, away +0.87 ± 0.17, March–April bottom-8
+home −1.56 ± 0.27 and away +0.96 ± 0.28, with the outcomes agreeing in sign;
+a rating fitted to earlier closing spreads (7-day half-life) scores 11.30
+alone and 11.12 blended half and half with the model's 11.25 against the
+close's 10.90. Over the 22,694-game archive no situation beats the close
+beyond one standard error except fading a March–April bottom-8 home team
+(54.2% ± 1.2, one of nine tests); lines that move 1.5+ points cover the
+opener 57.7% on the side of the move. Written up in
+`docs/beating-the-close-2026-11-06.md`.
