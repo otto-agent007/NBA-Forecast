@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-06-participation
+  --reference datasets/backtest-2026-11-06-rating-weight
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -781,3 +781,38 @@ no T-minus-30 report record and a player listed out in them counted as a DNP
 in his window. `recover-evidence` added the records on 2026-11-06 (82 roster
 players, 88 player-games); on the live rows that raised those players' rates
 from 0.53 to 0.62 against 0.73 who played, 0.003 overall.
+
+## Reference: 2026-11-06 (rating weight 0.65)
+
+`datasets/backtest-2026-11-06-rating-weight/` (T-minus-30), model code
+`regular-season-baseline-0.4.8`, one change: the margin location's team-rating
+weight, `margins.PARAMETERS['rating_weight']`, `.5` → `.65` (the player sum
+keeps `.35`). The method string and the absence term are unchanged; the model
+key changes with the parameters, as it does for every margin-parameter change.
+
+Why now: live, the published margin stands further from the closing line than
+the rating half alone. On 2026-11-02 (54 games) the close averaged 10.24
+points, the blend 12.21, the rating half 11.95 and the player sum 12.64; on
+2026-10-29 (32 games) the player-sum half trailed the close by +1.9 ± 0.7
+points of size. The gate on 2026-11-02 found 0.65 and 0.80 both improved the
+winner Brier against the scoreline reference; 0.65 had the tighter verdict and
+less margin bias (0.80: +0.05 → +0.17), so 0.65 is the value, re-gated here
+against the participation reference.
+
+Against `backtest-2026-11-06-participation`: **improved** (pooled). Winner
+Brier −0.0014 ± 0.0007 (0.2056 → 0.2042, floor 0.0010), improved; margin
+−0.037 ± 0.038 (11.29 → 11.25, floor 0.056), within noise; points −0.0004,
+minutes +0.0000, team points −0.004, participation +0.0000 and the interval
+score −0.0013, within noise; points bias −0.09 → −0.09, team-points bias
+−1.23 → −1.23 and margin bias +0.06 → +0.12 (se 0.28), within noise. By season:
+2023-24 improved, 2024-25 within noise, 2025-26 improved. Winners 68.1% →
+68.6%; the closing line stays 10.90 on the same games.
+
+Two caveats. The absence term (0.1 points per minute of reported-out regulars
+on the rating) was sized when the rating carried half the location; at 0.65 it
+moves the blend 0.065 a minute instead of 0.05, and the gate measured the
+combination, not the term alone. And 0.65 is one of two values tried on these
+seasons, so part of the gain is selection on the sample; the live check is
+`market/report.json`, where the model's margin error against the close (12.41
+against 10.41 on 91 games through 2026-11-05) should narrow over the next few
+weeks of games.

@@ -42,7 +42,7 @@ data/operations/production` (`--dry-run` first); it records the commit in
   scores, rest and travel context, and 80% intervals calibrated on the ledger's
   own prospective residuals.
 - **Margins** (`margins.py`): a discrete normal whose location blends the
-  player-sum difference half and half with a team rating (season-to-date margin
+  player-sum difference (0.35) with a team rating (0.65; season-to-date margin
   padded with last season's, less 0.1 points per minute of reported-out
   regulars) and whose scale is the dispersion of paired finals.
 
@@ -55,10 +55,10 @@ standard errors and a materiality floor. `worse` is not merged; `improved` is
 the bar for a new feature. The command, the verdicts and every reference are in
 [`docs/backtest.md`](docs/backtest.md); the rules are in [`AGENTS.md`](AGENTS.md).
 
-Where the model stands (reference `datasets/backtest-2026-11-06-participation`, three
-seasons, 2,604 games): margin MAE 11.29 against the closing line's 10.90,
-winners 68.1%, team points MAE 9.32, player points MAE 4.48, minutes MAE 4.84,
-80% interval coverage 80.3%. [`docs/research-lessons-2026-10.md`](docs/research-lessons-2026-10.md)
+Where the model stands (reference `datasets/backtest-2026-11-06-rating-weight`, three
+seasons, 2,604 games): margin MAE 11.25 against the closing line's 10.90,
+winners 68.6%, team points MAE 9.31, player points MAE 4.48, minutes MAE 4.84,
+80% interval coverage 80.2%. [`docs/research-lessons-2026-10.md`](docs/research-lessons-2026-10.md)
 has what the field does, where the remaining gap is and what was tried.
 
 ## Start
