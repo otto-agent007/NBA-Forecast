@@ -1,7 +1,7 @@
 """A short bench: every other roster player is explicitly out, so the available players play the minutes."""
 import unittest
 
-from nba_forecast.model import forecast
+from nba_forecast.model import UPLIFT_CAP, forecast
 from nba_forecast.totals import short_bench
 from tests.test_model import player, snapshot
 from tests.test_participation import rows
@@ -53,15 +53,16 @@ class ShortBenchTests(unittest.TestCase):
             self.assertFalse(any('team_minutes_raised' in p['flags'] for p in projected), label)
             self.assertEqual((totals['status'], totals['short_bench'], totals['residual_minutes']), ('partial', False, 0.), label)
 
-    def test_eight_available_players_keep_the_quarter_uplift(self):
+    def test_eight_available_players_take_the_ordinary_capped_fill(self):
         team, projected, totals = self.run_forecast(8, [explicit_out(f'o{i}') for i in range(9)])
         self.assertFalse(short_bench(team))
         rotation = projected[0]['components']['rotation']
         self.assertFalse(rotation['short_bench'])
-        self.assertTrue(all(p['expected_minutes'] <= 20 * 1.25 + 1e-9 for p in projected))
-        self.assertGreater(rotation['unallocated_minutes'], 0)
+        self.assertTrue(all(p['expected_minutes'] <= 20 * (1 + UPLIFT_CAP[1]) + 1e-9 for p in projected))
+        expected = sum(p['participation_probability'] * p['expected_minutes'] for p in projected)
+        self.assertAlmostEqual(expected + rotation['unallocated_minutes'], 240., places=6)
+        self.assertGreater(expected, 230, 'the bench cap lets eight twenty-minute players fill the budget')
         self.assertEqual(totals['status'], 'complete')
-        self.assertGreater(totals['residual_minutes'], 0)
 
 
 if __name__ == '__main__':
