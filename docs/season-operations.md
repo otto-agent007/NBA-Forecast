@@ -157,6 +157,17 @@ report. ESPN's injury list and game summaries as they stood at the time cannot
 be recovered, so a team the official report left uncovered stays unresolved.
 The missed checkpoints themselves stay on the record.
 
+The derived service does the per-game part by itself. Each run, every game in
+`missed-finals.json` that is over (final in the calendar, its `finals/` file
+saved, or six hours past tipoff) gets its report edition, ESPN close and Kalshi
+close fetched, at most two games a run, oldest first. A source that fails is
+tried again after 30 minutes, 2 hours and 6 hours, then given up with a warning
+in the derived report. Progress is kept in `recovered-evidence.json`, and a
+recorded capture requests a rebuild so the market report shows the close. It
+writes only files of finished games, which no tick touches after tipoff, so it
+holds the derived lock alone and never delays a tick. Daily reports, and a
+source that was given up, still need the command.
+
 Already-completed jobs are skipped. Changed tipoff times and changed review
 content trigger new keys. SQLite is authoritative if a process crashes after
 saving a forecast; lost output files are rebuilt from immutable run inputs.
