@@ -287,7 +287,17 @@ upcoming game at the forecast cadence (hourly while the game waits for the
 morning checkpoint, every 15 minutes within a day, every 5 minutes in the last
 30), under `market/game-lines/GAME_ID.jsonl` with source URL, hash and
 retrieval time; a record is appended only when a provider's lines change. The
-last capture before tipoff is the closing line. `market/report.json` compares
+last capture before tipoff is the closing line. Since 2026-11-06 the captures
+(ESPN and Kalshi together) run after the tick's forecasts and share a budget of
+120 seconds, less when the tick is already past seven minutes; a game the budget
+does not reach is listed as `deferred` and waits for the next tick, where its
+cadence slot is still open. Before that they ran first and unbounded, and two
+hours of failing name resolution that morning (each request waiting out its
+timeout) kept the captures at 135–475 seconds a tick, killed ten ticks at
+systemd's ten-minute limit and delayed the 9 AM forecasts by 82 minutes. The
+summary's injury lists are forecast evidence: the digest the last capture saved
+keys each forecast job, so a change ESPN makes rebuilds the forecast one tick
+later. `market/report.json` compares
 each finished game's latest pregame forecast with its closing line: the
 model's and the market's absolute error against the final margin and total,
 the record of model leans at several edge thresholds, and winner Brier scores.

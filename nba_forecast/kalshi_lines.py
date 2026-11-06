@@ -14,6 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
 import urllib.request
 from zoneinfo import ZoneInfo
 
@@ -166,14 +167,23 @@ def _slot(game, now):
     return f"{game['game_id']}:{int(now.timestamp()) // seconds}:{seconds}"
 
 
-def capture_kalshi_lines(folder, games, as_of, fetch=None):
-    """Capture Kalshi's prices for the upcoming games, once per cadence slot each; failures are reported, never raised."""
+class _Deferred(Exception):
+    """The capture budget ran out between a game's market requests; nothing was recorded."""
+
+
+def capture_kalshi_lines(folder, games, as_of, fetch=None, deadline=None):
+    """Capture Kalshi's prices for the upcoming games, once per cadence slot each; failures are reported, never raised.
+
+    ``deadline`` is a ``time.monotonic()`` instant: a game not finished by then is
+    listed under ``deferred`` for the next tick (``capture_game_lines`` has the same contract).
+    """
     folder = Path(folder)
     now = parse_time(as_of)
     state_path = folder / 'market' / 'kalshi' / 'capture-state.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     captured = {k: v for k, v in state.get('captured', {}).items() if now.timestamp() - v < 172800}
-    report = dict(captured=[], unchanged=[], skipped=[], errors=[])
+    report = dict(captured=[], unchanged=[], skipped=[], deferred=[], errors=[])
+    late = lambda: deadline is not None and time.monotonic() > deadline
     for game in games:
         if not game.get('start_time') or parse_time(game['start_time']) <= now or not (game.get('home_tricode') and game.get('away_tricode')):
             continue
@@ -181,9 +191,14 @@ def capture_kalshi_lines(folder, games, as_of, fetch=None):
         if slot in captured:
             report['skipped'].append(game['game_id'])
             continue
+        if late():
+            report['deferred'].append(game['game_id'])
+            continue
         try:
             markets, sources = {}, []
             for kind, series in SERIES.items():
+                if markets and late():
+                    raise _Deferred()
                 items, meta = fetch_markets(API.format(event_ticker(series, game)), folder, fetch)
                 markets[kind] = items
                 sources.append(meta)
@@ -191,6 +206,8 @@ def capture_kalshi_lines(folder, games, as_of, fetch=None):
             appended = record_kalshi_line(folder, record)
             captured[slot] = now.timestamp()
             (report['captured'] if appended else report['unchanged']).append(game['game_id'])
+        except _Deferred:
+            report['deferred'].append(game['game_id'])
         except (ValueError, OSError, KeyError, TypeError) as exc:
             report['errors'].append(dict(game_id=game['game_id'], error=str(exc)))
     atomic_json(state_path, dict(version=VERSION, captured=captured))

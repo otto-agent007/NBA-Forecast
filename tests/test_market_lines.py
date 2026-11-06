@@ -178,5 +178,27 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report['summary']['margin_abs_error']['model'], 1.)
 
 
+class CaptureBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def test_games_past_the_deadline_wait_for_the_next_tick_and_saved_evidence_keys_the_forecast(self):
+        import time
+        games = [GAME, dict(GAME, game_id='0022600011', home_tricode='LAL', away_tricode='DEN')]
+        with patch('nba_forecast.reference.scoreboard_event', return_value=(dict(provider_event_id='401909848'), META)) as event, \
+             patch('nba_forecast.reference.fetch_reference', return_value=(summary(), META)):
+            late = M.capture_game_lines(self.folder, games, '2026-27', '2026-10-23T21:00:30Z', deadline=time.monotonic() - 1)
+            self.assertEqual((late['captured'], late['deferred'], late['errors']), ([], [g['game_id'] for g in games], []))
+            self.assertEqual(event.call_count, 0, 'a deferred game costs no request')
+            self.assertEqual(M.saved_capture_evidence(self.folder, games), {})
+            report = M.capture_game_lines(self.folder, [GAME], '2026-27', '2026-10-23T21:00:30Z', deadline=time.monotonic() + 60)
+            self.assertEqual(([c['game_id'] for c in report['captured']], report['deferred']), ([GAME['game_id']], []))
+            again = M.capture_game_lines(self.folder, games, '2026-27', '2026-10-23T21:01:30Z', deadline=time.monotonic() - 1)
+            self.assertEqual((again['skipped'], again['deferred']), ([GAME['game_id']], ['0022600011']), 'a slot already captured is skipped before the budget is checked')
+        saved = M.saved_capture_evidence(self.folder, games)
+        self.assertEqual(saved, report['evidence'])
+        self.assertEqual(list(saved), [GAME['game_id']])
+        self.assertEqual(M.saved_capture_evidence(self.folder, games[1:]), {})
+
 if __name__ == '__main__':
     unittest.main()
