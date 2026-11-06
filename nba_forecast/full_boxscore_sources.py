@@ -121,7 +121,13 @@ def _rows(page, game, metadata):
             participation = person.get('played')
             if participation is not None and participation not in ('0','1'):
                 raise ValueError('Official NBA participation flag is invalid')
-            dnp = participation == '0' or (participation is None and dnp_comment and not minutes)
+            # A listed player with a comment, no clock and no counts did not play, whatever the
+            # comment says ("Suspended", "Personal Reasons", wording not yet seen); counts with
+            # no clock still contradict each other and raise below.
+            no_counts = all(stats.get(name) in (None, 0, 0.0) for name in (*STAT_FIELDS.values(), *OPTIONAL_STAT_FIELDS.values()))
+            listed_out = (participation is None and minutes is None and not dnp_comment and no_counts
+                          and isinstance(comment, str) and bool(comment.strip()))
+            dnp = participation == '0' or (participation is None and dnp_comment and not minutes) or listed_out
             if dnp:
                 if minutes not in (None,0):
                     raise ValueError('Official NBA DNP contradicts source minutes')
@@ -144,6 +150,9 @@ def _rows(page, game, metadata):
                        official_inactives_listed=inactives_listed)
             if overflow:
                 row['minutes_normalization'] = 'source seconds value 60 carried into the next minute; original string retained'
+            if listed_out:
+                row['participation_audit'] = dict(source_comment=comment, source_minutes=clock,
+                    resolution='dnp: unrecognized comment with no clock and no counts')
             if dnp_comment and minutes and not dnp:
                 row['participation_audit'] = dict(source_comment=comment,
                     source_minutes=clock, resolution='played: explicit positive minutes and numeric counts override stale DNP comment')
@@ -403,7 +412,11 @@ def validate_complete_official_final(rows):
     for team in teams:
         played=[r for r in rows if r['team_id']==team and r['status']=='played']
         minutes=sum(r['minutes'] for r in played)
-        if len(played)<5 or abs(minutes-expected_minutes)>2/60+1e-8:
+        # Each player's time is given to the second, so the team sum can miss the game by
+        # up to half a second per player; 0022600142 has both teams 3 s short in LiveData and
+        # on the page alike. A missing or broken row costs minutes, not seconds.
+        tolerance=max(2,len(played)/2)/60
+        if len(played)<5 or abs(minutes-expected_minutes)>tolerance+1e-8:
             raise ValueError('Complete final team minutes or played-player count disagree')
         if any(r['minutes']>duration+1e-8 for r in played):
             raise ValueError('Complete final player minutes exceed game duration')

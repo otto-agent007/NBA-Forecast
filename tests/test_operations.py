@@ -73,17 +73,37 @@ class OperationsTests(unittest.TestCase):
             archive_payload(box,'https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022600001.json',
                             '2026-10-22T01:40:00+00:00',Path(d)/'raw')
             (Path(d)/'raw'/(hashlib.sha256(box).hexdigest()+'.json')).write_bytes(box+b' ')
+            (Path(d)/'finals').mkdir()
+            (Path(d)/'finals'/'0022600002.json').write_text('[{')
             with patch('nba_forecast.operations._now',return_value='2026-10-24T16:00:00Z'),\
                  patch('nba_forecast.operations.fetch_schedule',side_effect=ValueError('NBA CDN HTTP 403')),\
                  patch('nba_forecast.operations.fetch_verified_secondary_schedule',return_value=verified),\
                  patch('nba_forecast.operations.fetch_roster',side_effect=ValueError('roster offline')) as roster,\
                  patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
                 result=run_tick(d,[])
-        tasks=[e.get('task') for e in result['errors']]
-        self.assertIn('enrich_finals',tasks)
-        self.assertNotIn('tick',tasks)
-        self.assertIn('hash mismatch',next(e['error'] for e in result['errors'] if e['task']=='enrich_finals'))
+        self.assertNotIn('tick',[e.get('task') for e in result['errors']])
+        self.assertEqual([e['game_id'] for e in result['errors'] if e.get('task')=='finals_cache'],['0022600002'])
+        self.assertIn('hash mismatch',next(w['error'] for w in result['warnings'] if w.get('task')=='enrich_finals'))
         roster.assert_called_once()
+
+    def test_one_bad_captured_final_costs_only_its_game(self):
+        from nba_forecast.operations import _merge_finals
+        base=[row(season='2026-27',game_id='0022600001',pid='1',team='1610612738',opponent_id='1610612752'),
+              row(season='2026-27',game_id='0022600002',pid='1',team='1610612738',opponent_id='1610612752')]
+        with tempfile.TemporaryDirectory() as d:
+            cache=Path(d)
+            (cache/'0022600001.json').write_text('[{')
+            moved=dict(base[1],game_time='2026-03-02T00:00:00+00:00',known_at='2026-03-02T03:00:00+00:00',pts=base[1]['pts'])
+            (cache/'0022600002.json').write_text(json.dumps([moved]))
+            with self.assertRaises(ValueError):
+                _merge_finals(base,cache)
+            errors=[]
+            merged=_merge_finals(base,cache,errors=errors)
+        self.assertEqual([e['game_id'] for e in errors],['0022600001','0022600002'])
+        self.assertIn('game identity',errors[1]['error'])
+        by_game={r['game_id']:r for r in merged}
+        self.assertEqual(by_game['0022600001'],base[0])        # the unreadable final leaves the input rows
+        self.assertEqual(by_game['0022600002']['game_time'],moved['game_time'])  # the captured final wins
 
     def test_both_schedule_sources_unavailable_use_the_saved_calendar(self):
         source=normalize_season(payload([game(start='2026-10-24T22:00:00Z')]),'2026-10-22T03:00:00Z')

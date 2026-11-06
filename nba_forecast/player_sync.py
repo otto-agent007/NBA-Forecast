@@ -12,27 +12,38 @@ from .full_boxscore_sources import (fetch_official_game_page,normalize_official_
                                    validate_complete_official_final,supplement_official_team_turnovers)
 
 
-def enrich_archive(directory):
-    """Re-normalize archived bytes with original retrieval times, verifying hashes."""
+def enrich_archive(directory,skipped=None):
+    """Re-normalize archived bytes with original retrieval times, verifying hashes.
+
+    Without ``skipped`` a damaged archive or a final that does not normalize raises. With a
+    list, that archive is left out and recorded there: enrichment only adds optional fields.
+    """
     rows={}
     for path in sorted(Path(directory).glob('*.provenance.json')):
-        meta=json.loads(path.read_text())
-        if '/liveData/boxscore/boxscore_002' not in meta.get('source_url',''):
-            continue
-        raw=(path.parent/(meta['sha256']+'.json')).read_bytes()
-        if hashlib.sha256(raw).hexdigest()!=meta['sha256']:
-            raise ValueError('Archive hash mismatch: '+path.name)
-        # Every response is archived before it is checked, including a box the shot collector
-        # read before LiveData turned final (0022600182 at "END Q4"). One that is not a final
-        # box score adds nothing here; a final that does not normalize still raises.
         try:
-            payload=json.loads(raw)
-        except (ValueError,UnicodeDecodeError):
+            meta=json.loads(path.read_text())
+            if not isinstance(meta,dict) or '/liveData/boxscore/boxscore_002' not in meta.get('source_url',''):
+                continue
+            raw=(path.parent/(meta['sha256']+'.json')).read_bytes()
+            if hashlib.sha256(raw).hexdigest()!=meta['sha256']:
+                raise ValueError('Archive hash mismatch: '+path.name)
+            # Every response is archived before it is checked, including a box the shot collector
+            # read before LiveData turned final (0022600182 at "END Q4"). One that is not a final
+            # box score adds nothing here.
+            try:
+                payload=json.loads(raw)
+            except (ValueError,UnicodeDecodeError):
+                continue
+            game=payload.get('game') if isinstance(payload,dict) else None
+            if not isinstance(game,dict) or game.get('gameStatus')!=3:
+                continue
+            found=normalize_boxscore(payload,meta['source_url'],meta['retrieved_at'])
+        except (ValueError,KeyError,TypeError,AttributeError,OSError) as exc:
+            if skipped is None:
+                raise
+            skipped.append(dict(archive=path.name,error=f'{type(exc).__name__}: {exc}'))
             continue
-        game=payload.get('game') if isinstance(payload,dict) else None
-        if not isinstance(game,dict) or game.get('gameStatus')!=3:
-            continue
-        for row in normalize_boxscore(payload,meta['source_url'],meta['retrieved_at']):
+        for row in found:
             key=(row['game_id'],row['player_id'])
             old=rows.get(key)
             if old is None or parse_time(old['known_at'])<parse_time(row['known_at']):
@@ -42,29 +53,39 @@ def enrich_archive(directory):
     return sorted(result,key=lambda r:(r['game_time'],r['game_id'],r['player_id']))
 
 
-def enrich_final_cache(folder):
-    """Add optional fields from matching archived finals without changing counts."""
+def enrich_final_cache(folder,skipped=None):
+    """Add optional fields from matching archived finals without changing counts.
+
+    With ``skipped`` (a list), a damaged archive or captured final is left alone and
+    recorded there instead of stopping enrichment of the rest.
+    """
     folder=Path(folder)
-    evidence={(r['game_id'],r['player_id']):r for r in enrich_archive(folder/'raw')}
+    evidence={(r['game_id'],r['player_id']):r for r in enrich_archive(folder/'raw',skipped)}
     required=('fgm','fga','fg3m','fg3a','ftm','fta','tov','pts','minutes','team_id','opponent_id')
     for path in (folder/'finals').glob('*.json'):
-        rows=json.loads(path.read_text())
-        changed=False
-        for row in rows:
-            raw=evidence.get((row['game_id'],row['player_id']))
-            if not raw or any(row[k]!=raw[k] for k in ('team_id','opponent_id','status')):
-                continue
-            # Starting is identity evidence; a later stat correction (counts that no longer
-            # match the cached final) does not make it doubtful.
-            counted=all(row[k]==raw[k] for k in required)
-            for field in ('reb','ast','stl','blk','starter') if counted else ('starter',):
-                if row.get(field) is None and raw.get(field) is not None:
-                    row[field]=raw[field]
-                    changed=True
-                    row['known_at']=max((row['known_at'],raw['known_at']),key=parse_time)
-        if changed:
-            validate_history(rows)
-            atomic_json(path,rows)
+        try:
+            rows=json.loads(path.read_text())
+            changed=False
+            for row in rows:
+                raw=evidence.get((row['game_id'],row['player_id']))
+                if not raw or any(row[k]!=raw[k] for k in ('team_id','opponent_id','status')):
+                    continue
+                # Starting is identity evidence; a later stat correction (counts that no longer
+                # match the cached final) does not make it doubtful.
+                counted=all(row[k]==raw[k] for k in required)
+                for field in ('reb','ast','stl','blk','starter') if counted else ('starter',):
+                    if row.get(field) is None and raw.get(field) is not None:
+                        row[field]=raw[field]
+                        changed=True
+                        row['known_at']=max((row['known_at'],raw['known_at']),key=parse_time)
+            if changed:
+                validate_history(rows)
+                atomic_json(path,rows)
+        except (ValueError,KeyError,TypeError,AttributeError,OSError) as exc:
+            if skipped is None:
+                raise
+            skipped.append(dict(final=path.name,error=f'{type(exc).__name__}: {exc}'))
+    return skipped
 
 
 def _shot_state(result, rows):
@@ -190,18 +211,16 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
     if parse_time(roster['observed_at'])>parse_time(now):
         raise ValueError('Roster is future-known')
     atomic_json(folder/'roster.json',roster)
-    enrich_final_cache(folder)
+    # One damaged archive or captured final costs that file, not player data for every game.
+    # The tick reports the same files at its own merge; standalone runs see them here.
+    skipped_sources=[]
+    try:
+        enrich_final_cache(folder,skipped=skipped_sources)
+    except ValueError as exc:
+        skipped_sources.append(dict(error=f'Finals enrichment: {exc}'))
+    from .operations import _merge_finals
+    history=_merge_finals(history,folder/'finals',errors=skipped_sources)
     combined={(r['game_id'],r['player_id']):r for r in history}
-    for path in sorted((folder/'finals').glob('*.json')):
-        rows=json.loads(path.read_text())
-        _keep_final_players(combined,path.stem,rows)
-        for row in rows:
-            key=(row['game_id'],row['player_id'])
-            old=combined.get(key)
-            if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):
-                combined[key]=row
-    history=list(combined.values())
-    validate_history(history)
     targets={}
     for row in history:
         if row['season']==season and parse_time(row['known_at'])<=parse_time(now):
@@ -313,6 +332,7 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
     summary['shot_games_pending']=len(targets)-summary['shot_games_verified']
     summary['full_box_games_pending']=sum(_needs_official_final(rows,now) for rows in targets.values())
     summary['full_box_games_complete']=len(targets)-summary['full_box_games_pending']
+    summary['skipped_sources']=skipped_sources
     summary['shot_queue']=[dict(game_id=gid,game_time=rows[0]['game_time'],
         status='complete' if _shot_state(cached.get(gid),rows)[1] and not _needs_official_final(rows,now) else 'pending',
         reason=(cached.get(gid) or {}).get('missing_reason') or ('Some attempt coordinates are unavailable' if not _shot_state(cached.get(gid),rows)[1] else

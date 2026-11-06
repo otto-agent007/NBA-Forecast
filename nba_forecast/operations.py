@@ -390,10 +390,10 @@ def _tick(folder,history,report):
     # into captured finals; a failure is reported and the tick goes on to forecast.
     try:
         from .player_sync import enrich_final_cache
-        enrich_final_cache(folder)
+        report['warnings'].extend(dict(task='enrich_finals',**e) for e in enrich_final_cache(folder,skipped=[]))
     except Exception as exc:
         report['errors'].append(dict(task='enrich_finals',error=f'{type(exc).__name__}: {exc}'))
-    history=_merge_finals(history,cache)
+    history=_merge_finals(history,cache,errors=report['errors'])
     prior_path=folder/'historical-priors.json'
     if prior_path.exists():
         book=json.loads(prior_path.read_text())
@@ -459,11 +459,16 @@ def _tick(folder,history,report):
     phase('forecasts')
     # Prioritize pregame deadlines over downloads and postgame reporting.
     if active_model:
-        from .outcome_sync import sync_finished_games
-        synced=sync_finished_games(folder,schedule,history,_now())
-        report['final_sync']=synced
-        report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
-        report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
+        # Per-game failures are caught inside; anything that escapes them is reported here,
+        # so finals collection, player data and evaluation still run.
+        try:
+            from .outcome_sync import sync_finished_games
+            synced=sync_finished_games(folder,schedule,history,_now())
+            report['final_sync']=synced
+            report['errors'].extend(dict(task='final_actuals',**e) for e in synced['errors'])
+            report['warnings'].extend(dict(task='environment_update',**e) for e in synced.get('environment_warnings',[]))
+        except Exception as exc:
+            report['errors'].append(dict(task='final_sync',error=f'{type(exc).__name__}: {exc}'))
     phase('final_sync')
     _collect_finals(schedule,cache,raw,report)
     phase('collect_finals')
@@ -484,7 +489,10 @@ def _tick(folder,history,report):
     except Exception as exc:
         report['errors'].append(dict(task='postgame_sources',error=f'{type(exc).__name__}: {exc}'))
     phase('postgame_sources')
-    _evaluate_runs(folder,db,report)
+    try:
+        _evaluate_runs(folder,db,report)
+    except Exception as exc:
+        report['errors'].append(dict(task='evaluate_runs',error=f'{type(exc).__name__}: {exc}'))
     _missed_finals(state,schedule,report,folder)
     atomic_json(statepath,state)
     phase('evaluate_runs')
@@ -520,18 +528,43 @@ def _recover_runs(folder,db,state,report):
             report['recovered_runs']+=1
 
 
-def _merge_finals(history,cache):
+def _game_identity(row):
+    return (row['season'],parse_time(row['game_time']),tuple(sorted((row['team_id'],row['opponent_id']))))
+
+
+def _merge_finals(history,cache,errors=None):
     """The input history plus every captured final, the newest known_at winning per player-game.
 
     A captured final lists the game's players; an input row for a player it leaves out
     (a stale-roster DNP the official box contradicted) is dropped.
+
+    Without ``errors`` a bad captured final raises. With a list, one that cannot be read or
+    validated is left out (its game keeps the input rows) and one whose game identity differs
+    from the input history's replaces that game's input rows; both are recorded there, and the
+    tick goes on.
     """
     combined={(r['game_id'],r['player_id']):r for r in history}
+    first={}
+    for r in history:
+        first.setdefault(r['game_id'],r)
     for p in sorted(cache.glob('*.json')):
-        rows=json.loads(p.read_text())
-        validate_history(rows)
+        try:
+            rows=json.loads(p.read_text())
+            validate_history(rows)
+        except (ValueError,KeyError,TypeError,AttributeError,OSError) as exc:
+            if errors is None:
+                raise
+            errors.append(dict(task='finals_cache',game_id=p.stem,error=f'{type(exc).__name__}: {exc}'))
+            continue
         players={r['player_id'] for r in rows}
-        for key in [k for k in combined if k[0]==p.stem and k[1] not in players]:
+        mismatched=set()
+        if errors is not None:
+            mismatched={r['game_id'] for r in rows
+                        if r['game_id'] in first and _game_identity(first[r['game_id']])!=_game_identity(r)}
+            if mismatched:
+                errors.append(dict(task='finals_cache',game_id=p.stem,
+                    error='Captured final and input history disagree on game identity; the captured final is used'))
+        for key in [k for k in combined if (k[0]==p.stem and k[1] not in players) or k[0] in mismatched]:
             del combined[key]
         for row in rows:
             key=(row['game_id'],row['player_id'])
@@ -610,12 +643,18 @@ def _forecast_job(folder,job,tick):
         snapshot['historical_priors']={'players':[p for p in book['players'] if p['player_id'] in player_ids], 'aggregation':book.get('aggregation')}
     if active_model:
         snapshot['model_enhancements']=prepare(active_model,model_digest,game,snapshot['as_of'],directory=folder)
-    snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable)
+    # One game's unusable source costs that game's evidence, not every forecast: it is left
+    # out exactly as if it had not been collected, and reported once per tick.
+    rejected=[]
+    snapshot['shot_profiles']=prepare_shot_profiles(folder,snapshot,usable,rejected=rejected)
     if uses_refinements(snapshot):
         from .role_context import prepare_role_context
         from .shot_quality import prepare_shot_quality
-        snapshot['role_context']=prepare_role_context(folder,snapshot,usable)
-        snapshot['shot_quality']=prepare_shot_quality(folder,snapshot,usable)
+        snapshot['role_context']=prepare_role_context(folder,snapshot,usable,rejected=rejected)
+        snapshot['shot_quality']=prepare_shot_quality(folder,snapshot,usable,rejected=rejected)
+    for item in rejected:
+        if item not in report['warnings']:
+            report['warnings'].append(item)
     profiles=build_profiles(snapshot,usable)
     verification=run_preflight(snapshot,usable,profiles,folder)
     if verification['status']!='passed':

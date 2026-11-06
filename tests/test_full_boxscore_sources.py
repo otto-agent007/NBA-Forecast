@@ -125,7 +125,13 @@ class FullBoxscoreSourcesTests(unittest.TestCase):
         unused['comment']='NWT - League Suspension'
         row={r['player_id']:r for r in self.normalize()}['21']
         self.assertEqual((row['status'],row['minutes'],row['participation_reason']),('dnp',0,'NWT - League Suspension'))
-        unused['comment']='Suspended'
+        # Wording not yet seen, with no clock and no counts, is a DNP that keeps its comment;
+        # counts with no clock still contradict each other.
+        unused['comment']='Suspended - League'
+        row={r['player_id']:r for r in self.normalize()}['21']
+        self.assertEqual((row['status'],row['minutes'],row['participation_reason']),('dnp',0,'Suspended - League'))
+        self.assertIn('unrecognized comment',row['participation_audit']['resolution'])
+        unused['statistics']['points']=2
         with self.assertRaises(ValueError):
             self.normalize()
 

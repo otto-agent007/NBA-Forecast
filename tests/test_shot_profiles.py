@@ -121,6 +121,26 @@ class ShotProfilesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'reconcil|disagree|count'):
             self.prepare()
 
+    def test_tolerated_source_problem_leaves_out_only_its_game(self):
+        # A stat correction the shot collection has not caught up with, or an unreadable
+        # collection file, costs that game's shots, not every forecast.
+        (self.directory/'shots'/'0022600099.json').write_bytes(b'{')
+        self.history[0]['fga']=4
+        with self.assertRaises(ValueError):
+            self.prepare()
+        rejected=[]
+        prepared=shot_profiles.prepare_shot_profiles(self.directory,self.snapshot,self.history,rejected=rejected)
+        self.assertEqual(prepared['sources'],[])
+        self.assertEqual([(r['task'],r['game_id']) for r in rejected],
+                         [('shot_profile_source',self.game['game_id']),('shot_profile_source','0022600099')])
+        self.snapshot['shot_profiles']=prepared
+        shot_profiles.verify_shot_profiles(self.snapshot,self.history,self.directory)
+        self.history[0]['fga']=3
+        rejected=[]
+        prepared=shot_profiles.prepare_shot_profiles(self.directory,self.snapshot,self.history,rejected=rejected)
+        self.assertEqual([s['game_id'] for s in prepared['sources']],[self.game['game_id']])
+        self.assertEqual([r['game_id'] for r in rejected],['0022600099'])
+
     def test_raw_replay_rejects_tampered_normalized_location_even_with_new_hash(self):
         source=copy.deepcopy(self.source)
         source['shots'][0]['x']=199

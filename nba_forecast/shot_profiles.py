@@ -317,31 +317,45 @@ def _prepared_snapshot(snapshot,supplied):
     return {**snapshot,'as_of':supplied['prepared_at']}
 
 
-def prepare_shot_profiles(directory,snapshot,history):
-    """Capture successful eligible shot collections in immutable evidence files."""
+_SOURCE_ERRORS=(ValueError,KeyError,TypeError,AttributeError,UnicodeError,OSError)
+
+
+def prepare_shot_profiles(directory,snapshot,history,rejected=None):
+    """Capture successful eligible shot collections in immutable evidence files.
+
+    Without ``rejected`` any source problem raises. With a list, a game whose collection
+    or archives cannot be replayed is left out and recorded there, exactly as if it had
+    not been collected, so ``verify_shot_profiles`` replays the same profiles.
+    """
     context=_context(snapshot,history)
     records=[]
     for path in sorted((Path(directory)/'shots').glob('*.json')):
-        raw=path.read_bytes()
-        source=json.loads(raw)
-        if source.get('missing_reason') or not _eligible(source,context):
+        try:
+            raw=path.read_bytes()
+            source=json.loads(raw)
+            if source.get('missing_reason') or not _eligible(source,context):
+                continue
+            gid=source['game_id']
+            if path.stem!=gid:
+                raise ValueError('Shot collection filename and game identity disagree')
+            rows=context['history'].get(gid,[])
+            if not any(r['player_id'] in context['roster'] for r in rows):
+                continue
+            digest=hashlib.sha256(raw).hexdigest()
+            replay,raw_sources,known=_replay(directory,source,rows,context,digest=digest)
+            archived=Path(directory)/'shot-evidence'/(digest+'.json')
+            archived.parent.mkdir(parents=True,exist_ok=True)
+            if archived.exists():
+                if archived.read_bytes()!=raw:
+                    raise ValueError('Immutable shot evidence archive hash differs')
+            else:
+                with archived.open('xb') as stream:
+                    stream.write(raw)
+        except _SOURCE_ERRORS as exc:
+            if rejected is None:
+                raise
+            rejected.append(dict(task='shot_profile_source',game_id=path.stem,error=f'{type(exc).__name__}: {exc}'))
             continue
-        gid=source['game_id']
-        if path.stem!=gid:
-            raise ValueError('Shot collection filename and game identity disagree')
-        rows=context['history'].get(gid,[])
-        if not any(r['player_id'] in context['roster'] for r in rows):
-            continue
-        digest=hashlib.sha256(raw).hexdigest()
-        replay,raw_sources,known=_replay(directory,source,rows,context,digest=digest)
-        archived=Path(directory)/'shot-evidence'/(digest+'.json')
-        archived.parent.mkdir(parents=True,exist_ok=True)
-        if archived.exists():
-            if archived.read_bytes()!=raw:
-                raise ValueError('Immutable shot evidence archive hash differs')
-        else:
-            with archived.open('xb') as stream:
-                stream.write(raw)
         records.append((_manifest(source,digest,raw_sources,known),replay))
     return _assemble(snapshot,context,records)
 

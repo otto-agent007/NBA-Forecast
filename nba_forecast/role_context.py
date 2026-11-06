@@ -347,44 +347,83 @@ def _assemble(snapshot, games, records):
             policy='Missing or unmatched recap evidence remains unknown; short minutes alone never establish injury.'))
 
 
-def prepare_role_context(directory, snapshot, history):
-    """Capture eligible archived NBA recap evidence without rewriting actuals."""
+# A source problem in one game (a page saved before it was final, a layout the parser does
+# not know, a stat correction not yet in the cached final, a damaged archive) costs that
+# game's recap evidence, not every forecast: with ``rejected`` the newest pages are tried in
+# turn and each failure is recorded there. Three newest pages is enough; past that, every
+# remaining version is rejected for the same reason.
+PAGE_ATTEMPTS = 3
+_SOURCE_ERRORS = (ValueError, KeyError, TypeError, AttributeError, UnicodeError, OSError)
+
+
+def _attempt(directory, snapshot, metadata, rows):
+    """Replay one archived page for one game and keep its immutable envelope."""
+    envelope = dict(metadata=metadata, game=_source_envelope_game(directory, metadata, rows))
+    events, status = _replay(directory, envelope, rows, snapshot)
+    encoded = canonical(envelope)
+    digest = hashlib.sha256(encoded).hexdigest()
+    path = Path(directory)/'role-evidence'/(digest+'.json')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != encoded:
+            raise ValueError('Immutable injury evidence archive hash mismatch')
+    else:
+        with path.open('xb') as stream:
+            stream.write(encoded)
+    return _manifest(envelope, digest), events, status
+
+
+def prepare_role_context(directory, snapshot, history, rejected=None):
+    """Capture eligible archived NBA recap evidence without rewriting actuals.
+
+    Without ``rejected`` any source problem raises. With a list, a game whose newest page
+    cannot be used falls back to its next newest (up to ``PAGE_ATTEMPTS``) and each failure
+    is appended to ``rejected``; a game with no usable page has no source, exactly as if no
+    page had been archived, so ``verify_role_context`` replays the same context.
+    """
+    def reject(exc, **where):
+        if rejected is None:
+            raise exc
+        rejected.append(dict(task='role_context_source', **where, error=f'{type(exc).__name__}: {exc}'))
     try:
         games = _history(snapshot, history)
-        candidates = {}
+        candidates = defaultdict(dict)
         for path in sorted((Path(directory)/'raw').glob('*.provenance.json')):
-            value = json.loads(path.read_bytes())
-            if not isinstance(value, dict):
-                raise ValueError('Injury raw provenance must be an object')
-            match = _URL.fullmatch(value.get('source_url', ''))
-            if not match or match[1] not in games:
+            try:
+                value = json.loads(path.read_bytes())
+                if not isinstance(value, dict):
+                    raise ValueError('Injury raw provenance must be an object')
+                match = _URL.fullmatch(value.get('source_url', ''))
+                if not match or match[1] not in games:
+                    continue
+                metadata = _metadata(value)
+                if path.name != metadata['sha256']+'.provenance.json':
+                    raise ValueError('Injury raw provenance filename/hash mismatch')
+                if parse_time(metadata['retrieved_at']) > parse_time(snapshot['as_of']):
+                    continue
+            except _SOURCE_ERRORS as exc:
+                reject(exc, archive=path.name)
                 continue
-            metadata = _metadata(value)
-            if path.name != metadata['sha256']+'.provenance.json':
-                raise ValueError('Injury raw provenance filename/hash mismatch')
-            if parse_time(metadata['retrieved_at']) > parse_time(snapshot['as_of']):
-                continue
-            gid = match[1]
-            old = candidates.get(gid)
-            if old is not None and parse_time(metadata['retrieved_at']) == parse_time(old['retrieved_at']) and metadata['sha256'] != old['sha256']:
-                raise ValueError('Ambiguous same-time NBA injury source versions')
-            if old is None or parse_time(metadata['retrieved_at']) > parse_time(old['retrieved_at']):
-                candidates[gid] = metadata
+            candidates[match[1]].setdefault(parse_time(metadata['retrieved_at']), []).append(metadata)
         records = []
-        for gid, metadata in sorted(candidates.items()):
-            envelope = dict(metadata=metadata, game=_source_envelope_game(directory, metadata, games[gid]))
-            events, status = _replay(directory, envelope, games[gid], snapshot)
-            encoded = canonical(envelope)
-            digest = hashlib.sha256(encoded).hexdigest()
-            path = Path(directory)/'role-evidence'/(digest+'.json')
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists():
-                if path.read_bytes() != encoded:
-                    raise ValueError('Immutable injury evidence archive hash mismatch')
-            else:
-                with path.open('xb') as stream:
-                    stream.write(encoded)
-            records.append((_manifest(envelope, digest), events, status))
+        for gid, by_time in sorted(candidates.items()):
+            attempts = 0
+            for when in sorted(by_time, reverse=True):
+                if attempts == PAGE_ATTEMPTS:
+                    break
+                attempts += 1
+                versions = by_time[when]
+                where = dict(game_id=gid, known_at=versions[0]['retrieved_at'], source_sha256=versions[0]['sha256'])
+                if len({m['sha256'] for m in versions}) > 1:
+                    reject(ValueError('Ambiguous same-time NBA injury source versions'), **where)
+                    continue
+                try:
+                    records.append(_attempt(directory, snapshot, versions[0], games[gid]))
+                    break
+                except _SOURCE_ERRORS as exc:
+                    if rejected is None:
+                        raise
+                    reject(exc, **where)
         return _assemble(snapshot, games, records)
     except (KeyError, TypeError, AttributeError, UnicodeError, OSError, json.JSONDecodeError) as exc:
         raise ValueError(f'Incomplete or unreadable injury role-context source: {exc}') from exc
