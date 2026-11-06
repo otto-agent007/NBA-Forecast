@@ -144,7 +144,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-06-participation-midday
+  --reference datasets/backtest-2026-11-06-rating-weight-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -807,6 +807,8 @@ score −0.0013, within noise; points bias −0.09 → −0.09, team-points bias
 −1.23 → −1.23 and margin bias +0.06 → +0.12 (se 0.28), within noise. By season:
 2023-24 improved, 2024-25 within noise, 2025-26 improved. Winners 68.1% →
 68.6%; the closing line stays 10.90 on the same games.
+
+The preliminary replay (midday reports, `datasets/backtest-2026-11-06-rating-weight-midday/`, against `backtest-2026-11-06-participation-midday`) is within noise on every metric: winner Brier −0.0006 ± 0.0007, margin +0.005 ± 0.036 (11.44), team points +0.006 ± 0.013, the interval score +0.001 ± 0.003, margin bias +0.11 → +0.16 (se 0.29), each season within noise. It is not required for a margin-parameter change and is committed so the midday reference matches the code.
 
 Two caveats. The absence term (0.1 points per minute of reported-out regulars
 on the rating) was sized when the rating carried half the location; at 0.65 it
