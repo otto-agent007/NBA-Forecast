@@ -34,8 +34,7 @@ def _emit(value, output=None):
 
 def _tick_summary(report):
     """One line for journald: the timer runs a tick every minute, and the full
-    report (about 340 KB, mostly per-player summaries) is already saved as
-    last-tick.json and appended to ticks.jsonl."""
+    report is already saved as last-tick.json and appended to ticks.jsonl."""
     keys = ('started_at', 'finished_at', 'status', 'created_runs', 'evaluated_runs', 'recovered_runs',
             'missed_final_games', 'errors', 'warnings', 'timings')
     line = {key: report.get(key) for key in keys}
@@ -128,6 +127,9 @@ def _parser():
     tick.add_argument('--output', help='Write the full report to this new file')
     tick.add_argument('--full-report', action='store_true',
                       help='Print the full report instead of the one-line summary')
+    compact = sub.add_parser('compact-ticks', help='Rewrite ticks.jsonl with each row\'s player sync reduced to its summary; rows before 2026-11-06 carried the whole sync')
+    compact.add_argument('--directory', required=True)
+    compact.add_argument('--output')
     derived = sub.add_parser('derived', help='Rebuild the derived reports (performance, calibration, postgame, daily reviews, market) when their inputs changed; the derived service runs this every minute')
     derived.add_argument('--directory', required=True)
     derived.add_argument('--output')
@@ -263,6 +265,9 @@ def main(argv=None):
             if not args.output and not args.full_report:
                 print(json.dumps(_tick_summary(value), sort_keys=True, allow_nan=False))
                 return exit_code
+        elif args.command == 'compact-ticks':
+            from .operations import compact_ticks
+            value=compact_ticks(args.directory)
         elif args.command == 'derived':
             from .operations import run_derived
             value=run_derived(args.directory)

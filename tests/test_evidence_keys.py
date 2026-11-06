@@ -79,6 +79,27 @@ class EvidenceKeyTests(unittest.TestCase):
         self.tick(3 * 3600 + 1)
         self.assertEqual(self.roster.call_count, 2)
 
+    def test_market_captures_run_after_the_forecasts_within_a_budget(self):
+        import time
+        seen = []
+        def capture(folder, games, season, as_of, deadline=None):
+            seen.append((len(list((self.folder / 'runs').glob('*/forecast.json'))), deadline is not None and deadline - time.monotonic() <= operations.CAPTURE_BUDGET_SECONDS + 1))
+            return dict(evidence={'0022600001': 'should not key this tick'})
+        with patch('nba_forecast.operations.capture_game_lines', side_effect=capture):
+            self.assertEqual(self.tick(0)['created_runs'], 1)
+        self.assertEqual(seen, [(1, True)], 'the forecast was saved before the capture started, which had a deadline within the budget')
+        self.assertEqual(self.tick(60)['created_runs'], 0, 'the capture return value is not evidence; the saved digest is')
+
+    def test_the_saved_espn_digest_keys_the_forecast(self):
+        self.assertEqual(self.tick(0)['created_runs'], 1)
+        state = self.folder / 'market' / 'capture-state.json'
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps(dict(version='x', captured={}, evidence={'0022600001': 'c' * 64})))
+        self.assertEqual(self.tick(60)['created_runs'], 1, 'ESPN\'s injury list changed at the last capture')
+        self.assertEqual(self.tick(120)['created_runs'], 0)
+        state.write_text(json.dumps(dict(version='x', captured={}, evidence={'0022600002': 'd' * 64})))
+        self.assertEqual(self.tick(180)['created_runs'], 0, 'another game\'s digest is not this game\'s evidence')
+
 
 if __name__ == '__main__':
     unittest.main()

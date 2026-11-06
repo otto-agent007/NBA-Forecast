@@ -5,9 +5,11 @@ from datetime import datetime,timedelta,timezone
 from types import SimpleNamespace
 import json
 import hashlib
+import os
 from pathlib import Path
 import re
 import sqlite3
+import time
 from zoneinfo import ZoneInfo
 
 from .data import fetch_roster,fetch_json,boxscore_url,normalize_boxscore
@@ -26,7 +28,7 @@ from .boxscore_model import VERSION as BOX_MODEL_VERSION
 from .shot_profiles import prepare_shot_profiles
 from .model_versions import uses_refinements
 from .intervals import INTERVAL_FAMILY
-from .market_lines import capture_game_lines,market_report
+from .market_lines import capture_game_lines,market_report,saved_capture_evidence
 from .kalshi_lines import capture_kalshi_lines
 from .reference import archive_daily_references
 
@@ -52,6 +54,17 @@ ROSTER_REUSE_SECONDS=3*3600
 ROSTER_FINAL_REUSE_SECONDS=900
 # A job that failed is retried after this long (near tipoff, sooner).
 JOB_RETRY_SECONDS=(900,300)
+# The market captures are optional downloads; they run after the pregame forecasts
+# and share one time budget, cut further when the tick is already old, so a slow
+# network (each request waiting out its timeout) cannot starve a checkpoint or push
+# the tick into systemd's ten-minute kill. On 2026-11-06 the captures took 135-475 s
+# a tick for two hours of failing name resolution and the 9 AM forecasts came 82
+# minutes late.
+CAPTURE_BUDGET_SECONDS=120
+TICK_SOFT_LIMIT_SECONDS=420
+# The tick's record of a player sync keeps its counts; these per-player blocks are
+# the sync's own players/index.json and made each ticks.jsonl row about 400 KB.
+PLAYER_SYNC_DETAIL_KEYS=('rotation_roles','player_summaries','shot_queue')
 PACIFIC=ZoneInfo('America/Los_Angeles')
 
 _CODE_DIGEST=None
@@ -363,6 +376,7 @@ def _phases(report):
 def _tick(folder,history,report):
     validate_history(history)
     phase=_phases(report)
+    tick_started=time.monotonic()
     # Daily evidence must still be collected when the calendar endpoint fails.
     now=parse_time(_now())
     year=now.year if now.month>=7 else now.year-1
@@ -412,17 +426,10 @@ def _tick(folder,history,report):
     report['warnings'].extend(dict(task='schedule_crosscheck',espn_id=event['espn_id'],
         error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
     active_model,model_digest=load_active(folder,_now())
-    # Market lines for upcoming games, at the forecast cadence; never a reason to fail the tick.
-    capture={}
-    try:
-        capture=report['market_lines']=capture_game_lines(folder,upcoming,season,_now())
-    except Exception as exc:
-        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
-    try:
-        report['kalshi_lines']=capture_kalshi_lines(folder,upcoming,_now())
-    except Exception as exc:
-        report['warnings'].append(dict(task='kalshi_lines',error=f'{type(exc).__name__}: {exc}'))
-    phase('market_lines')
+    # The ESPN game summary's injury lists are forecast evidence. The digests the last
+    # capture saved key the jobs; the capture itself runs after the forecasts, so a
+    # change ESPN makes rebuilds the forecast one tick later.
+    capture=dict(evidence=saved_capture_evidence(folder,upcoming))
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.
     roster=_roster(folder,season,raw,jobs,report) if jobs else None
@@ -457,6 +464,18 @@ def _tick(folder,history,report):
             failed[job['key']]=dict(at=_now(),reason=type(exc).__name__)
     atomic_json(statepath,state)
     phase('forecasts')
+    # Market lines for upcoming games, at the forecast cadence, after the pregame
+    # deadlines and within the capture budget; never a reason to fail the tick.
+    deadline=time.monotonic()+max(0.,min(CAPTURE_BUDGET_SECONDS,TICK_SOFT_LIMIT_SECONDS-(time.monotonic()-tick_started)))
+    try:
+        report['market_lines']=capture_game_lines(folder,upcoming,season,_now(),deadline=deadline)
+    except Exception as exc:
+        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
+    try:
+        report['kalshi_lines']=capture_kalshi_lines(folder,upcoming,_now(),deadline=deadline)
+    except Exception as exc:
+        report['warnings'].append(dict(task='kalshi_lines',error=f'{type(exc).__name__}: {exc}'))
+    phase('market_lines')
     # Prioritize pregame deadlines over downloads and postgame reporting.
     if active_model:
         # Per-game failures are caught inside; anything that escapes them is reported here,
@@ -476,8 +495,9 @@ def _tick(folder,history,report):
     if (folder/'roster.json').exists():
         try:
             from .player_sync import sync_player_data
-            report['player_sync']=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
-            report['warnings'].extend(dict(task='shot_data',**e) for e in report['player_sync']['errors'])
+            synced=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
+            report['player_sync']=player_sync_summary(synced)
+            report['warnings'].extend(dict(task='shot_data',**e) for e in synced['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
     phase('player_sync')
@@ -498,6 +518,64 @@ def _tick(folder,history,report):
     phase('evaluate_runs')
     _carry_derived(folder,active_model,report)
     phase('derived')
+
+
+def player_sync_summary(synced):
+    """A player sync's counts and errors, without its per-player blocks (``PLAYER_SYNC_DETAIL_KEYS``),
+    which the sync writes to ``players/index.json`` and the dashboard reads from there."""
+    out={k:v for k,v in synced.items() if k not in PLAYER_SYNC_DETAIL_KEYS}
+    queue=synced.get('shot_queue')
+    if isinstance(queue,list):
+        out['shot_queue_games']=len(queue)
+        out['shot_queue_pending']=sum(1 for item in queue if item.get('status')!='complete')
+    out['detail']='players/index.json'
+    return out
+
+
+def compact_ticks(directory):
+    """Rewrite ``ticks.jsonl`` with each row's player sync reduced to ``player_sync_summary``.
+
+    Rows written before 2026-11-06 carried the whole sync, about 400 KB each. The
+    file is rewritten beside itself and renamed into place under the tick lock, so
+    no tick appends meanwhile; a line that is not JSON (a write a power loss cut
+    short) is kept as it is.
+    """
+    folder=Path(directory)
+    path=folder/'ticks.jsonl'
+    result=dict(rows=0,kept_lines=0,bytes_before=0,bytes_after=0)
+    if not path.exists():
+        return result
+    import fcntl
+    handle=(folder/'tick.lock').open('a')
+    try:
+        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise ValueError('tick already running') from exc
+    try:
+        result['bytes_before']=path.stat().st_size
+        tmp=path.with_name(path.name+'.compact')
+        with path.open('rb') as src,tmp.open('wb') as out:
+            for line in src:
+                if not line.strip():
+                    continue
+                try:
+                    row=json.loads(line)
+                    if isinstance(row,dict) and isinstance(row.get('player_sync'),dict):
+                        row['player_sync']=player_sync_summary(row['player_sync'])
+                    out.write((json.dumps(row,sort_keys=True)+'\n').encode())
+                    result['rows']+=1
+                except ValueError:
+                    out.write(line if line.endswith(b'\n') else line+b'\n')
+                    result['kept_lines']+=1
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp,path)
+        result['bytes_after']=path.stat().st_size
+        return result
+    finally:
+        fcntl.flock(handle,fcntl.LOCK_UN)
+        handle.close()
 
 
 def _recover_runs(folder,db,state,report):

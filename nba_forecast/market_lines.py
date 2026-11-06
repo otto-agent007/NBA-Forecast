@@ -14,6 +14,7 @@ import json
 import math
 from pathlib import Path
 import re
+import time
 
 from .availability import summary_sides
 from .files import atomic_bytes, atomic_json, canonical
@@ -152,8 +153,21 @@ def _slot(game, now):
     return f"{game['game_id']}:{int(now.timestamp()) // seconds}:{seconds}"
 
 
-def capture_game_lines(folder, games, season, as_of):
-    """Capture lines for the given upcoming games, once per cadence slot each; failures are reported, never raised."""
+def saved_capture_evidence(folder, games):
+    """The ESPN injury-list digests the last captures saved for these games; reads no network."""
+    state_path = Path(folder) / 'market' / 'capture-state.json'
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    wanted = {g['game_id'] for g in games}
+    return {k: v for k, v in state.get('evidence', {}).items() if k in wanted}
+
+
+def capture_game_lines(folder, games, season, as_of, deadline=None):
+    """Capture lines for the given upcoming games, once per cadence slot each; failures are reported, never raised.
+
+    ``deadline`` is a ``time.monotonic()`` instant: games not started by then are
+    listed under ``deferred`` and wait for the next tick, so a slow network (each
+    request waiting out its timeout) cannot hold the tick past its budget.
+    """
     from .reference import BASE, fetch_reference, scoreboard_event
     folder = Path(folder)
     now = parse_time(as_of)
@@ -161,13 +175,16 @@ def capture_game_lines(folder, games, season, as_of):
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     captured = {k: v for k, v in state.get('captured', {}).items() if now.timestamp() - v < 172800}
     evidence = {k: v for k, v in state.get('evidence', {}).items() if k in {g['game_id'] for g in games}}
-    report = dict(captured=[], unchanged=[], skipped=[], errors=[], evidence=evidence)
+    report = dict(captured=[], unchanged=[], skipped=[], deferred=[], errors=[], evidence=evidence)
     for game in games:
         if not game.get('start_time') or parse_time(game['start_time']) <= now:
             continue
         slot = _slot(game, now)
         if slot in captured:
             report['skipped'].append(game['game_id'])
+            continue
+        if deadline is not None and time.monotonic() > deadline:
+            report['deferred'].append(game['game_id'])
             continue
         try:
             event, _ = scoreboard_event(game, folder / 'references')

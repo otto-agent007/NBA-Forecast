@@ -125,6 +125,12 @@ A tick prints one line (status, run counts, missed finals, errors, warnings,
 job counts and phase timings) so the every-minute timer does not fill journald;
 the full report is saved as `last-tick.json` and appended to `ticks.jsonl`.
 `--full-report` prints it instead, and `--output FILE` writes it to a new file.
+The report's `player_sync` block is the sync's counts and errors; its per-player
+blocks (rotation roles, player summaries, the shot queue) are the sync's own
+`players/index.json`. Rows written before 2026-11-06 repeated them, about 400 KB
+a tick; `python -m nba_forecast compact-ticks --directory DIR` rewrites those
+rows in place under the tick lock (run it between ticks; a tick that finds the
+lock held exits and the timer retries a minute later).
 
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:
@@ -287,7 +293,17 @@ upcoming game at the forecast cadence (hourly while the game waits for the
 morning checkpoint, every 15 minutes within a day, every 5 minutes in the last
 30), under `market/game-lines/GAME_ID.jsonl` with source URL, hash and
 retrieval time; a record is appended only when a provider's lines change. The
-last capture before tipoff is the closing line. `market/report.json` compares
+last capture before tipoff is the closing line. Since 2026-11-06 the captures
+(ESPN and Kalshi together) run after the tick's forecasts and share a budget of
+120 seconds, less when the tick is already past seven minutes; a game the budget
+does not reach is listed as `deferred` and waits for the next tick, where its
+cadence slot is still open. Before that they ran first and unbounded, and two
+hours of failing name resolution that morning (each request waiting out its
+timeout) kept the captures at 135–475 seconds a tick, killed ten ticks at
+systemd's ten-minute limit and delayed the 9 AM forecasts by 82 minutes. The
+summary's injury lists are forecast evidence: the digest the last capture saved
+keys each forecast job, so a change ESPN makes rebuilds the forecast one tick
+later. `market/report.json` compares
 each finished game's latest pregame forecast with its closing line: the
 model's and the market's absolute error against the final margin and total,
 the record of model leans at several edge thresholds, and winner Brier scores.

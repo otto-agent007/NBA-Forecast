@@ -104,5 +104,29 @@ class KalshiTests(unittest.TestCase):
         self.assertAlmostEqual(report['summary']['kalshi_winner']['brier'], (.605 - 1) ** 2, places=3)
 
 
+class KalshiBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def test_games_past_the_deadline_are_deferred_before_and_between_requests(self):
+        import time
+        calls = []
+        def counting(url):
+            calls.append(url)
+            return fetcher(payloads())(url)
+        late = K.capture_kalshi_lines(self.folder, [GAME], '2026-10-27T20:00:00Z', fetch=counting, deadline=time.monotonic() - 1)
+        self.assertEqual((late['deferred'], late['captured'], calls), ([GAME['game_id']], [], []))
+        clock = [time.monotonic()]
+        def expiring(url):
+            calls.append(url)
+            clock[0] += 100  # the first market request alone used up the budget
+            return fetcher(payloads())(url)
+        with __import__('unittest').mock.patch('nba_forecast.kalshi_lines.time.monotonic', side_effect=lambda: clock[0]):
+            mid = K.capture_kalshi_lines(self.folder, [GAME], '2026-10-27T20:00:00Z', fetch=expiring, deadline=clock[0] + 60)
+        self.assertEqual((mid['deferred'], mid['captured'], len(calls)), ([GAME['game_id']], [], 1))
+        self.assertEqual(K.read_kalshi_lines(self.folder, GAME['game_id']), [], 'nothing partial is recorded')
+        done = K.capture_kalshi_lines(self.folder, [GAME], '2026-10-27T20:00:00Z', fetch=counting, deadline=time.monotonic() + 60)
+        self.assertEqual((done['captured'], done['deferred']), ([GAME['game_id']], []), 'the slot stayed open for the next tick')
+
 if __name__ == '__main__':
     unittest.main()
