@@ -217,5 +217,146 @@ class RecoverTests(unittest.TestCase):
             self.assertTrue((Path(d) / 'tick.lock').exists())
 
 
+def at(minutes):
+    """``minutes`` after the tipoff of GAME."""
+    from datetime import timedelta
+    from nba_forecast.validation import parse_time
+    return (parse_time(TIP) + timedelta(minutes=minutes)).isoformat()
+
+
+class AutoRecoverTests(unittest.TestCase):
+    """The derived service recovers a missed game's evidence by itself once the game is over."""
+    def setUp(self):
+        self.folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.calls = []
+        self.status = dict(reports='recorded', closing_lines='recorded', kalshi='recorded')
+        self.schedule = dict(SCHEDULE, games=[dict(GAME, status='scheduled'), LATER])
+        self.miss(['0022600151'])
+
+    def miss(self, game_ids, schedule=None):
+        games = {g['game_id']: g for g in (schedule or self.schedule)['games']}
+        (self.folder / 'missed-finals.json').write_text(json.dumps(dict(schema_version=1, games=[
+            dict(game_id=gid, start_time=games[gid]['start_time'] if gid in games else TIP, first_seen_at=TIP) for gid in game_ids])))
+
+    def fake(self, source):
+        def run(folder, schedule, ids, now):
+            self.calls.append((source, tuple(ids), now))
+            status = self.status[source]
+            if isinstance(status, Exception):
+                raise status
+            return [dict(game_id=gid, status=status) for gid in ids]
+        return run
+
+    def recover(self, minutes, schedule=None):
+        return R.auto_recover(self.folder, schedule or self.schedule, now=at(minutes),
+                              run={s: self.fake(s) for s in R.AUTO_SOURCES})
+
+    def state(self, source='reports', gid='0022600151'):
+        return json.loads((self.folder / R.AUTO_FILE).read_text())['games'][gid]['sources'][source]
+
+    def test_a_missed_game_is_recovered_once_it_is_over_and_never_again(self):
+        self.assertIsNone(self.recover(60))  # tipped, but the calendar has not seen the final yet
+        self.assertEqual(self.calls, [])
+        (self.folder / 'finals').mkdir()
+        (self.folder / 'finals' / '0022600151.json').write_text('[]')
+        summary = self.recover(61)
+        self.assertEqual(summary['games'], ['0022600151'])
+        self.assertEqual(summary['recorded'], ['0022600151:reports', '0022600151:closing_lines', '0022600151:kalshi'])
+        self.assertEqual([c[0] for c in self.calls], list(R.AUTO_SOURCES))
+        self.assertEqual((self.state()['status'], self.state()['attempts']), ('recorded', 1))
+        self.assertIsNone(self.recover(600))
+        self.assertEqual(len(self.calls), 3)
+
+    def test_a_game_the_calendar_marks_final_or_six_hours_old_is_over(self):
+        final = dict(self.schedule, games=[GAME, LATER])  # GAME is final in the calendar
+        self.assertIsNotNone(self.recover(1, schedule=final))
+        self.setUp()
+        self.assertIsNone(self.recover(R.AUTO_OVER_HOURS * 60 - 1))
+        self.assertIsNotNone(self.recover(R.AUTO_OVER_HOURS * 60))
+
+    def test_a_failed_source_is_retried_after_each_wait_then_given_up_and_others_are_kept(self):
+        self.status.update(reports='unavailable', kalshi=OSError('Kalshi down'))
+        clock = R.AUTO_OVER_HOURS * 60
+        summary = self.recover(clock)
+        self.assertEqual(summary['recorded'], ['0022600151:closing_lines'])
+        self.assertEqual(summary['retrying'], ['0022600151:reports', '0022600151:kalshi'])
+        self.assertEqual(self.state('kalshi')['result']['error'], 'OSError: Kalshi down')
+        self.status['kalshi'] = 'exists'
+        for wait in R.AUTO_RETRY_MINUTES:
+            self.assertIsNone(self.recover(clock + wait - 1))
+            clock += wait
+            summary = self.recover(clock)
+            self.assertNotIn('closing_lines', [c[0] for c in self.calls[-2:]])
+        self.assertEqual(summary['gave_up'], ['0022600151:reports'])
+        self.assertEqual((self.state()['attempts'], self.state()['gave_up']), (len(R.AUTO_RETRY_MINUTES) + 1, True))
+        self.assertEqual(self.state('kalshi')['status'], 'exists')
+        before = len(self.calls)
+        self.assertIsNone(self.recover(clock + 10 ** 5))
+        self.assertEqual(len(self.calls), before)
+
+    def test_two_games_a_run_oldest_first_and_a_rescheduled_game_starts_over(self):
+        later = dict(GAME, game_id='0022600152', start_time=at(30))
+        latest = dict(GAME, game_id='0022600153', start_time=at(60))
+        schedule = dict(SCHEDULE, games=[GAME, later, latest])
+        self.miss(['0022600153', '0022600151', '0022600152'], schedule)
+        self.assertEqual(self.recover(600, schedule)['games'], ['0022600151', '0022600152'])
+        self.assertEqual(self.recover(601, schedule)['games'], ['0022600153'])
+        self.assertIsNone(self.recover(602, schedule))
+        moved = dict(SCHEDULE, games=[GAME, later, dict(latest, start_time=at(120))])
+        self.miss(['0022600151', '0022600152', '0022600153'], moved)
+        self.assertEqual(self.recover(603, moved)['games'], ['0022600153'])
+
+    def test_a_game_missing_from_the_calendar_is_given_up_without_a_fetch(self):
+        self.miss(['0022699999'])
+        summary = R.auto_recover(self.folder, self.schedule, now=at(600))  # the real recoveries: no network for an unknown game
+        self.assertEqual(summary['gave_up'], ['0022699999:reports', '0022699999:closing_lines', '0022699999:kalshi'])
+        self.assertIsNone(R.auto_recover(self.folder, self.schedule, now=at(601)))
+
+    def test_no_missed_record_does_nothing(self):
+        (self.folder / 'missed-finals.json').unlink()
+        self.assertIsNone(self.recover(600))
+        self.assertFalse((self.folder / R.AUTO_FILE).exists())
+
+    def test_the_derived_service_recovers_writes_the_report_record_and_rebuilds(self):
+        from nba_forecast import operations
+        (self.folder / 'schedule').mkdir()
+        (self.folder / 'schedule' / 'latest.json').write_text(json.dumps(dict(self.schedule, version='v1', games=[GAME, LATER])))
+        fetch = pdf_fetch({'Injury-Report_2026-10-31_07_30PM.pdf'})
+        builds = []
+
+        def build(folder, db, schedule, active_model, model_digest, report):
+            builds.append(1)
+            for name in ('performance.json', 'benchmarks.json', 'daily-reviews/index.json', 'market/report.json'):
+                (folder / name).parent.mkdir(parents=True, exist_ok=True)
+                (folder / name).write_text('{}')
+
+        real = R.recover_report_records
+
+        def reports(folder, schedule, ids, *, now):
+            return real(folder, schedule, ids, now=now, fetch=fetch, sleep=lambda s: None)
+
+        def none(folder, schedule, ids, *, now):
+            return [dict(game_id=gid, status='no_close') for gid in ids]
+
+        def refresh(clock):
+            with patch('nba_forecast.operations._derived_reports', side_effect=build), \
+                 patch('nba_forecast.operations._now', return_value=clock), \
+                 patch('nba_forecast.recover_evidence.recover_report_records', new=reports), \
+                 patch('nba_forecast.recover_evidence.recover_closing_lines', new=none), \
+                 patch('nba_forecast.recover_evidence.recover_kalshi_lines', new=none):
+                return operations.run_derived(self.folder)
+
+        first = refresh(NOW)
+        self.assertEqual(first['status'], 'rebuilt')
+        self.assertEqual(first['recovered_evidence']['recorded'], ['0022600151:reports'])
+        self.assertEqual(first['recovered_evidence']['retrying'], ['0022600151:closing_lines', '0022600151:kalshi'])
+        final = json.loads((self.folder / 'injuries' / 'games' / '0022600151' / 'final.json').read_text())
+        self.assertEqual(final['late_capture']['recovered_at'], NOW)
+        self.assertIn('0022600151:reports', json.loads((self.folder / 'derived-request.json').read_text())['reason'])
+        second = refresh(NOW)
+        self.assertNotIn('recovered_evidence', second)
+        self.assertEqual((second['status'], len(builds)), ('unchanged', 1))
+
+
 if __name__ == '__main__':
     unittest.main()

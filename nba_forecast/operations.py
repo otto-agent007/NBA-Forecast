@@ -897,6 +897,7 @@ def _derived(folder,report):
         report.update(status='waiting',reason='No saved calendar yet; the first tick saves one.')
         return
     report['schedule_source']=source
+    _recover_missed(folder,schedule,report)
     db=folder/'forecast.sqlite'
     active_model,model_digest=load_active(folder,_now())
     due,signature,saved=_derived_due(folder,db,schedule,active_model,model_digest)
@@ -911,6 +912,27 @@ def _derived(folder,report):
         report={k:report[k] for k in ('prospective_calibration','prospective_margin_calibration','postgame','daily_review','market') if k in report},
         errors=list(report['errors']),warnings=list(report['warnings'])))
     report.update(status='rebuilt',computed_at=computed)
+
+
+def _recover_missed(folder,schedule,report):
+    """Fetch what a missed game's checkpoint and closing captures would have saved, once the game is over.
+
+    A recorded capture asks for a rebuild, so the market report picks up the
+    recovered closes; a source given up after its retries is a warning.
+    """
+    from .recover_evidence import auto_recover
+    try:
+        summary=auto_recover(folder,schedule,now=_now())
+    except Exception as exc:
+        report['errors'].append(dict(task='recover_evidence',error=f'{type(exc).__name__}: {exc}'))
+        return
+    if not summary:
+        return
+    report['recovered_evidence']=summary
+    if summary['recorded']:
+        request_derived(folder,'recovered evidence: '+', '.join(summary['recorded']))
+    report['warnings'].extend(dict(task='recover_evidence',item=label,
+        action='Given up after its retries; run recover-evidence by hand to try again.') for label in summary['gave_up'])
 
 
 def _carry_derived(folder,active_model,report):

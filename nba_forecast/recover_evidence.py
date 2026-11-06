@@ -22,6 +22,10 @@ the tick's missed-checkpoint record is untouched.
   exists for the game.
 - Daily reports (``injuries/daily/<season>-<date>.json``): the edition the
   9 AM Pacific capture would have taken.
+
+The derived service runs the three per-game recoveries by itself
+(``auto_recover``) for every game the tick recorded as a missed final, once the
+game is over; the command line remains for daily reports and for re-running.
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -53,6 +57,12 @@ PAUSE = 2.            # the NBA report CDN blocks bursts; Kalshi asks for restra
 RETRY_PAUSE = 30.     # a throttled request answers like an absent file; one retry tells them apart
 PACIFIC = ZoneInfo('America/Los_Angeles')
 EASTERN = ZoneInfo('America/New_York')
+AUTO_FILE = 'recovered-evidence.json'
+AUTO_SOURCES = ('reports', 'closing_lines', 'kalshi')
+AUTO_DONE = ('recorded', 'exists', 'unchanged')
+AUTO_RETRY_MINUTES = (30, 120, 360)  # waits after the first, second and third failed attempts; the fourth gives up
+AUTO_OVER_HOURS = 6                  # a game the calendar has not marked final is over this long after tipoff
+AUTO_GAMES_PER_RUN = 2               # bounds one derived run: a game whose report editions all fail costs about six minutes
 
 
 def _now():
@@ -343,3 +353,94 @@ def recover(directory, game_ids, *, reports=True, closing_lines=True, kalshi=Tru
     result['unresolved'] = sorted({item.get('game_id') or item.get('date') for key in ('reports', 'closing_lines', 'kalshi', 'daily_reports')
                                    for item in result.get(key, []) if item['status'] in ('unavailable', 'no_close', 'no_event', 'unknown_game')})
     return result
+
+
+def _auto_due(source, now):
+    """Whether one source of one game should be tried now."""
+    if source is None:
+        return True
+    if source['status'] in AUTO_DONE or source.get('gave_up'):
+        return False
+    return parse_time(source['next_attempt_at']) <= now
+
+
+def _over(folder, game, now):
+    """Whether a game has finished, so no tick writes its files and ESPN has recorded its close."""
+    if game is None or not game.get('start_time'):
+        return True  # the recoveries report an unknown game, which ends its attempts
+    if game.get('status') == 'final' or (folder / 'finals' / (game['game_id'] + '.json')).exists():
+        return True
+    return now - parse_time(game['start_time']) >= timedelta(hours=AUTO_OVER_HOURS)
+
+
+def _auto_result(item):
+    result = {k: v for k, v in item.items() if k not in ('game_id', 'failures')}
+    if item.get('failures'):
+        result.update(failures=item['failures'][:5], failure_count=len(item['failures']))
+    return result
+
+
+def auto_recover(directory, schedule, *, now=None, run=None):
+    """Recover each missed game's evidence once the game is over; the derived service calls this every run.
+
+    The games are the tick's missed-final record (``missed-finals.json``). Each
+    source (the T-30 report edition, ESPN's close, Kalshi's close) is tried
+    until it is recorded or found already there; a failed source is tried
+    again after each wait in ``AUTO_RETRY_MINUTES`` and given up after the last.
+    Progress is kept in ``recovered-evidence.json``. Only files of finished
+    games are written, which no tick touches after tipoff, so this runs under
+    the derived service's lock alone and never holds up a tick. Returns a
+    summary, or None when nothing was due.
+    """
+    folder = Path(directory)
+    now = now or _now()
+    clock = parse_time(now)
+    run = run or dict(reports=recover_report_records, closing_lines=recover_closing_lines, kalshi=recover_kalshi_lines)
+    missed_path = folder / 'missed-finals.json'
+    if not missed_path.exists():
+        return None
+    missed = {g['game_id']: g['start_time'] for g in json.loads(missed_path.read_text()).get('games', [])}
+    path = folder / AUTO_FILE
+    state = json.loads(path.read_text()) if path.exists() else dict(games={})
+    by_id = {g['game_id']: g for g in schedule['games']}
+    due = []
+    for gid, start in sorted(missed.items(), key=lambda item: (item[1] or '', item[0])):
+        entry = state['games'].get(gid)
+        if entry is None or entry.get('start_time') != start:  # new, or rescheduled: start over
+            entry = state['games'][gid] = dict(start_time=start, sources={})
+        sources = [s for s in AUTO_SOURCES if _auto_due(entry['sources'].get(s), clock)]
+        if sources and _over(folder, by_id.get(gid), clock):
+            due.append((gid, sources))
+    due = due[:AUTO_GAMES_PER_RUN]
+    if not due:
+        return None
+    summary = dict(started_at=now, games=[gid for gid, _ in due], recorded=[], retrying=[], gave_up=[])
+    for source in AUTO_SOURCES:
+        ids = [gid for gid, sources in due if source in sources]
+        if not ids:
+            continue
+        try:
+            results = {item['game_id']: item for item in run[source](folder, schedule, ids, now=now)}
+        except Exception as exc:  # one source failing leaves the others and the derived reports running
+            results = {gid: dict(game_id=gid, status='error', error=f'{type(exc).__name__}: {exc}') for gid in ids}
+        for gid in ids:
+            item = results.get(gid) or dict(game_id=gid, status='error', error='no result')
+            attempts = (state['games'][gid]['sources'].get(source) or {}).get('attempts', 0) + 1
+            entry = dict(status=item['status'], attempts=attempts, last_attempt_at=now, result=_auto_result(item))
+            label = f'{gid}:{source}'
+            if item['status'] in AUTO_DONE:
+                if item['status'] == 'recorded':
+                    summary['recorded'].append(label)
+            elif item['status'] == 'unknown_game' or attempts > len(AUTO_RETRY_MINUTES):
+                entry['gave_up'] = True
+                summary['gave_up'].append(label)
+            else:
+                entry['next_attempt_at'] = (clock + timedelta(minutes=AUTO_RETRY_MINUTES[attempts - 1])).isoformat()
+                summary['retrying'].append(label)
+            state['games'][gid]['sources'][source] = entry
+    state.update(schema_version=1, version=VERSION, updated_at=_now(),
+                 policy='Each missed final game gets its T-30 report edition, ESPN close and Kalshi close fetched once it is over, '
+                        'as labeled late captures; a failed source is retried after 30 min, 2 h and 6 h, then given up.')
+    atomic_json(path, state)
+    summary['finished_at'] = _now()
+    return summary
