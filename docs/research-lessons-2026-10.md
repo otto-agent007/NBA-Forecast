@@ -151,7 +151,7 @@ uncorrected versions:
 | 1 | Cluster the gate's standard errors | Done: two-way, date × player, with a 0.5% materiality floor since 2026-10-26 (`docs/backtest.md`) |
 | 2 | Market and naive baselines on the scoreboard, encompassing test | Done: `market_metrics` |
 | 3 | Official injury reports in the replay, second season | Done: 2024-25 and 2025-26 with T−30 reports |
-| 4 | Blend the player-sum margin with a team rating, preseason prior | Done: 50/50, prior 10 games at 0.6 × last season; the rating loses 0.1 per minute of reported-out regulars (2026-10-26). Reweighting and roster continuity tested on branches (below) |
+| 4 | Blend the player-sum margin with a team rating, preseason prior | Done: 50/50 on 2026-10-24, 0.35/0.65 since 2026-11-06 (`backtest-2026-11-06-rating-weight`: winner Brier −0.0014 ± 0.0007, margin within noise; live the player-sum half sat further from the close than the rating half); prior 10 games at 0.6 × last season; the rating loses 0.1 per minute of reported-out regulars (2026-10-26). Roster continuity tested on a branch (below) |
 | 5 | Calibrate the interval's two tails separately | Done: `calibration.two_tailed_quantiles` |
 | 6 | Measured status play rates; return-from-absence minutes ramp | Rates done: factors on the role rate fitted on 12:30 PM ET reports (questionable .64, doubtful .04); raw play rates 89/49/3%, close to the outside source's 87/48/4%. Ramp open |
 | 7 | Market composite as a separate, labeled output | Open: a product decision; it would make the edge report echo the price |
@@ -166,7 +166,9 @@ merged:
 - `exp/margin-reweight`: 0.4 × player sum + 0.8 × team rating. Gate
   improved (winner Brier −0.0028 ± 0.0016, margin within noise), but the
   weights were fitted on the same two seasons. Superseded: the stretch it
-  added was mostly the absence effect, merged on 2026-10-26.
+  added was mostly the absence effect, merged on 2026-10-26. The direction
+  survived the absence change: on 2026-11-06 the rating weight went from 0.5
+  to 0.65 (`backtest-2026-11-06-rating-weight`, below in `docs/backtest.md`).
 - `exp/roster-continuity`: seeds the replay with last season's finals (within
   noise, `datasets/backtest-2026-10-25-seeded-prior`); continuity "games" mode
   improved Brier by 0.0005.

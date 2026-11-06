@@ -28,7 +28,7 @@ TAIL_FLOOR = 1e-6
 PARAMETERS = dict(minimum_games=MINIMUM_GAMES, maximum_games=MAXIMUM_GAMES,
                   support=SUPPORT, tail_floor_per_side=TAIL_FLOOR,
                   minimum_scale=1., required_interior_standard_deviations=3.,
-                  rating_weight=.5, rating_prior_games=10, rating_prior_shrink=.6,
+                  rating_weight=.65, rating_prior_games=10, rating_prior_shrink=.6,
                   absence_rating_per_minute=.1, absence_minimum_minutes=15.)
 LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
              'is an outcome prior, not this model\'s prediction-error calibration. '
@@ -47,7 +47,13 @@ CALIBRATED_LIMITATION = ('Location and scale were fitted on genuinely saved preg
 # (FiveThirtyEight weighted Elo about 35%). Round values, not fitted here: the
 # research measured current-season margin earning about 8-14% weight after 0-4
 # games and 80% after 20-39, which ten pseudo-games of a 0.6-regressed prior
-# reproduces.
+# reproduces. The rating's weight was half until 2026-11-06 and is 0.65 since:
+# live, the player-sum half stood further from the closing line than the rating
+# half (2026-11-02, 54 games: 12.64 and 11.95 against the close's 10.24), and on
+# the three replayed seasons 0.65 improves the winner Brier by 0.0014 +- 0.0007
+# with the margin error within noise (backtest-2026-11-06-rating-weight); 0.80
+# gave the same with a wider verdict and more margin bias. One of two tried
+# values, chosen on the same seasons, so part of the gain is selection.
 RATING_WEIGHT = PARAMETERS['rating_weight']
 RATING_PRIOR_GAMES = PARAMETERS['rating_prior_games']
 RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
@@ -55,8 +61,9 @@ RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
 # already loses tonight's reported-out players, the rating did not. On the
 # three replayed seasons the blended margin missed by 0.49 points (se 0.06) per
 # ten minutes a game of reported-out regulars, home minus away, against 0.17
-# for the closing line, about equally in each season. The rating carries half
-# the location, so it loses a round 0.1 points per such minute: a player
+# for the closing line, about equally in each season. The rating carried half
+# the location when this was sized, so it loses a round 0.1 points per such
+# minute (0.065 of the blend at the 0.65 weight, gated together): a player
 # averaging 15 or more minutes for the team this season who played one of its
 # last ten games (model._absence). A longer absence is already in the team's
 # recent results.
@@ -420,8 +427,8 @@ def build_margin_forecasts(snapshot, result):
             value.update(status='estimated', reason=None, mean_margin=location, standard_deviation=sd,
                 pmf=pmf, pmf_sha256=_sha(pmf), sample_count=inputs['sample_count'],
                 distribution_mean_margin=distribution_mean, distribution_standard_deviation=distribution_sd,
-                mean_basis=(('Half the unrounded regulation player-sum difference, half the home edge plus the '
-                    'team-rating difference less reported-out regulars' if rating_margin is not None else
+                mean_basis=((f'{1 - RATING_WEIGHT:.2f} of the unrounded regulation player-sum difference plus {RATING_WEIGHT:.2f} of the '
+                    'home edge plus the team-rating difference less reported-out regulars' if rating_margin is not None else
                     'Unrounded regulation player-sum difference (a team rating was unavailable)')
                     + (', plus validated prospective location correction' if calibration else '')),
                 scale_basis=('Historical paired-final prior times validated prospective residual scale correction'

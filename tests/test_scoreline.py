@@ -32,16 +32,17 @@ class ScorelineTests(unittest.TestCase):
         snapshot, result = forecast_inputs(110., 105.)
         game = snapshot['games'][0]
         location = margins.build_margin_forecasts(snapshot, result)[0]['mean_margin']
-        self.assertEqual(location, 2.5)  # half the player sum (5), half a zero rating
+        self.assertAlmostEqual(location, (1 - margins.RATING_WEIGHT) * 5.)  # the player sum (5) at its weight, a zero rating at the rest
         audit = reconcile(result['predictions'], game, location)
         totals = sides(game, result['predictions'])
-        self.assertAlmostEqual(totals['home'] - totals['away'], 2.5)
+        self.assertAlmostEqual(totals['home'] - totals['away'], location)
         self.assertAlmostEqual(totals['home'] + totals['away'], 215.)
-        self.assertEqual((audit['method'], audit['team_shift']), (METHOD, -1.25))
-        self.assertAlmostEqual(audit['factors']['home'], 108.75 / 110.)
+        self.assertEqual(audit['method'], METHOD)
+        self.assertAlmostEqual(audit['team_shift'], -(5. - location) / 2)  # each total moves half the gap
+        self.assertAlmostEqual(audit['factors']['home'], (110. + audit['team_shift']) / 110.)
         player = result['predictions'][0]
         self.assertEqual(player['components']['scoreline']['points_mean_before'], 22.)
-        self.assertAlmostEqual(player['points_mean'], 22. * 108.75 / 110.)
+        self.assertAlmostEqual(player['points_mean'], 22. * (110. + audit['team_shift']) / 110.)
         self.assertEqual(sides(game, player_projections(result['predictions'])), {'away': 105., 'home': 110.})
 
     def test_a_reconciled_forecast_reproduces_its_own_margin(self):

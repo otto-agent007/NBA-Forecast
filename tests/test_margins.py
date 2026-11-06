@@ -167,9 +167,9 @@ class MarginForecastTests(unittest.TestCase):
         original = deepcopy((snapshot, result))
         value = margins.build_margin_forecasts(snapshot, result)[0]
         self.assertEqual(value['status'], 'estimated')
-        # Evenly matched sources with no home edge: half the player sum, half a zero rating.
+        # Evenly matched sources with no home edge: the player sum at its weight, a zero rating at the rest.
         self.assertEqual((value['player_sum_margin'], value['team_rating_margin']), (5., 0.))
-        self.assertEqual(value['mean_margin'], 2.5)
+        self.assertAlmostEqual(value['mean_margin'], (1 - margins.RATING_WEIGHT) * 5.)
         self.assertEqual(value['calibration_status'], 'uncalibrated')
         self.assertEqual(value['settlement'], 'final_score_including_overtime')
         self.assertEqual(value['sample_count'], 100)
@@ -193,7 +193,7 @@ class MarginForecastTests(unittest.TestCase):
         self.assertEqual(value['absent_regular_minutes'], {'home': 30., 'away': 0.})
         self.assertAlmostEqual(value['absence_rating_adjustment'], -margins.ABSENCE_RATING_PER_MINUTE * 30.)
         self.assertAlmostEqual(value['team_rating_margin'], -3.)
-        self.assertAlmostEqual(value['mean_margin'], .5 * 5. + .5 * -3.)
+        self.assertAlmostEqual(value['mean_margin'], (1 - margins.RATING_WEIGHT) * 5. + margins.RATING_WEIGHT * -3.)
 
     def test_home_away_means_mirror_the_entire_distribution(self):
         s1, r1 = forecast_inputs(110, 105)
