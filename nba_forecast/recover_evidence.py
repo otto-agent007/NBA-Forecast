@@ -364,6 +364,20 @@ def _auto_due(source, now):
     return parse_time(source['next_attempt_at']) <= now
 
 
+def settled_games(directory):
+    """Missed games whose T-30 report edition, ESPN close and Kalshi close are all recorded or already present.
+
+    Nothing is left to recover for them, so the tick no longer counts them as
+    needing attention; the missed checkpoint itself stays on the record.
+    """
+    path = Path(directory) / AUTO_FILE
+    if not path.exists():
+        return set()
+    games = json.loads(path.read_text()).get('games', {})
+    return {gid for gid, entry in games.items()
+            if all(((entry.get('sources') or {}).get(source) or {}).get('status') in AUTO_DONE for source in AUTO_SOURCES)}
+
+
 def _over(folder, game, now):
     """Whether a game has finished, so no tick writes its files and ESPN has recorded its close."""
     if game is None or not game.get('start_time'):

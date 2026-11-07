@@ -63,6 +63,11 @@ test("runner separates waiting checkpoints from actionable errors", async ({ pag
   await page.goto('/');
   await expect(page.getByText('Runner recently completed',{exact:true})).toBeVisible();
   await expect(page.getByLabel('Upcoming forecast checkpoints')).toContainText('1 upcoming game');
+  // A missed checkpoint whose evidence was recovered is a note under a healthy runner, not an alarm.
+  response.runner.missed_final_record={total:1,recent:0,recovered:[gameId],older:[]};
+  await page.getByRole('button',{name:'Refresh data',exact:true}).click();
+  await expect(page.getByText('Runner recently completed',{exact:true})).toBeVisible();
+  await expect(page.getByText(/Final checkpoint missed for GSW@LAL/)).toBeVisible();
   response.runner.status='partial';
   response.runner.errors=[{task:'preflight',game_id:gameId,issues:[{detail:'Roster membership disagrees.'}]}];
   await page.getByRole('button',{name:'Refresh data',exact:true}).click();
