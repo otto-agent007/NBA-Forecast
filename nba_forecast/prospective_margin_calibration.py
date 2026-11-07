@@ -143,7 +143,8 @@ def collect_margin_samples(directory,family,as_of):
                     raise ValueError('Immutable run hash differs')
                 forecast=json.loads(row['forecast_json'])
                 if not isinstance(forecast.get('model_key'),str) or not forecast['model_key']:
-                    raise ValueError('Run lacks a model key')
+                    excluded['unkeyed_run']+=1  # runs before model keys existed carry no margin distribution either
+                    continue
                 if forecast.get('margin_forecasts'):
                     counts['model_runs']+=1
                 snapshot=json.loads(row['snapshot_json'])

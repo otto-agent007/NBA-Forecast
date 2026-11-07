@@ -113,11 +113,13 @@ class ProspectiveMarginTests(unittest.TestCase):
                                 ('0022600002','2026-11-02T20:00:00Z','2026-11-02T23:00:00Z'),
                                 ('0022600003','2026-11-03T20:00:00Z','2026-11-03T23:00:00Z')):
             self.final(gid=gid,start=start,known=known)
+        # A run from before model keys existed (production holds 300) is skipped, not an error.
+        self.run_row(gid='0022600005',run='unkeyed',created='2026-10-24T19:00:00Z',start='2026-10-24T20:00:00Z',model_key=None)
         result=collect_margin_samples(self.folder,FAMILY,ASOF)
         self.assertEqual(result['errors'],[])
         self.assertEqual([(s['game_id'],s['model_key'],s['margin_family']) for s in result['samples']],
                          [('0022600001','release-one',FAMILY),('0022600002','release-two',FAMILY)])
-        self.assertEqual(result['exclusions']['other_family'],1)
+        self.assertEqual((result['exclusions']['other_family'],result['exclusions']['unkeyed_run']),(1,1))
         self.assertEqual(result['counts']['model_runs'],3)
         # A distribution whose model key disagrees with its run is still an error, not a pooled sample.
         self.run_row(gid='0022600004',run='fourth',created='2026-11-04T19:00:00Z',start='2026-11-04T20:00:00Z',
