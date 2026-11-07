@@ -781,15 +781,20 @@ def _missed_finals(state,schedule,report,folder=None):
     A miss is recorded once, under ``state['missed_finals']`` and mirrored to
     ``missed-finals.json`` (game, tipoff, the tick that first saw it), and is
     never backdated into a success. It marks the tick ``partial`` for
-    ``MISSED_FINAL_WINDOW_HOURS`` after the tipoff; older misses stay on the
-    record (``report['missed_final_record']``) without marking every later tick.
+    ``MISSED_FINAL_WINDOW_HOURS`` after the tipoff, or until the derived service
+    has recovered the game's report edition and closes (``recovered-evidence.json``);
+    older and recovered misses stay on the record (``report['missed_final_record']``)
+    without marking every later tick.
     A miss whose final run turns up after all (a recovered run) leaves the record.
     """
+    from .recover_evidence import settled_games
     # Only flag games occurring after operations were first started, not an entire
     # historical season as missed. Unknown/postponed start times cannot be due.
     state.setdefault('tracking_started_at',report['started_at'])
     record=state.setdefault('missed_finals',{})
     now=parse_time(_now())
+    settled=settled_games(folder) if folder is not None else set()
+    recovered=[]
     changed=False
     for game in schedule['games']:
         start=game['start_time']
@@ -806,14 +811,15 @@ def _missed_finals(state,schedule,report,folder=None):
             record[game['game_id']]=dict(start_time=start,first_seen_at=report['started_at'])
             changed=True
         if now-parse_time(start)<=timedelta(hours=MISSED_FINAL_WINDOW_HOURS):
-            report['missed_final_games'].append(game['game_id'])
-    report['missed_final_record']=dict(total=len(record),recent=len(report['missed_final_games']),
-                                       older=sorted(g for g in record if g not in report['missed_final_games']))
+            (recovered if game['game_id'] in settled else report['missed_final_games']).append(game['game_id'])
+    report['missed_final_record']=dict(total=len(record),recent=len(report['missed_final_games']),recovered=sorted(recovered),
+                                       older=sorted(g for g in record if g not in report['missed_final_games'] and g not in recovered))
     if folder is not None and (changed or not (Path(folder)/'missed-finals.json').exists()):
         atomic_json(Path(folder)/'missed-finals.json',dict(schema_version=1,tracking_started_at=state['tracking_started_at'],
             window_hours=MISSED_FINAL_WINDOW_HOURS,games=[dict(game_id=g,**v) for g,v in sorted(record.items())],
             policy='A tipped game without its T-30 final run is recorded once and never backdated; '
-                   'it marks the tick partial for the window after tipoff and stays on the record after.'))
+                   'it marks the tick partial for the window after tipoff, or until its report edition and closes '
+                   'are recovered (recovered-evidence.json), and stays on the record after.'))
 
 
 def _absent_from_final(rows,predictions):
@@ -1053,6 +1059,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     if active_model:
         from .prospective_calibration import fit_prospective
         from .prospective_margin_calibration import fit_prospective_margin, verify_margin_calibration_sources
+        from .margins import CALIBRATION_FAMILY
         from .enhancements import install_artifact
         assessed=fit_prospective(folder,active_model['model_key'],_now(),interval_family=INTERVAL_FAMILY)
         atomic_json(folder/'prospective-calibration-status.json',assessed)
@@ -1065,7 +1072,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
             digest=install_artifact(folder,updated)
             if _activate(folder,model_digest,digest,report):
                 active_model,model_digest=updated,digest
-        margin_assessed=fit_prospective_margin(folder,active_model['model_key'],_now())
+        margin_assessed=fit_prospective_margin(folder,CALIBRATION_FAMILY,_now())
         atomic_json(folder/'prospective-margin-calibration-status.json',margin_assessed)
         report['prospective_margin_calibration']={k:margin_assessed.get(k) for k in ('status','reason','sample_count','training_games','validation_games')}
         report['errors'].extend(dict(task='prospective_margin_calibration',detail=e)
@@ -1087,7 +1094,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
             validation=active_model.get('validation_report'),prospective=assessed,
             prospective_margin=margin_assessed,
             applied_margin_calibration=({k:active_model['margin_calibration'].get(k)
-                for k in ('status','training_games','validation_games','evidence_sha256','training_cutoff')}
+                for k in ('status','training_games','validation_games','evidence_sha256','training_cutoff','margin_family','model_keys')}
                 if active_model.get('margin_calibration') else None),
             outcomes=report.get('final_sync')))
     if (folder/'roster.json').exists():

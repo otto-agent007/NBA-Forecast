@@ -76,6 +76,38 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(again['artifact_sha256'], result['artifact_sha256'], 'the same code deploys to the same artifact')
             self.assertEqual((again['units_rewritten'], again['units_created']), ([], []))
 
+    def test_deploy_carries_a_valid_margin_correction_across_releases(self):
+        from datetime import datetime, timedelta
+        from nba_forecast.margins import CALIBRATION_FAMILY
+        from nba_forecast.prospective_margin_calibration import METHOD, _fit_window
+        from tests.test_prospective_margin_calibration import sample
+        rows = []
+        for i in range(112):
+            row = sample(i)
+            for field in ('game_time', 'forecast_created_at', 'actual_known_at'):
+                row[field] = (datetime.fromisoformat(row[field]) - timedelta(days=61)).isoformat()
+            rows.append(row)
+        cutoff = '2026-10-21T15:30:00Z'
+        correction = dict(schema_version=1, method=METHOD, margin_family=CALIBRATION_FAMILY, model_keys=['margin-model-key'],
+                          window_index=0, training_cutoff=cutoff, evidence_samples=rows, **_fit_window(rows, CALIBRATION_FAMILY, cutoff))
+        self.assertEqual(correction['status'], 'ready')
+        for valid in (True, False):
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                old_active, units = production(root)
+                archive = root / 'model-artifacts' / (old_active + '.json')
+                active = json.loads(archive.read_text())
+                active['margin_calibration'] = dict(correction) if valid else dict(correction, location_bias=7.5)
+                digest = install_artifact(root, active)
+                (root / 'model-upgrade-active.json').write_text(json.dumps(dict(artifact_sha256=digest, activated_at='2026-10-25T08:00:00Z')))
+                result = D.deploy(root, units, systemd=False)
+                self.assertEqual(result['margin_calibration_inherited'], valid)
+                artifact, _ = load_active(root, '2027-01-01T00:00:00Z')
+                if valid:
+                    self.assertEqual(artifact['margin_calibration']['evidence_sha256'], correction['evidence_sha256'])
+                else:
+                    self.assertIsNone(artifact.get('margin_calibration'), 'a correction that fails its replay is not carried')
+
     def test_deploy_waits_for_a_running_tick_or_rebuild_and_gives_up_after_the_wait(self):
         import fcntl
         with tempfile.TemporaryDirectory() as d:
