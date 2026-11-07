@@ -5,9 +5,11 @@ import json
 import math
 from pathlib import Path
 import random
+import tempfile
 import unittest
 
 from nba_forecast import close_teacher as teacher
+from nba_forecast.close_teacher_reference import REPORT as COMMITTED
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,13 +75,29 @@ class CloseTeacherTests(unittest.TestCase):
         rows = games(120)
         teacher.situations(rows)
         f = teacher.features(dict(rows[-1], rest=(1.49, 2.5)))
-        self.assertEqual(len(f), 12)
+        self.assertEqual(len(f), 10)
         self.assertEqual(f[1:5], [True, False, False, True])
-        self.assertEqual(f[-2:], [False, True])
         self.assertEqual(rows[0]['rank'], rows[1]['rank'])
         result = teacher.diagnostics(rows, historical=True)
         self.assertEqual(result['teacher']['fits']['close_minus_model']['status'], 'singular_design')
         self.assertEqual(result['teacher']['feature_names'], teacher.FEATURE_NAMES)
+        self.assertEqual((result['teacher']['season_indicators'], result['teacher']['baseline_season']), ([], '2025-26'))
+
+    def test_season_indicators_come_from_the_sample(self):
+        # The study's three seasons give its 2024-25 and 2025-26 columns; one season gives none, two give one.
+        rows = games(120)
+        for g in rows[::2]:
+            g['season'] = '2024-25'
+        teacher.situations(rows)
+        indicators = teacher.season_indicators(rows)
+        self.assertEqual(indicators, ['2025-26'])
+        self.assertEqual(teacher.features(dict(rows[-1], rest=(2., 2.)), indicators)[-1], rows[-1]['season'] == '2025-26')
+        three = [dict(g, season=s) for g in rows for s in ('2023-24', '2024-25', '2025-26')]
+        self.assertEqual(teacher.season_indicators(three), ['2024-25', '2025-26'])
+        self.assertEqual(len(teacher.features(dict(three[0], rest=(2., 2.)), teacher.season_indicators(three))), 12)
+        result = teacher.diagnostics(rows, historical=True)['teacher']
+        self.assertEqual(result['feature_names'], teacher.FEATURE_NAMES + ['2025-26'])
+        self.assertEqual(result['baseline_season'], '2024-25')
 
     def test_study_grouping_preserves_source_season_and_discloses_mismatches(self):
         rows = [dict(game_id='g', projected_margin=3)]
@@ -112,6 +130,21 @@ class CloseTeacherTests(unittest.TestCase):
         self.assertEqual(result['overall']['n'], 28)
         json.dumps(result, allow_nan=False)
 
+    def test_report_module_round_trips_for_pinned_releases(self):
+        # Releases ship only .py files (runner_release.pin_release), so the reference travels as a generated module.
+        report = dict(version=teacher.VERSION, reference='test', sources=[dict(path='a', sha256='b')],
+                      diagnostics=dict(teacher.diagnostics(games(30)), label='0–<2', nothing=None, flag=True))
+        with tempfile.TemporaryDirectory() as d:
+            module = Path(d) / 'close_teacher_reference.py'
+            teacher.write_report(module, report)
+            teacher.write_report(Path(d) / 'report.json', report)
+            spec = importlib.util.spec_from_file_location('generated_reference', module)
+            generated = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(generated)
+            self.assertEqual(generated.REPORT, report)
+            self.assertEqual(json.loads((Path(d) / 'report.json').read_text()), json.loads(json.dumps(report)))
+            self.assertFalse(list(Path(d).glob('*.tmp')))
+
 
 @unittest.skipUnless((ROOT / 'datasets/backtest-2026-11-06-rating-weight/rows.json.gz').exists(),
                      'requires committed November 6 replay archive (available in CI checkout)')
@@ -133,9 +166,11 @@ class November6ReferenceTests(unittest.TestCase):
 
     def test_published_historical_results_and_research_parity(self):
         report = teacher.reference_report(ROOT / 'datasets/backtest-2026-11-06-rating-weight', ROOT / 'datasets')
-        snapshot = teacher.read(ROOT / 'datasets/backtest-2026-11-06-rating-weight/close-teacher.json')
-        self.assert_nested_close(report, snapshot)
+        # The committed module is what a pinned release's dashboard shows; it must be the current regeneration.
+        self.assert_nested_close(report, COMMITTED)
         d = report['diagnostics']
+        self.assertEqual(d['teacher']['feature_names'][-2:], ['2024-25', '2025-26'])
+        self.assertEqual(d['teacher']['baseline_season'], '2023-24')
         overall = d['overall']
         self.assertEqual(overall['n'], 2604)
         self.assertEqual(d['persistent']['team_seasons'], 90)

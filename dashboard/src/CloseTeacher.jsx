@@ -46,7 +46,7 @@ function DiagnosticTables({ diagnostic: d }) {
       </table></div>
       <p className="tiny">{teacher.fits.close_minus_model.n} games · {teacher.fits.close_minus_model.clusters} date clusters.
         Back-to-back: gap &lt;1.5 days; 3+ days: gap ≥2.5 days. March–April standings use prior-date records.
-        Season indicators compare with 2023–24. A singular design is shown as unavailable, never as a zero effect.</p>
+        {teacher.season_indicators?.length ? ` Season indicators compare with ${teacher.baseline_season}.` : ""} A singular design is shown as unavailable, never as a zero effect.</p>
     </details> : null}
     {p?.fit ? <details className="teacher-details">
       <summary>Persistent team view versus game-day difference</summary>

@@ -20,3 +20,10 @@ the dashboard and documentation. Forecasts and raw records remain unchanged.
 The default dashboard snapshot is copied from the verified CI artifact and
 compared against regeneration in the regression test. Existing accuracy gates
 and the 0.65 rating weight are untouched.
+
+Review follow-up (2026-11-07): the snapshot moved from the reference dataset
+directory into the generated module `nba_forecast/close_teacher_reference.py`,
+because pinned releases ship only `.py` files and the dashboard's fallback path
+did not exist in production. The season indicators are now derived from the
+seasons in the sample instead of being fixed to 2024-25 and 2025-26, so
+per-season fits are identifiable and the design survives a change of gate seasons.
