@@ -15,6 +15,8 @@ function DiagnosticTables({ diagnostic: d }) {
     <p>{o.n.toLocaleString()} matched games · {o.clusters} source dates{d.date_range ? ` · ${d.date_range.join(" to ")}` : ""}.
       {d.excluded_rows > 0 ? ` ${d.excluded_rows} incomplete rows excluded.` : ""}
       {d.unmatched_forecast_games > 0 ? ` ${d.unmatched_forecast_games} forecast games lack the required source match.` : ""}</p>
+    {d.season_group_mismatches?.length > 0 ? <p className="tiny">{d.season_group_mismatches.length} games have source-season labels that differ from their study group.
+      The original study grouping is retained for reproducibility; these are not clean season-only samples.</p> : null}
     <div className="metric-band">
       {[["Model margin MAE", o.model_mae], ["Close margin MAE", o.close_mae],
         ["MAE gap", o.mae_gap], ["Mean |model − close|", o.mean_abs_disagreement]].map(([label, value]) =>
@@ -55,7 +57,7 @@ function DiagnosticTables({ diagnostic: d }) {
           <tr><td>Game-day remainder</td><td><Slope fit={p.fit} feature="game_day" /></td></tr></tbody>
       </table></div>
       <p>{p.n} eligible games · {p.fit.clusters} date clusters · standing-view variance share {percent(p.standing_variance_share)}.</p>
-      <p className="tiny">Each team needs 10+ earlier matched games in the same season. Standing view = home prior mean − away prior mean;
+      <p className="tiny">Each team needs 10+ earlier matched games in the same study season group. Standing view = home prior mean − away prior mean;
         game-day remainder = model − close − standing view. Variance share is Var(view) / [Var(view) + Var(remainder)], not explained variance (R²).
         Standing views of at least 1.5 points covered {percent(p.cover_rate)} ({p.cover_n} non-push games); descriptive only.</p>
     </details> : <p className="tiny">{p?.reason}</p>}

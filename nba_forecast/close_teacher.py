@@ -189,7 +189,7 @@ def diagnostics(games, *, historical=False):
     return result
 
 
-def replay_schedule(game_rows, records, lines, history=None):
+def replay_schedule(game_rows, records, lines, history=None, *, season_by_game=None):
     """Join the study's same source rows; warmup schedule supplies rest and standings."""
     forecasts = {g['game_id']: g for g in game_rows}
     indexed = dict(lines)
@@ -213,7 +213,8 @@ def replay_schedule(game_rows, records, lines, history=None):
         if not line or not finite(line.get('home_spread')) or (gid, home) not in points or (gid, away) not in points:
             continue
         g = forecasts.get(gid)
-        schedule.append(dict(game_id=gid, season=r['season'], time=when(r['game_time']), home=home, away=away,
+        schedule.append(dict(game_id=gid, season=(season_by_game or {}).get(gid, r['season']),
+                             source_season=r['season'], time=when(r['game_time']), home=home, away=away,
                              close=-line['home_spread'], actual=points[(gid, home)] - points[(gid, away)],
                              model=g['projected_margin'] if g else None))
     schedule.sort(key=lambda g: g['time'])
@@ -221,10 +222,14 @@ def replay_schedule(game_rows, records, lines, history=None):
     return schedule
 
 
-def replay_diagnostics(game_rows, records, lines, history=None):
-    schedule = replay_schedule(game_rows, records, lines, history)
+def replay_diagnostics(game_rows, records, lines, history=None, *, season_by_game=None):
+    schedule = replay_schedule(game_rows, records, lines, history, season_by_game=season_by_game)
     games = [g for g in schedule if g['model'] is not None]
     result = diagnostics(games, historical=True)
+    result['season_group_mismatches'] = [dict(game_id=g['game_id'], source_season=g['source_season'],
+                                            study_group=g['season']) for g in games if g['source_season'] != g['season']]
+    result['season_group_policy'] = ('Historical seasons follow the input bundles, as in PR #31; differing raw source '
+                                     'season labels are disclosed, not rewritten. Trailing means reset by study group.')
     result['schedule_games'] = len(schedule)
     result['unmatched_forecast_games'] = len(game_rows) - len(games)
     return result
@@ -256,13 +261,15 @@ def reference_report(reference, datasets):
         return read(path)
     board = source(reference / 'rows.json.gz')
     games = [dict(zip(board['game_fields'], row)) for row in board['games']]
-    records, history, lines = [], [], {}
+    records, history, lines, season_by_game = [], [], {}, {}
     for season, (team_games, player_history) in SEASONS.items():
-        records.extend(source(datasets / team_games / 'team-games.json.gz'))
+        season_records = source(datasets / team_games / 'team-games.json.gz')
+        records.extend(season_records)
+        season_by_game.update({r['game_id']: season for r in season_records})
         history.extend(source(datasets / player_history / 'history.json.gz'))
         lines.update({r['game_id']: r for r in source(datasets / f'market-closing-{season}' / 'closing-lines.json.gz')['lines']})
     return dict(version=VERSION, reference=reference.name, sources=sources,
-                diagnostics=replay_diagnostics(games, records, lines, history))
+                diagnostics=replay_diagnostics(games, records, lines, history, season_by_game=season_by_game))
 
 
 def main():

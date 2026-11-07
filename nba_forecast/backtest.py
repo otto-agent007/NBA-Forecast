@@ -679,7 +679,7 @@ def _no_vig_home(line):
     return implied[0] / sum(implied)
 
 
-def market_metrics(game_rows, team_rows, records, lines, *, history=None):
+def market_metrics(game_rows, team_rows, records, lines, *, history=None, season_by_game=None):
     """The closing line and a naive rating beside the model, on the same replayed games.
 
     The encompassing slope regresses the market's miss (actual minus closing margin)
@@ -689,7 +689,7 @@ def market_metrics(game_rows, team_rows, records, lines, *, history=None):
     games = {r['game_id']: r for r in _records(game_rows, GAME_FIELDS)}
     lined = {gid: lines[gid] for gid in games if gid in lines and lines[gid].get('home_spread') is not None}
     from .close_teacher import replay_diagnostics
-    diagnostic = replay_diagnostics(list(games.values()), records, lines, history)
+    diagnostic = replay_diagnostics(list(games.values()), records, lines, history, season_by_game=season_by_game)
     if len(lined) < 2:
         return dict(n=len(lined), close_teacher=diagnostic)
     naive = _point_differential_margins(records, set(lined))
@@ -809,7 +809,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
             part['games']['availability'] = replayed['availability']
         if season.get('market') is not None:
             part['metrics']['market'] = market_metrics(replayed['games'], replayed['teams'], season['records'],
-                                                       season['market'], history=season['history'])
+                                                       season['market'], history=season['history'],
+                                                       season_by_game={r['game_id']: part['label'] for r in season['records']})
         parts.append(part)
     with_injuries = all(season.get('injuries') is not None for season in seasons)
     scoreboard = dict(
@@ -835,7 +836,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         scoreboard['metrics']['market'] = market_metrics(
             rows['games'], rows['teams'], [r for s in seasons for r in s['records']],
             {gid: line for s in seasons for gid, line in (s.get('market') or {}).items()},
-            history=[p for s in seasons for p in s['history']])
+            history=[p for s in seasons for p in s['history']],
+            season_by_game={r['game_id']: p['label'] for s, p in zip(seasons, parts) for r in s['records']})
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
         ref_board = read_json(Path(reference) / 'scoreboard.json')

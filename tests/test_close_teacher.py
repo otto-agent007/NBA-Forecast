@@ -81,6 +81,18 @@ class CloseTeacherTests(unittest.TestCase):
         self.assertEqual(result['teacher']['fits']['close_minus_model']['status'], 'singular_design')
         self.assertEqual(result['teacher']['feature_names'], teacher.FEATURE_NAMES)
 
+    def test_study_grouping_preserves_source_season_and_discloses_mismatches(self):
+        rows = [dict(game_id='g', projected_margin=3)]
+        records = [dict(game_id='g', season='2026-27', game_time='2026-10-21T23:00:00Z',
+                        home_team_id='h', away_team_id='a', team_stats={'h': {'pts': 101}, 'a': {'pts': 99}})]
+        lines = {'g': dict(home_spread=-1)}
+        schedule = teacher.replay_schedule(rows, records, lines, season_by_game={'g': '2025-26'})
+        self.assertEqual(schedule[0]['season'], '2025-26')
+        self.assertEqual(schedule[0]['source_season'], '2026-27')
+        self.assertEqual(records[0]['season'], '2026-27')
+        result = teacher.replay_diagnostics(rows, records, lines, season_by_game={'g': '2025-26'})
+        self.assertEqual(result['season_group_mismatches'], [dict(game_id='g', source_season='2026-27', study_group='2025-26')])
+
     def test_live_providers_are_not_pooled_as_independent_games(self):
         rows = [dict(game_id='g', start_time='2026-11-01T00:00:00Z', provider_id=p, provider='book'+p,
                      home_team_id='h', away_team_id='a', model_margin=3, market_margin=close, actual_margin=5)
@@ -108,6 +120,8 @@ class November6ReferenceTests(unittest.TestCase):
         d = report['diagnostics']
         overall = d['overall']
         self.assertEqual(overall['n'], 2604)
+        self.assertEqual(d['persistent']['team_seasons'], 90)
+        self.assertEqual(len(d['season_group_mismatches']), 14)
         self.assertAlmostEqual(overall['model_mae'], 11.25, delta=.005)
         self.assertAlmostEqual(overall['close_mae'], 10.90, delta=.005)
         slope = overall['slope']['coefficients'][1]

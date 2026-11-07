@@ -70,7 +70,14 @@ not fitted from incomplete standings context.
   Values ≥99 are counted separately. Covers exclude zero disagreement and
   pushes. Fewer than 20 games, fewer than two dates, or a singular design
   produces a reason, not zero coefficients or invented certainty.
-- Persistent means are signed toward each team and reset per season. Each
+- Historical season groups follow the input bundles, exactly as the study's
+  `SEASONS` loader. The 2025–26 input contains **14 evaluated games whose raw
+  record season is 2026–27**. They remain in the study's 2025–26 group for exact
+  reproduction; JSON lists their IDs and both labels, and the dashboard warns
+  that these are not clean season-only samples. Raw records are never edited.
+  Treat this as a limitation of the established reference, not evidence for
+  carrying a real team's rating across seasons. Live groups use actual seasons.
+- Persistent means are signed toward each team and reset per study season group. Each
   team needs at least ten earlier evaluated games. Standing view = home mean
   minus away mean; game-day remainder = model − close − standing view. The
   two slopes jointly predict actual − close. Identical-time games cannot
