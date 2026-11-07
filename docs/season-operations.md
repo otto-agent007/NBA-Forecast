@@ -145,8 +145,10 @@ is preserved. The timer polls each minute; network/publication delays mean this
 is not a guarantee of execution at exactly T−30:00. Missing final checkpoints
 remain errors, never backdated successes: a tipped game without its final run
 is recorded once in `missed-finals.json` (game, tipoff, the tick that first saw
-it) and keeps the tick `partial` for 48 hours after the tipoff; older misses stay
-on the record and in the dashboard's count without marking every later tick.
+it) and keeps the tick `partial` for 48 hours after the tipoff, or until the
+derived service has recovered its report edition, ESPN close and Kalshi close
+(below); older and recovered misses stay on the record and in the dashboard's
+count without marking every later tick.
 Later PDF editions are archived as
 separate evidence. To deliberately revise after a later change, provide new
 sourced review input before tipoff; the original run remains immutable.

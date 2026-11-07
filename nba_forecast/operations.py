@@ -781,15 +781,20 @@ def _missed_finals(state,schedule,report,folder=None):
     A miss is recorded once, under ``state['missed_finals']`` and mirrored to
     ``missed-finals.json`` (game, tipoff, the tick that first saw it), and is
     never backdated into a success. It marks the tick ``partial`` for
-    ``MISSED_FINAL_WINDOW_HOURS`` after the tipoff; older misses stay on the
-    record (``report['missed_final_record']``) without marking every later tick.
+    ``MISSED_FINAL_WINDOW_HOURS`` after the tipoff, or until the derived service
+    has recovered the game's report edition and closes (``recovered-evidence.json``);
+    older and recovered misses stay on the record (``report['missed_final_record']``)
+    without marking every later tick.
     A miss whose final run turns up after all (a recovered run) leaves the record.
     """
+    from .recover_evidence import settled_games
     # Only flag games occurring after operations were first started, not an entire
     # historical season as missed. Unknown/postponed start times cannot be due.
     state.setdefault('tracking_started_at',report['started_at'])
     record=state.setdefault('missed_finals',{})
     now=parse_time(_now())
+    settled=settled_games(folder) if folder is not None else set()
+    recovered=[]
     changed=False
     for game in schedule['games']:
         start=game['start_time']
@@ -806,14 +811,15 @@ def _missed_finals(state,schedule,report,folder=None):
             record[game['game_id']]=dict(start_time=start,first_seen_at=report['started_at'])
             changed=True
         if now-parse_time(start)<=timedelta(hours=MISSED_FINAL_WINDOW_HOURS):
-            report['missed_final_games'].append(game['game_id'])
-    report['missed_final_record']=dict(total=len(record),recent=len(report['missed_final_games']),
-                                       older=sorted(g for g in record if g not in report['missed_final_games']))
+            (recovered if game['game_id'] in settled else report['missed_final_games']).append(game['game_id'])
+    report['missed_final_record']=dict(total=len(record),recent=len(report['missed_final_games']),recovered=sorted(recovered),
+                                       older=sorted(g for g in record if g not in report['missed_final_games'] and g not in recovered))
     if folder is not None and (changed or not (Path(folder)/'missed-finals.json').exists()):
         atomic_json(Path(folder)/'missed-finals.json',dict(schema_version=1,tracking_started_at=state['tracking_started_at'],
             window_hours=MISSED_FINAL_WINDOW_HOURS,games=[dict(game_id=g,**v) for g,v in sorted(record.items())],
             policy='A tipped game without its T-30 final run is recorded once and never backdated; '
-                   'it marks the tick partial for the window after tipoff and stays on the record after.'))
+                   'it marks the tick partial for the window after tipoff, or until its report edition and closes '
+                   'are recovered (recovered-evidence.json), and stays on the record after.'))
 
 
 def _absent_from_final(rows,predictions):
