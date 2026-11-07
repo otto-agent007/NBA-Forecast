@@ -186,6 +186,26 @@ disagreements (48% cover), reweight the halves further (PR #30 is the last of
 it), add travel or long-rest terms, or build bigger models
 (`docs/research-lessons-2026-10.md`, "Set aside").
 
+### Follow-up on item 3 (2026-11-07)
+
+The rating half was re-scored offline on the same 2,604 games with the
+replay's own windows (`scratch/2026-11-07-rating/harness.py`; its "current"
+variant reproduces the reference margins exactly, so each candidate's effect is
+the exact replay effect). Results-only rebuilds do not move it: recency
+weighting with a 20 to 40 day half-life +0.03 to +0.12 MAE, an opponent-adjusted
+ridge rating −0.01 ± 0.01, capped margins +0.03. Season-to-date average margin
+is already the efficient estimate of a constant strength; the noise is in the
+results, not the estimator. The gain is in the market's strength estimate:
+a ridge fit of each earlier game's closing margin on a home edge and two team
+strengths (half-life 7 days, ridge 0.1), blended at 0.7 into the rating, gives
+−0.090 ± 0.025 on the gate, −0.08 to −0.10 in every season, and raises the
+actual-on-close slope from 0.12 to 0.19; 0.5 gives −0.075 ± 0.018, 1.0
+−0.100 ± 0.036. A game's own line is never read, only lines of games already
+played, so the comparison with the close stays fair. Implemented in
+`margins.market_strengths` (the owner's decision is the pull request that
+carries it); the rating weight itself was left at 0.65, where the harness
+suggests 0.75 would add another 0.06 with wider error, to be gated separately.
+
 ## Limitations
 
 - The teacher converges the model toward the close by construction. That is

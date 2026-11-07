@@ -55,9 +55,9 @@ standard errors and a materiality floor. `worse` is not merged; `improved` is
 the bar for a new feature. The command, the verdicts and every reference are in
 [`docs/backtest.md`](docs/backtest.md); the rules are in [`AGENTS.md`](AGENTS.md).
 
-Where the model stands (reference `datasets/backtest-2026-11-06-rating-weight`, three
-seasons, 2,604 games): margin MAE 11.25 against the closing line's 10.90,
-winners 68.6%, team points MAE 9.31, player points MAE 4.48, minutes MAE 4.84,
+Where the model stands (reference `datasets/backtest-2026-11-07-market-strength`, three
+seasons, 2,604 games): margin MAE 11.16 against the closing line's 10.90,
+winners 69.0%, team points MAE 9.28, player points MAE 4.48, minutes MAE 4.84,
 80% interval coverage 80.2%. [`docs/research-lessons-2026-10.md`](docs/research-lessons-2026-10.md)
 has what the field does, where the remaining gap is and what was tried.
 

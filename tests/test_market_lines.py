@@ -80,6 +80,16 @@ class ArchiveTests(unittest.TestCase):
         index = M.build_index(self.folder)['games'][GAME['game_id']]
         self.assertEqual((index['captures'], index['providers']['100']['first']['spread']['home']['current_line']), (3, -2.5))
 
+    def test_closing_margins_average_the_providers_closes_of_tipped_games_only(self):
+        M.record_game_lines(self.folder, M.extract_game_lines(summary(), GAME, '2026-27', META), '2026-10-23T21:00:30Z')
+        other = M.extract_game_lines(summary(spread_home='-3.5', provider=('200', 'FanDuel')), GAME, '2026-27', META)
+        M.record_game_lines(self.folder, other, '2026-10-23T22:00:30Z')
+        record = dict(game_id=GAME['game_id'], game_time=GAME['start_time'])
+        self.assertEqual(M.closing_margins(self.folder, [record], '2026-10-24T05:00:00Z'), {GAME['game_id']: 3.0})
+        self.assertEqual(M.closing_margins(self.folder, [record], '2026-10-23T22:30:00Z'), {}, 'not tipped yet')
+        self.assertEqual(M.closing_margins(self.folder, [dict(record, game_id='0022600099'), dict(game_id='x', game_time=None)],
+                                           '2026-10-24T05:00:00Z'), {}, 'no capture, no line')
+
     def test_a_cut_off_final_line_is_dropped_and_the_file_repaired(self):
         first = M.extract_game_lines(summary(), GAME, '2026-27', META)
         M.record_game_lines(self.folder, first, '2026-10-23T21:00:30Z')

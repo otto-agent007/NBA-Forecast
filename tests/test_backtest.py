@@ -244,6 +244,29 @@ class BacktestTests(unittest.TestCase):
         self.assertLess(sat['participation_probability'], .3)  # doubtful
         self.assertEqual(board['games']['availability']['by_status']['doubtful'], dict(players=1, played=0, play_rate=0.))
 
+    def test_earlier_closing_lines_move_the_replayed_rating_but_a_games_own_line_cannot(self):
+        from nba_forecast import margins
+        # Lines that rate team A six points better than everyone: the rating blend should lift A's margins.
+        market = {r['game_id']: dict(home_spread=-(6. if r['home_team_id'] == 'A' else -6. if r['away_team_id'] == 'A' else 0.))
+                  for r in self.records}
+        with unittest.mock.patch.object(margins, 'MARKET_STRENGTH_MINIMUM_GAMES', 4):
+            plain = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, limit=4)['games']
+            priced = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, limit=4, market=market)['games']
+            again = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, limit=4, market=market)['games']
+            own = {row[0]: market[row[0]] for row in plain}  # only the evaluated games' own lines
+            unread = backtest.replay(self.history, self.records, AS_OF, warmup_fraction=.5, limit=4, market=own)['games']
+        self.assertEqual([row[0] for row in plain], [row[0] for row in priced])
+        self.assertEqual(priced, again, 'deterministic')
+        self.assertEqual(plain, unread, "a game's own closing line never reaches its forecast")
+        moved = [p[3] - q[3] for p, q in zip(priced, plain)]
+        self.assertTrue(any(abs(m) > .1 for m in moved))
+        for row, m in zip(plain, moved):
+            home, away = row[1], row[2]
+            if home == 'A':
+                self.assertGreater(m, 0)
+            elif away == 'A':
+                self.assertLess(m, 0)
+
     def test_a_reported_out_regular_lowers_his_teams_rating_in_the_replay(self):
         from nba_forecast import margins
         game = self.records[-1]
