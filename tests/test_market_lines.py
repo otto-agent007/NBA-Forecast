@@ -155,6 +155,11 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(s['total_leans']['edge>=3'], dict(picks=1, wins=1, losses=0, pushes=0, win_rate=1.0))
         self.assertAlmostEqual(row['market_home_win'], 0.5721, places=3)
         self.assertEqual(s['winner']['model_pick_accuracy'], 1.0)
+        diagnostic = next(iter(s['close_teacher'].values()))['diagnostics']
+        self.assertEqual(diagnostic['overall']['model_mae'], 3)
+        self.assertEqual(diagnostic['overall']['close_mae'], 4.5)
+        self.assertEqual(diagnostic['overall']['slope']['status'], 'insufficient_games')
+        self.assertEqual(diagnostic['persistent']['team_seasons'], 2)
         self.assertAlmostEqual(s['winner']['model_brier'], .16)
         # Without an estimated margin forecast the run published its player sum.
         self.assertEqual((row['model_margin_basis'], row['player_sum_margin']), ('player_sum', 4))

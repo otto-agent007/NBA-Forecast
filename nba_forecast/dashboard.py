@@ -311,6 +311,8 @@ def dashboard_data(directory,*,compact=False):
                 performance=performance,benchmarks=read_optional(folder/'benchmarks.json',None),player_data=player_index,
                 injury_capture=read_optional(folder/'injuries/status.json',None),
                 market=read_optional(folder/'market/report.json',None),market_lines=market_lines,
+                close_teacher=read_optional(folder/'market/close-teacher.json',
+                    read_optional(Path(__file__).resolve().parents[1]/'datasets/backtest-2026-11-06-rating-weight/close-teacher.json',None)),
                 daily_review_recurrence=read_optional(folder/'daily-reviews/recurrence.json',None))
 
 

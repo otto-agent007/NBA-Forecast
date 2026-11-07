@@ -2,6 +2,7 @@ import React from "react";
 import { number, stamp } from "./data";
 import ModelValidation from "./ModelValidation";
 import DailyReview from "./DailyReview";
+import CloseTeacher from "./CloseTeacher";
 function MarketReport({ report }) {
   const s = report?.summary;
   if (!s?.rows) return null;
@@ -47,6 +48,7 @@ export default function Performance({ data,date,onGame,onSelect }) {
       }}/>
       <ModelValidation model={data.model_upgrade} />
       <MarketReport report={data.market} />
+      <CloseTeacher historical={data.close_teacher} live={data.market} />
       {!count ? (
         <div className="empty performance-empty">
           <span className="empty-score">—</span>

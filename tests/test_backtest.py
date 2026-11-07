@@ -173,6 +173,8 @@ class BacktestTests(unittest.TestCase):
         m = backtest.market_metrics(rows['games'], rows['teams'], self.records, perfect)
         self.assertEqual(m['n'], len(games))
         self.assertEqual(m['market']['margin_mae'], 0)
+        self.assertIn('close_teacher', m)
+        self.assertEqual(m['close_teacher']['overall']['n'], m['n'])
         self.assertAlmostEqual(m['encompassing']['slope'], 0)  # nothing can add to a perfect close
         self.assertGreater(m['naive_point_differential']['n'], 0)
         echo = {g['game_id']: dict(home_spread=-g['projected_margin'], total=230., home_moneyline=-150,
@@ -270,6 +272,8 @@ class BacktestTests(unittest.TestCase):
                         known_at=earlier(r['known_at'])) for r in self.records]
         seasons = [dict(history=history, records=records, sources=dict(team_games='datasets/earlier/team-games.json.gz')),
                    dict(history=self.history, records=self.records, sources=dict(team_games='datasets/later/team-games.json.gz'))]
+        for season in seasons:
+            season['market'] = {r['game_id']: dict(home_spread=-1., total=None) for r in season['records']}
         with tempfile.TemporaryDirectory() as d:
             board = backtest.run_seasons(seasons, Path(d) / 'both', warmup_fraction=.5, as_of=AS_OF)
             again = backtest.run_seasons(seasons, Path(d) / 'again', warmup_fraction=.5, as_of=AS_OF,
@@ -277,6 +281,8 @@ class BacktestTests(unittest.TestCase):
         one = self.board['metrics']['players']['all']
         self.assertEqual(board['metrics']['players']['all']['n'], 2 * one['n'])  # the same season twice
         self.assertEqual(board['games']['evaluated'], 48)
+        self.assertEqual(board['metrics']['market']['close_teacher']['overall']['n'], 48)
+        self.assertEqual(len(board['metrics']['market']['close_teacher']['by_season']), 2)
         self.assertEqual([s['metrics']['players']['all']['n'] for s in board['seasons']], [one['n'], one['n']])
         self.assertAlmostEqual(board['seasons'][1]['metrics']['players']['all']['points_mae'], one['points_mae'])
         self.assertEqual(again['comparison']['verdict'], 'within_noise')
