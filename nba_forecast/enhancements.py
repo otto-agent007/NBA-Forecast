@@ -34,9 +34,10 @@ def _read(directory,digest,as_of):
         if artifact.get('runner_package_sha256')!=package_digest(Path(__file__).parent):
             raise ValueError('Refined model artifact does not match the running code release')
         if artifact.get('margin_calibration') is not None:
+            from .margins import CALIBRATION_FAMILY
             from .prospective_margin_calibration import validate_margin_calibration
-            if not validate_margin_calibration(artifact['margin_calibration'],artifact['model_key'],artifact['known_at']):
-                raise ValueError('Margin calibration does not match the model or source cutoff')
+            if not validate_margin_calibration(artifact['margin_calibration'],CALIBRATION_FAMILY,artifact['known_at']):
+                raise ValueError('Margin calibration does not match the margin method or source cutoff')
     if any(parse_time(g['known_at'])>known for g in artifact['team_games']):
         raise ValueError('Model training used future-known team data')
     for key in ('context_model','calibration'):

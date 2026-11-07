@@ -2,6 +2,13 @@
 
 The correction is trained on earlier games and checked on later, separately
 saved games. This is a validation gate, not a future coverage guarantee.
+
+Samples pool every saved distribution of one calibration family, the margin
+method and settlement (``margins.CALIBRATION_FAMILY``), whatever model key
+produced it. The refined model key carries the runner package digest and so
+changes with every deploy; keyed on it, no window ever filled. Each sample
+records its own model key for audit, and the validation gate on later games
+still decides whether a pooled correction is installed.
 """
 from collections import Counter
 import hashlib
@@ -106,13 +113,13 @@ def _verified_final_source(root,game_id,rows):
     return digest
 
 
-def collect_margin_samples(directory,model_key,as_of):
-    """Select latest same-model pregame run before opening a single final file."""
+def collect_margin_samples(directory,family,as_of):
+    """Select each game's latest pregame run of the calibration family before opening a single final file."""
     cutoff=parse_time(as_of)
     root=Path(directory)
     result=_empty()
-    if not isinstance(model_key,str) or not model_key:
-        raise ValueError('Model key is required')
+    if not isinstance(family,str) or not family:
+        raise ValueError('Calibration family is required')
     db=root/'forecast.sqlite'
     if not db.exists():
         return result
@@ -135,9 +142,10 @@ def collect_margin_samples(directory,model_key,as_of):
                        for k in ('snapshot','forecast')):
                     raise ValueError('Immutable run hash differs')
                 forecast=json.loads(row['forecast_json'])
-                if forecast.get('model_key')!=model_key:
-                    continue
-                counts['model_runs']+=1
+                if not isinstance(forecast.get('model_key'),str) or not forecast['model_key']:
+                    raise ValueError('Run lacks a model key')
+                if forecast.get('margin_forecasts'):
+                    counts['model_runs']+=1
                 snapshot=json.loads(row['snapshot_json'])
                 if not parse_time(row['as_of'])==parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])<=created:
                     raise ValueError('Run observation chronology differs')
@@ -162,7 +170,7 @@ def collect_margin_samples(directory,model_key,as_of):
                         raise ValueError('Duplicate saved margin distribution')
                     item=dict(game=game,distribution=candidates[0] if candidates else None,
                         season=snapshot['season'],run_id=row['run_id'],created_at=row['created_at'],
-                        forecast_sha256=row['forecast_sha256'])
+                        forecast_sha256=row['forecast_sha256'],model_key=forecast['model_key'])
                     rank=(created,row['insertion_order'])
                     if gid not in chosen or rank>chosen[gid][0]:
                         chosen[gid]=(rank,item)
@@ -175,11 +183,13 @@ def collect_margin_samples(directory,model_key,as_of):
         if not isinstance(d,dict) or d.get('status')!='estimated':
             excluded['latest_margin_unavailable']+=1
             continue
+        if f"{d.get('method')}|{d.get('settlement')}"!=family:
+            excluded['other_family']+=1
+            continue
         try:
-            if (d.get('model_key')!=model_key or any(d.get(k)!=game[k] for k in ('game_id','home_team_id','away_team_id'))
-                    or d.get('settlement')!=SETTLEMENT or d.get('method')!=BASE_METHOD
+            if (d.get('model_key')!=item['model_key'] or any(d.get(k)!=game[k] for k in ('game_id','home_team_id','away_team_id'))
                     or d.get('calibration_status') not in ('uncalibrated','prospective_validated')):
-                raise ValueError('Saved margin identity or method differs')
+                raise ValueError('Saved margin identity differs')
             if d.get('pmf_sha256')!=_sha(d['pmf']):
                 raise ValueError('Saved margin mass hash differs')
             if not math.isclose(math.fsum(r['probability'] for r in d['pmf']),1.,rel_tol=0.,abs_tol=1e-10):
@@ -221,7 +231,7 @@ def collect_margin_samples(directory,model_key,as_of):
             actual=scores[game['home_team_id']]-scores[game['away_team_id']]
             if actual==0:
                 raise ValueError('Final score cannot be tied')
-            result['samples'].append(dict(game_id=gid,model_key=model_key,
+            result['samples'].append(dict(game_id=gid,margin_family=family,model_key=item['model_key'],
                 home_team_id=game['home_team_id'],away_team_id=game['away_team_id'],
                 game_time=game['start_time'],forecast_created_at=item['created_at'],
                 actual_known_at=known,base_mean_margin=mean,base_standard_deviation=sd,
@@ -258,7 +268,7 @@ def _score(rows,bias,scale):
     return dict(home_win_brier=fmean(brier),ranked_probability_score=fmean(ranked))
 
 
-def _fit_window(rows,model_key,as_of):
+def _fit_window(rows,family,as_of):
     """Replay one fixed, nonoverlapping 112-game attempt from its exact samples."""
     value=dict(status='not_ready',reason='invalid_evidence_window')
     if not isinstance(rows,list) or len(rows)!=WINDOW_GAMES:
@@ -272,7 +282,8 @@ def _fit_window(rows,model_key,as_of):
             game=parse_time(row['game_time'])
             forecast=parse_time(row['forecast_created_at'])
             known=parse_time(row['actual_known_at'])
-            if (row['model_key']!=model_key or gid in ids or not re.fullmatch(r'002\d{7}',gid)
+            if (row['margin_family']!=family or not isinstance(row['model_key'],str) or not row['model_key']
+                    or gid in ids or not re.fullmatch(r'002\d{7}',gid)
                     or not forecast<game<known<=cutoff or (previous is not None and game<previous)
                     or row['home_team_id']==row['away_team_id']
                     or type(row['actual_home_margin']) is not int or row['actual_home_margin']==0
@@ -330,18 +341,18 @@ def _fit_window(rows,model_key,as_of):
         return value
 
 
-def validate_margin_calibration(artifact,model_key,as_of):
+def validate_margin_calibration(artifact,family,as_of):
     """Recompute fitted values and proper scores from frozen evidence bytes."""
     if not isinstance(artifact,dict):
         return False
     try:
         if (artifact['schema_version']!=1 or artifact['status']!='ready'
-                or artifact['method']!=METHOD or artifact['model_key']!=model_key
+                or artifact['method']!=METHOD or artifact['margin_family']!=family
                 or type(artifact['window_index']) is not int or artifact['window_index']<0
                 or parse_time(artifact['training_cutoff'])>parse_time(as_of)):
             return False
         rows=artifact['evidence_samples']
-        expected=_fit_window(rows,model_key,artifact['training_cutoff'])
+        expected=_fit_window(rows,family,artifact['training_cutoff'])
         if expected['status']!='ready':
             return False
         return all(artifact.get(k)==v for k,v in expected.items())
@@ -351,9 +362,9 @@ def validate_margin_calibration(artifact,model_key,as_of):
 
 def verify_margin_calibration_sources(directory,artifact):
     """Re-select the immutable ledger/final inputs before any promotion."""
-    if not validate_margin_calibration(artifact,artifact.get('model_key'),artifact.get('training_cutoff')):
+    if not validate_margin_calibration(artifact,artifact.get('margin_family'),artifact.get('training_cutoff')):
         return False
-    collection=collect_margin_samples(directory,artifact['model_key'],artifact['training_cutoff'])
+    collection=collect_margin_samples(directory,artifact['margin_family'],artifact['training_cutoff'])
     if collection['errors']:
         return False
     index=artifact['window_index']
@@ -361,13 +372,14 @@ def verify_margin_calibration_sources(directory,artifact):
     return rows==artifact['evidence_samples'] and _sha(rows)==artifact['evidence_sha256']
 
 
-def fit_prospective_margin(directory,model_key,as_of):
+def fit_prospective_margin(directory,family,as_of):
     """Fit one fixed window once; future games cannot retest the same window."""
     parse_time(as_of)
-    collection=collect_margin_samples(directory,model_key,as_of)
+    collection=collect_margin_samples(directory,family,as_of)
     rows=collection['samples']
     result=dict(schema_version=1,status='not_ready',reason='insufficient_games',
-        method=METHOD,model_key=model_key,training_cutoff=as_of,sample_count=len(rows),
+        method=METHOD,margin_family=family,model_keys=sorted({r['model_key'] for r in rows}),
+        training_cutoff=as_of,sample_count=len(rows),
         minimum_training_games=MIN_TRAIN,minimum_training_days=MIN_TRAIN_DAYS,
         minimum_validation_games=MIN_VALIDATION,training_games=0,training_days=0,
         validation_games=0,location_bias=None,scale_factor=None,evidence_sha256=None,
@@ -381,7 +393,7 @@ def fit_prospective_margin(directory,model_key,as_of):
         return result
     index=len(rows)//WINDOW_GAMES-1
     window=rows[index*WINDOW_GAMES:(index+1)*WINDOW_GAMES]
-    root=Path(directory)/'margin-calibration-attempts'/hashlib.sha256(model_key.encode()).hexdigest()
+    root=Path(directory)/'margin-calibration-attempts'/hashlib.sha256(family.encode()).hexdigest()
     path=root/(str(index)+'.json')
     if path.exists():
         saved=json.loads(path.read_text())
@@ -389,7 +401,7 @@ def fit_prospective_margin(directory,model_key,as_of):
             result['reason']='window_changed_after_first_attempt'
             return result
         return saved
-    result.update(window_index=index,evidence_samples=window)
-    result.update(_fit_window(window,model_key,as_of))
+    result.update(window_index=index,evidence_samples=window,model_keys=sorted({r['model_key'] for r in window}))
+    result.update(_fit_window(window,family,as_of))
     atomic_json(path,result)
     return result

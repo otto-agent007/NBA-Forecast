@@ -1053,6 +1053,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     if active_model:
         from .prospective_calibration import fit_prospective
         from .prospective_margin_calibration import fit_prospective_margin, verify_margin_calibration_sources
+        from .margins import CALIBRATION_FAMILY
         from .enhancements import install_artifact
         assessed=fit_prospective(folder,active_model['model_key'],_now(),interval_family=INTERVAL_FAMILY)
         atomic_json(folder/'prospective-calibration-status.json',assessed)
@@ -1065,7 +1066,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
             digest=install_artifact(folder,updated)
             if _activate(folder,model_digest,digest,report):
                 active_model,model_digest=updated,digest
-        margin_assessed=fit_prospective_margin(folder,active_model['model_key'],_now())
+        margin_assessed=fit_prospective_margin(folder,CALIBRATION_FAMILY,_now())
         atomic_json(folder/'prospective-margin-calibration-status.json',margin_assessed)
         report['prospective_margin_calibration']={k:margin_assessed.get(k) for k in ('status','reason','sample_count','training_games','validation_games')}
         report['errors'].extend(dict(task='prospective_margin_calibration',detail=e)
@@ -1087,7 +1088,7 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
             validation=active_model.get('validation_report'),prospective=assessed,
             prospective_margin=margin_assessed,
             applied_margin_calibration=({k:active_model['margin_calibration'].get(k)
-                for k in ('status','training_games','validation_games','evidence_sha256','training_cutoff')}
+                for k in ('status','training_games','validation_games','evidence_sha256','training_cutoff','margin_family','model_keys')}
                 if active_model.get('margin_calibration') else None),
             outcomes=report.get('final_sync')))
     if (folder/'roster.json').exists():

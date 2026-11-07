@@ -54,7 +54,8 @@ measurements of what the model is missing.
 ## Other rules
 
 - Do not change the model version or model key for changes that do not alter
-  forecasts. Calibration pools across versions by interval family, but
+  forecasts. Player calibration pools across versions by interval family and
+  the margin correction by margin method (`margins.CALIBRATION_FAMILY`), but
   forecasts, ledgers and dashboards are labeled by version.
 - A finding that would block a forecast must mean the forecast would be
   wrong. Provider disagreements, pending reports and missing cross-checks are
