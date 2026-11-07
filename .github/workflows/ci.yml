@@ -52,9 +52,14 @@ jobs:
       - name: Reproduce November 6 study from committed sources
         run: |
           test -f datasets/backtest-2026-11-06-rating-weight/rows.json.gz
-          python -m unittest tests.test_close_teacher.November6ReferenceTests -v
           python -m nba_forecast.close_teacher --output /tmp/close-teacher.json
+          python scripts/research/close_teacher.py --reference datasets/backtest-2026-11-06-rating-weight > /tmp/research-close-teacher.txt
+          cat /tmp/research-close-teacher.txt
+          python -m unittest tests.test_close_teacher.November6ReferenceTests -v
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: close-teacher-diagnostics
-          path: /tmp/close-teacher.json
+          path: |
+            /tmp/close-teacher.json
+            /tmp/research-close-teacher.txt
