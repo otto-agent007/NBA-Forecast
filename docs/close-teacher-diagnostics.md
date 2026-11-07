@@ -32,8 +32,7 @@ research checks and publishes this JSON as `close-teacher-diagnostics`.
 For an operational dashboard, generate the same derived report with
 `--output OPERATIONS_DIRECTORY/market/close-teacher.json`. The dashboard reads
 that report without rewriting it. Otherwise it reads the committed November 6
-snapshot at `datasets/backtest-2026-11-06-rating-weight/close-teacher.json`, if
-present. Missing historical evidence is displayed as unavailable. Refresh a
+snapshot at `datasets/backtest-2026-11-06-rating-weight/close-teacher.json`. Missing historical evidence is displayed as unavailable. Refresh a
 snapshot deliberately when a new evaluated model becomes the reference; it
 never silently represents current live performance.
 
@@ -88,7 +87,7 @@ not fitted from incomplete standings context.
 
 The historical regression test asserts the 2,604-game headline, published
 back-to-back/standings coefficients and uncertainty, 6+ bucket coverage, and
-persistent variance share, then checks all three fits against the independent
+persistent variance share, checks the committed snapshot against regeneration, then checks all three fits against the independent
 original research loader and OLS. The original 91-game live report is operational
 data, not a committed fixture; subsequent reports naturally have different
 sample sizes. No replacement live results are fabricated.

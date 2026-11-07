@@ -87,6 +87,7 @@ class CloseTeacherTests(unittest.TestCase):
                         home_team_id='h', away_team_id='a', team_stats={'h': {'pts': 101}, 'a': {'pts': 99}})]
         lines = {'g': dict(home_spread=-1)}
         schedule = teacher.replay_schedule(rows, records, lines, season_by_game={'g': '2025-26'})
+        self.assertEqual((schedule[0]['model'], schedule[0]['close'], schedule[0]['actual']), (3, 1, 2))
         self.assertEqual(schedule[0]['season'], '2025-26')
         self.assertEqual(schedule[0]['source_season'], '2026-27')
         self.assertEqual(records[0]['season'], '2026-27')
@@ -115,8 +116,25 @@ class CloseTeacherTests(unittest.TestCase):
 @unittest.skipUnless((ROOT / 'datasets/backtest-2026-11-06-rating-weight/rows.json.gz').exists(),
                      'requires committed November 6 replay archive (available in CI checkout)')
 class November6ReferenceTests(unittest.TestCase):
+    def assert_nested_close(self, current, saved):
+        # Python's summation improvements can alter the last bits across 3.11–3.13.
+        if isinstance(current, float):
+            self.assertAlmostEqual(current, saved, delta=1e-10)
+        elif isinstance(current, dict):
+            self.assertEqual(set(current), set(saved))
+            for key in current:
+                self.assert_nested_close(current[key], saved[key])
+        elif isinstance(current, list):
+            self.assertEqual(len(current), len(saved))
+            for a, b in zip(current, saved):
+                self.assert_nested_close(a, b)
+        else:
+            self.assertEqual(current, saved)
+
     def test_published_historical_results_and_research_parity(self):
         report = teacher.reference_report(ROOT / 'datasets/backtest-2026-11-06-rating-weight', ROOT / 'datasets')
+        snapshot = teacher.read(ROOT / 'datasets/backtest-2026-11-06-rating-weight/close-teacher.json')
+        self.assert_nested_close(report, snapshot)
         d = report['diagnostics']
         overall = d['overall']
         self.assertEqual(overall['n'], 2604)
@@ -131,6 +149,10 @@ class November6ReferenceTests(unittest.TestCase):
         for index, estimate, se in [(1, -1.17, .18), (2, .87, .17), (6, -1.56, .27), (7, .96, .28)]:
             self.assertAlmostEqual(coeffs[index]['estimate'], estimate, delta=.005)
             self.assertAlmostEqual(coeffs[index]['se'], se, delta=.005)
+        self.assertEqual(d['persistent']['n'], 2137)
+        for row, estimate, se in zip(d['persistent']['fit']['coefficients'][1:], [.069, .030], [.121, .102]):
+            self.assertAlmostEqual(row['estimate'], estimate, delta=.0005)
+            self.assertAlmostEqual(row['se'], se, delta=.0005)
         self.assertAlmostEqual(d['persistent']['team_season_mean_sd'], 1.45, delta=.005)
         self.assertAlmostEqual(d['persistent']['standing_variance_share'], .37, delta=.005)
         self.assertAlmostEqual(d['buckets'][-1]['cover_rate'], .485, delta=.0005)

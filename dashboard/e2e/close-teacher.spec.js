@@ -6,7 +6,7 @@ const fit = feature => ({status: 'estimated', n: 40, clusters: 20,
 const overall = {n: 40, clusters: 20, model_mae: 12, close_mae: 11, mae_gap: 1,
   mean_abs_disagreement: 3, cover_n: 38, cover_rate: .5, slope: fit('model_minus_close')};
 const diagnostic = {
-  overall, excluded_rows: 0, date_range: ['2025-01-01', '2025-04-15'],
+  overall, excluded_rows: 0, season_group_mismatches: [{game_id: 'mixed-season'}], date_range: ['2025-01-01', '2025-04-15'],
   buckets: [{...overall, lower: 0, upper: 2, label: '0–<2'},
     {...overall, n: 3, clusters: 2, lower: 6, upper: 99, label: '6–<99', slope: {status: 'insufficient_games'}}],
   teacher: {feature_names: ['home back-to-back'], fits: {
@@ -32,6 +32,7 @@ test('historical and provider-specific live diagnostics show uncertainty and exp
   await expect(section.getByRole('table', {name: 'Historical residual coefficients'})).toContainText('-0.250 ± 0.100');
   await expect(section).toContainText('Fixed design cannot be estimated');
   await expect(section).toContainText('Too few games');
+  await expect(section).toContainText('1 games have source-season labels that differ');
   await section.getByText('Persistent team view versus game-day difference', {exact: true}).first().click();
   await expect(section.getByRole('table', {name: 'Persistent and game-day differences'}).first()).toBeVisible();
   await expect(section).toContainText('+0.070 ± 0.120');

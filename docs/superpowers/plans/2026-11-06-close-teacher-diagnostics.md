@@ -9,3 +9,14 @@ Spec: docs/beating-the-close-2026-11-06.md, restricted by the owner's diagnostic
 4. Run unit and dashboard suites; reproduce November 6 historical numbers from committed sources, independently compare to the research script, and review the full diff. Commit and open a focused PR, with no merge or deployment.
 
 Review focus: insufficient dates/rank-deficient designs; absent historical files; mixed providers; changing future games must not alter earlier standing views; old dashboard payload compatibility. The fixed 12-column historical design is intentionally unavailable for one-season samples rather than silently changing the specification.
+
+## Implementation record
+
+Completed the module, integrations, dashboard and regression checks. Original
+research and the structured report reproduce the November 6 measurements in CI.
+The original loader assigns 14 source-labeled 2026–27 games to its 2025–26 input
+bundle; exact reproduction retains that study grouping and discloses it in JSON,
+the dashboard and documentation. Forecasts and raw records remain unchanged.
+The default dashboard snapshot is copied from the verified CI artifact and
+compared against regeneration in the regression test. Existing accuracy gates
+and the 0.65 rating weight are untouched.
