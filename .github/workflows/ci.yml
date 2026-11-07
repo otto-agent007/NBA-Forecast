@@ -42,3 +42,24 @@ jobs:
       - run: npm run build --prefix dashboard
       - run: npm exec --prefix dashboard -- playwright install --with-deps chromium
       - run: npm run test:e2e --prefix dashboard
+  close-teacher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Reproduce November 6 study from committed sources
+        run: |
+          test -f datasets/backtest-2026-11-06-rating-weight/rows.json.gz
+          python -m nba_forecast.close_teacher --output /tmp/close-teacher.json
+          python scripts/research/close_teacher.py --reference datasets/backtest-2026-11-06-rating-weight > /tmp/research-close-teacher.txt
+          cat /tmp/research-close-teacher.txt
+          python -m unittest tests.test_close_teacher.November6ReferenceTests -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: close-teacher-diagnostics
+          path: |
+            /tmp/close-teacher.json
+            /tmp/research-close-teacher.txt

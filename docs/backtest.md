@@ -89,6 +89,13 @@ the close did not. These are reported, not gated. The lines come from ESPN's cor
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
 
+`metrics.market.close_teacher` adds the November 6 study's descriptive teacher
+regressions, disagreement buckets, and persistent-team versus game-day split.
+It is also computed for the pooled seasons; its uncertainty definition is kept
+separate from the legacy encompassing metric and accuracy gates. See
+[Closing-line diagnostics](close-teacher-diagnostics.md) for reproduction,
+source grouping limitations, and dashboard output.
+
 ## Injury reports
 
 `--injuries` gives each game the newest official injury report published by its

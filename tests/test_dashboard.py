@@ -10,6 +10,28 @@ from nba_forecast.store import save_run
 from tests.test_store import inputs,NOW
 
 class DashboardTests(unittest.TestCase):
+    def test_committed_teacher_reference_is_visible_without_an_operational_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            report = dashboard_data(d)['close_teacher']
+            self.assertEqual(report['reference'], 'backtest-2026-11-06-rating-weight')
+            self.assertEqual(report['diagnostics']['overall']['n'], 2604)
+            self.assertEqual(len(report['diagnostics']['season_group_mismatches']), 14)
+
+
+    def test_historical_teacher_is_separate_from_live_and_read_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            (folder / 'market').mkdir()
+            reference = dict(reference='test-replay', diagnostics=dict(overall=dict(n=2604)))
+            live = dict(summary=dict(games=91))
+            (folder / 'market/close-teacher.json').write_text(json.dumps(reference))
+            (folder / 'market/report.json').write_text(json.dumps(live))
+            before = {str(p): p.read_bytes() for p in folder.rglob('*.json')}
+            data = dashboard_data(folder)
+            self.assertEqual(data['close_teacher'], reference)
+            self.assertEqual(data['market'], live)
+            self.assertEqual(before, {str(p): p.read_bytes() for p in folder.rglob('*.json')})
+
     def test_current_secondary_schedule_is_displayed_only_for_its_nba_base(self):
         with tempfile.TemporaryDirectory() as d:
             folder=Path(d)/'schedule'

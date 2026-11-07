@@ -346,6 +346,7 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             home_ml, away_ml = line['lines']['moneyline']['home']['current_odds'], line['lines']['moneyline']['away']['current_odds']
             market_margin = -spread if spread is not None else None
             row = dict(game_id=gid, start_time=game['start_time'], provider=line['provider'], provider_id=pid,
+                       season=schedule.get('season'), home_team_id=game['home_team_id'], away_team_id=game['away_team_id'],
                        run_id=selection['run_id'], stage='final' if (gid, 'final') in chosen else 'preliminary',
                        model_margin=model_margin, model_margin_basis=basis,
                        player_sum_margin=player_sum_margin, model_total=model_total, model_home_win=model_home_win,
@@ -372,7 +373,9 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                            kalshi_total=kalshi.get('implied_total'), kalshi_captured_at=kalshi['captured_at'],
                            kalshi_abs_error=abs(kalshi['implied_home_margin'] - actual_margin))
             rows.append(row)
-    summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows))
+    from .close_teacher import live_diagnostics
+    summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows),
+                   close_teacher=live_diagnostics(rows, schedule.get('season')))
     spread_rows = [r for r in rows if 'spread_edge' in r]
     total_rows = [r for r in rows if 'total_edge' in r]
     if spread_rows:

@@ -679,7 +679,7 @@ def _no_vig_home(line):
     return implied[0] / sum(implied)
 
 
-def market_metrics(game_rows, team_rows, records, lines):
+def market_metrics(game_rows, team_rows, records, lines, *, history=None, season_by_game=None):
     """The closing line and a naive rating beside the model, on the same replayed games.
 
     The encompassing slope regresses the market's miss (actual minus closing margin)
@@ -688,8 +688,10 @@ def market_metrics(game_rows, team_rows, records, lines):
     """
     games = {r['game_id']: r for r in _records(game_rows, GAME_FIELDS)}
     lined = {gid: lines[gid] for gid in games if gid in lines and lines[gid].get('home_spread') is not None}
+    from .close_teacher import replay_diagnostics
+    diagnostic = replay_diagnostics(list(games.values()), records, lines, history, season_by_game=season_by_game)
     if len(lined) < 2:
-        return dict(n=len(lined))
+        return dict(n=len(lined), close_teacher=diagnostic)
     naive = _point_differential_margins(records, set(lined))
     day_of = {r['game_id']: _day(r['game_time']) for r in records}
     rows = []
@@ -705,7 +707,7 @@ def market_metrics(game_rows, team_rows, records, lines):
                     winner_accuracy=fmean(float((r[key] > 0) == (r['actual'] > 0)) for r in subset),
                     winner_brier=fmean((probability(r) - won(r)) ** 2 for r in scored) if scored else None)
     naive_rows = [r for r in rows if r['naive'] is not None]
-    result = dict(n=len(rows), source='ESPN core odds closing line (market_history)',
+    result = dict(n=len(rows), source='ESPN core odds closing line (market_history)', close_teacher=diagnostic,
                   model=summary(rows, 'model', lambda r: r['p_model'] if r['sd'] else None),
                   market=summary(rows, 'market', lambda r: r['p_market']))
     if naive_rows:
@@ -716,7 +718,7 @@ def market_metrics(game_rows, team_rows, records, lines):
     y = [r['actual'] - r['market'] for r in rows]
     mx, my = fmean(x), fmean(y)
     sxx = sum((v - mx) ** 2 for v in x)
-    if sxx > 0:
+    if sxx > 0 and len(rows) > 2:
         slope = sum((a - mx) * (b - my) for a, b in zip(x, y)) / sxx
         residuals = [b - my - slope * (a - mx) for a, b in zip(x, y)]
         se_ols = math.sqrt(sum(e * e for e in residuals) / (len(rows) - 2) / sxx)
@@ -807,7 +809,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
             part['games']['availability'] = replayed['availability']
         if season.get('market') is not None:
             part['metrics']['market'] = market_metrics(replayed['games'], replayed['teams'], season['records'],
-                                                       season['market'])
+                                                       season['market'], history=season['history'],
+                                                       season_by_game={r['game_id']: part['label'] for r in season['records']})
         parts.append(part)
     with_injuries = all(season.get('injuries') is not None for season in seasons)
     scoreboard = dict(
@@ -829,6 +832,12 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         scoreboard['games'] = parts[0]['games']
         if 'market' in parts[0]['metrics']:
             scoreboard['metrics']['market'] = parts[0]['metrics']['market']
+    if len(parts) > 1 and any(s.get('market') is not None for s in seasons):
+        scoreboard['metrics']['market'] = market_metrics(
+            rows['games'], rows['teams'], [r for s in seasons for r in s['records']],
+            {gid: line for s in seasons for gid, line in (s.get('market') or {}).items()},
+            history=[p for s in seasons for p in s['history']],
+            season_by_game={r['game_id']: p['label'] for s, p in zip(seasons, parts) for r in s['records']})
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
         ref_board = read_json(Path(reference) / 'scoreboard.json')

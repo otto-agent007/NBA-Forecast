@@ -1824,3 +1824,10 @@ pre {
   white-space: nowrap;
   border: 0;
 }
+
+/* Close-teacher tables follow the scoreboard, with local scrolling on narrow screens. */
+.teacher-details { margin: 18px 0; min-width: 0; }
+.teacher-details > summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.close-teacher h4 { margin-top: 28px; }
+.close-teacher th, .close-teacher td { white-space: nowrap; }
+.close-teacher .table-scroll { max-width: 100%; }

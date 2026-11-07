@@ -14,6 +14,7 @@ from urllib.parse import urlsplit,unquote
 from .validation import parse_time
 from .rotation import projected_lineups
 from .totals import game_totals
+from . import close_teacher_reference
 
 
 def read_optional(path,default):
@@ -311,6 +312,7 @@ def dashboard_data(directory,*,compact=False):
                 performance=performance,benchmarks=read_optional(folder/'benchmarks.json',None),player_data=player_index,
                 injury_capture=read_optional(folder/'injuries/status.json',None),
                 market=read_optional(folder/'market/report.json',None),market_lines=market_lines,
+                close_teacher=read_optional(folder/'market/close-teacher.json',close_teacher_reference.REPORT),
                 daily_review_recurrence=read_optional(folder/'daily-reviews/recurrence.json',None))
 
 

@@ -84,3 +84,6 @@ visible when game projections are withheld, with captured season/sample details
 in the tooltip. The cross-check panel distinguishes the latest input-validation
 attempt from the validation attached to the selected saved forecast. Legacy runs
 remain visible and are labeled unverified.
+
+Closing-line teacher diagnostics appear under Performance, with historical replay
+and live provider reports shown separately. See [definitions and refresh command](../close-teacher-diagnostics.md).
