@@ -306,6 +306,7 @@ class EvidenceTickTests(unittest.TestCase):
     def test_ready_margin_correction_is_pinned_only_for_future_forecasts(self):
         from nba_forecast.enhancements import install_artifact
         from nba_forecast.refinement_upgrade import build_artifact
+        from nba_forecast.margins import CALIBRATION_FAMILY
         from nba_forecast.prospective_margin_calibration import METHOD as CORRECTION_METHOD,_fit_window
         from tests.test_prospective_margin_calibration import sample as margin_sample
         base=dict(model_version='regular-season-baseline-0.5.0',model_key='base',known_at='2026-10-20T00:00:00Z',
@@ -322,9 +323,9 @@ class EvidenceTickTests(unittest.TestCase):
                 sample[field]=(datetime.fromisoformat(sample[field])-timedelta(days=61)).isoformat()
             rows.append(sample)
         cutoff='2026-10-21T15:30:00Z'
-        margin=dict(schema_version=1,method=CORRECTION_METHOD,model_key=refined['model_key'],
-            window_index=0,training_cutoff=cutoff,evidence_samples=rows,
-            **_fit_window(rows,refined['model_key'],cutoff),collection_errors=[])
+        margin=dict(schema_version=1,method=CORRECTION_METHOD,margin_family=CALIBRATION_FAMILY,
+            model_keys=[refined['model_key']],window_index=0,training_cutoff=cutoff,evidence_samples=rows,
+            **_fit_window(rows,CALIBRATION_FAMILY,cutoff),collection_errors=[])
         self.assertEqual(margin['status'],'ready')
         player=dict(status='not_ready',reason='insufficient_games',sample_count=0,game_count=0,collection_errors=[])
         with patch('nba_forecast.prospective_calibration.fit_prospective',return_value=player),\

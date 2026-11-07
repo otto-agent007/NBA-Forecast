@@ -20,6 +20,10 @@ from .validation import parse_time
 
 METHOD = 'paired_final_score_outcome_dispersion_team_rating_absence_blend_discrete_normal_v3'
 SETTLEMENT = 'final_score_including_overtime'
+# The prospective margin correction pools saved distributions of one method and settlement
+# across model keys: the refined model key carries the runner package digest, so it changes
+# with every deploy, and a correction keyed on it never reached its first 112-game window.
+CALIBRATION_FAMILY = METHOD + '|' + SETTLEMENT
 EVIDENCE_KIND = 'historical_paired_final_score_outcomes'
 MINIMUM_GAMES = 100
 MAXIMUM_GAMES = 1230
@@ -407,7 +411,7 @@ def build_margin_forecasts(snapshot, result):
             calibration=enhancement.get('margin_calibration')
             if calibration is not None:
                 from .prospective_margin_calibration import validate_margin_calibration
-                if not validate_margin_calibration(calibration,model_key,snapshot['as_of']):
+                if not validate_margin_calibration(calibration,CALIBRATION_FAMILY,snapshot['as_of']):
                     value['reason']='invalid_margin_calibration'
                     continue
                 raw_pmf=_pmf(raw_location,raw_sd)

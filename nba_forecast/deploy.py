@@ -22,8 +22,10 @@ Each step is idempotent, so a second run after a success changes nothing:
    the ledger's journal mode and the units written or rewritten.
 
 The next tick re-forecasts every pregame game under the new artifact; the next
-derived run refits the prospective calibration, which is bound to the model key.
-Nothing under the production directory is edited by hand.
+derived run refits the prospective player calibration, which is bound to the
+model key. The margin correction is bound to the margin method instead
+(``margins.CALIBRATION_FAMILY``), so a valid one carries over from the artifact
+being replaced. Nothing under the production directory is edited by hand.
 """
 import argparse
 from contextlib import contextmanager
@@ -40,7 +42,9 @@ import time
 
 from .enhancements import _read, install_artifact
 from .files import atomic_bytes, atomic_json
+from .margins import CALIBRATION_FAMILY
 from .model_versions import REFINED_VERSION
+from .prospective_margin_calibration import validate_margin_calibration
 from .refinement_upgrade import build_artifact
 from .runner_release import package_digest, pin_release
 from .units import CREATED_BY_DEPLOY, SERVICES, derived_units
@@ -161,11 +165,15 @@ def _create_units(units, release, directory):
 def _plan(directory, units, package, digest, now, dry_run):
     pointer, active, base, parent_digest = _active(directory, now)
     artifact = build_artifact(base, parent_digest, now)
+    inherited = active.get('margin_calibration')
+    if inherited is not None and validate_margin_calibration(inherited, CALIBRATION_FAMILY, now):
+        artifact['margin_calibration'] = inherited
     unchanged = (active.get('model_key') == artifact['model_key'] and active.get('runner_package_sha256') == digest)
     commit, dirty = _git(package.parent)
     plan = dict(deployed_at=now, commit=commit, dirty_worktree=dirty, package_sha256=digest,
                 release=str(directory / 'runner-releases' / digest),
                 model_version=artifact['model_version'], model_key=artifact['model_key'],
+                margin_calibration_inherited=artifact.get('margin_calibration') is not None,
                 previous=dict(artifact_sha256=pointer['artifact_sha256'], model_key=active.get('model_key'),
                               package_sha256=active.get('runner_package_sha256')),
                 units=[str(units / name) for name in UNITS], units_created=_missing_units(units),
