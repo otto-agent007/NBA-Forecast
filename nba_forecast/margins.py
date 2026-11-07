@@ -2,7 +2,9 @@
 
 The scale is a pooled *outcome* prior, not a forecast-residual calibration:
 paired historical home/away scores preserve game covariance. No player SDs,
-old-model interval calibration, market prices, or joint-leg estimates are used.
+old-model interval calibration, or joint-leg estimates are used. The only
+market input is the closing spread of games already played, which sharpens each
+team's rating (``market_strengths``); a game's own line is never read.
 The regulation player-sum difference supplies a location predictor for a
 discrete final-score approximation; overtime is included in source outcomes.
 """
@@ -18,7 +20,7 @@ from .totals import game_totals
 from .validation import parse_time
 
 
-METHOD = 'paired_final_score_outcome_dispersion_team_rating_absence_blend_discrete_normal_v3'
+METHOD = 'paired_final_score_outcome_dispersion_team_rating_market_strength_absence_blend_discrete_normal_v4'
 SETTLEMENT = 'final_score_including_overtime'
 EVIDENCE_KIND = 'historical_paired_final_score_outcomes'
 MINIMUM_GAMES = 100
@@ -29,6 +31,8 @@ PARAMETERS = dict(minimum_games=MINIMUM_GAMES, maximum_games=MAXIMUM_GAMES,
                   support=SUPPORT, tail_floor_per_side=TAIL_FLOOR,
                   minimum_scale=1., required_interior_standard_deviations=3.,
                   rating_weight=.65, rating_prior_games=10, rating_prior_shrink=.6,
+                  market_strength_weight=.7, market_strength_half_life_days=7.,
+                  market_strength_ridge=.1, market_strength_minimum_games=60,
                   absence_rating_per_minute=.1, absence_minimum_minutes=15.)
 LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
              'is an outcome prior, not this model\'s prediction-error calibration. '
@@ -57,6 +61,25 @@ CALIBRATED_LIMITATION = ('Location and scale were fitted on genuinely saved preg
 RATING_WEIGHT = PARAMETERS['rating_weight']
 RATING_PRIOR_GAMES = PARAMETERS['rating_prior_games']
 RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
+# Each team's rating blends its results average with the strength the closing
+# spreads of its earlier games this season imply (market_strengths): a weighted
+# ridge fit of each earlier closing home margin on a home edge and the two
+# teams' strengths, weights halving every seven days, shrunk toward zero by
+# 0.1 pseudo-games. Only games already played enter, so tonight's line is never
+# read. On the 2,604 games of backtest-2026-11-06-rating-weight, re-scored
+# offline with the replay's own windows (scratch 2026-11-07-rating/harness.py,
+# which reproduces the reference to the digit), a results-only rebuild of the
+# rating moved nothing: recency weighting +0.03 to +0.12 MAE, opponent-adjusted
+# ridge -0.01 +- 0.01, capped margins +0.03. The market-implied strength at 0.7
+# of the rating gave -0.090 +- 0.025 (all three seasons, -0.08 to -0.10) and a
+# steeper actual-on-close slope (0.12 to 0.19); 0.5 gave -0.075 +- 0.018, 1.0
+# -0.100 +- 0.036. Half-lives of 5 to 10 days and ridges of 0.03 to 0.3 were
+# within 0.01 of each other. One grid, chosen on the same seasons; the gate run
+# in the pull request is the measurement that counts.
+MARKET_STRENGTH_WEIGHT = PARAMETERS['market_strength_weight']
+MARKET_STRENGTH_HALF_LIFE = PARAMETERS['market_strength_half_life_days']
+MARKET_STRENGTH_RIDGE = PARAMETERS['market_strength_ridge']
+MARKET_STRENGTH_MINIMUM_GAMES = PARAMETERS['market_strength_minimum_games']
 # The team rating was earned by the players who usually play; the player sum
 # already loses tonight's reported-out players, the rating did not. On the
 # three replayed seasons the blended margin missed by 0.49 points (se 0.06) per
@@ -77,11 +100,72 @@ def _season(time):
     return moment.year if moment.month >= 7 else moment.year - 1
 
 
-def team_ratings(samples, as_of):
+def _solve(matrix, vector):
+    """Gaussian elimination with partial pivoting for a small square system."""
+    n = len(vector)
+    rows = [list(row) + [value] for row, value in zip(matrix, vector)]
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(rows[r][col]))
+        rows[col], rows[pivot] = rows[pivot], rows[col]
+        if abs(rows[col][col]) < 1e-12:
+            raise ValueError('singular strength system')
+        for r in range(n):
+            if r != col:
+                factor = rows[r][col] / rows[col][col]
+                rows[r] = [a - factor * b for a, b in zip(rows[r], rows[col])]
+    return [rows[i][n] / rows[i][i] for i in range(n)]
+
+
+def market_strengths(samples, as_of, closing_margins):
+    """Team strengths that best explain the closing home margins of this season's earlier games.
+
+    A weighted ridge least-squares fit of each closing margin on a home edge and
+    the two teams' strengths; weights halve every ``market_strength_half_life_days``
+    before ``as_of`` and the strengths shrink toward zero by ``market_strength_ridge``.
+    Centred, so only differences carry meaning. Empty below
+    ``market_strength_minimum_games`` priced games, and for a season with none.
+    """
+    current = _season(as_of)
+    cutoff = parse_time(as_of)
+    rows = []
+    for s in samples:
+        line = closing_margins.get(s['game_id'])
+        if _season(s['game_time']) == current and _finite(line):
+            age = (cutoff - parse_time(s['game_time'])).total_seconds() / 86400.
+            rows.append((s['home_team_id'], s['away_team_id'], float(line), .5 ** (age / MARKET_STRENGTH_HALF_LIFE)))
+    if len(rows) < MARKET_STRENGTH_MINIMUM_GAMES:
+        return {}
+    teams = sorted({t for home, away, _, _ in rows for t in (home, away)})
+    index = {t: i + 1 for i, t in enumerate(teams)}
+    k = len(teams) + 1
+    normal = [[0.] * k for _ in range(k)]
+    rhs = [0.] * k
+    for home, away, line, weight in rows:
+        columns = ((0, 1.), (index[home], 1.), (index[away], -1.))
+        for i, xi in columns:
+            rhs[i] += weight * xi * line
+            for j, xj in columns:
+                normal[i][j] += weight * xi * xj
+    for i in range(1, k):
+        normal[i][i] += MARKET_STRENGTH_RIDGE
+    normal[0][0] += 1e-9
+    try:
+        beta = _solve(normal, rhs)
+    except ValueError:
+        return {}
+    mean = fmean(beta[1:])
+    return {t: beta[index[t]] - mean for t in teams}
+
+
+def team_ratings(samples, as_of, closing_margins=None):
     """Per-team rating in points per game from final samples known before ``as_of``.
 
     ``samples`` carry home/away team IDs and points and a game time; the season
-    of ``as_of`` is current, the one before supplies the prior.
+    of ``as_of`` is current, the one before supplies the prior. With
+    ``closing_margins`` (game ID to closing home margin) a team's rating blends
+    its results average with its market-implied strength (``market_strengths``)
+    at ``market_strength_weight``; a team the lines do not cover keeps its results
+    average, and so does every team until enough earlier games are priced.
     """
     current = _season(as_of)
     totals = {}
@@ -98,11 +182,14 @@ def team_ratings(samples, as_of):
             else:
                 t[2] += signed
                 t[3] += 1
+    strengths = market_strengths(samples, as_of, closing_margins) if closing_margins else {}
     ratings = {}
     for team, (now_sum, now_n, prior_sum, prior_n) in sorted(totals.items()):
         prior = RATING_PRIOR_SHRINK * prior_sum / prior_n if prior_n else 0.
-        ratings[team] = dict(rating=(now_sum + RATING_PRIOR_GAMES * prior) / (now_n + RATING_PRIOR_GAMES),
-                             games=now_n, prior=prior)
+        results = (now_sum + RATING_PRIOR_GAMES * prior) / (now_n + RATING_PRIOR_GAMES)
+        strength = strengths.get(team)
+        rating = results if strength is None else (1 - MARKET_STRENGTH_WEIGHT) * results + MARKET_STRENGTH_WEIGHT * strength
+        ratings[team] = dict(rating=rating, games=now_n, prior=prior, results_rating=results, market_strength=strength)
     return ratings
 
 
@@ -193,18 +280,23 @@ def _final_sample(row):
                 away_points=points[1], overtime=overtime, source_sha256=_sha(row))
 
 
-def prepare_margin_inputs(team_games, as_of, model_key):
+def prepare_margin_inputs(team_games, as_of, model_key, closing_margins=None):
     """Return deterministic prior inputs using only unique, already-known finals.
 
     Callers supply verified team-game archives. Full source records are hashed,
     and the preparation layer can reproduce this result from those archives.
     Duplicate game IDs are all excluded; revision selection belongs upstream.
+    ``closing_margins`` maps already-played games to their closing home margin
+    (``market_lines.closing_margins``); those used are hashed into the result.
     """
     if not _text(model_key):
         raise ValueError('A nonempty model key is required')
     cutoff = parse_time(as_of)
     if not isinstance(team_games, (list, tuple)):
         raise ValueError('Team games must be a sequence of final records')
+    if closing_margins is not None and not isinstance(closing_margins, Mapping):
+        raise ValueError('Closing margins must map game IDs to home margins')
+    closes = {gid: float(m) for gid, m in (closing_margins or {}).items() if _text(gid) and _finite(m)}
     identities = Counter(r.get('game_id') for r in team_games
                          if isinstance(r, Mapping) and _text(r.get('game_id')))
     accepted, exclusions = [], Counter()
@@ -225,6 +317,8 @@ def prepare_margin_inputs(team_games, as_of, model_key):
         accepted = accepted[-MAXIMUM_GAMES:]
     sources = [{k: r[k] for k in ('game_id', 'game_time', 'known_at', 'home_team_id',
                                  'away_team_id', 'source_sha256')} for r in accepted]
+    priced = [[r['game_id'], closes[r['game_id']]] for r in accepted if r['game_id'] in closes]
+    ratings = team_ratings(accepted, as_of, closes)
     result = dict(schema_version=1, status='unavailable', reason='insufficient_historical_games',
         method=METHOD, settlement=SETTLEMENT, model_key=model_key, prepared_at=_iso(cutoff),
         training_cutoff=_iso(cutoff), calibration_status='uncalibrated', evidence_kind=EVIDENCE_KIND,
@@ -235,7 +329,11 @@ def prepare_margin_inputs(team_games, as_of, model_key):
         overtime_game_count=sum(r['overtime'] > 0 for r in accepted),
         home_score_variance=None, away_score_variance=None, paired_score_covariance=None,
         margin_variance=None, historical_mean_margin=None, standard_deviation=None,
-        team_ratings=team_ratings(accepted, as_of),
+        team_ratings=ratings,
+        market_strength=dict(priced_games=len(priced), closing_lines_sha256=_sha(priced),
+                             rated_teams=sum(v['market_strength'] is not None for v in ratings.values()),
+                             weight=MARKET_STRENGTH_WEIGHT, half_life_days=MARKET_STRENGTH_HALF_LIFE,
+                             ridge=MARKET_STRENGTH_RIDGE, minimum_games=MARKET_STRENGTH_MINIMUM_GAMES),
         parameters=dict(PARAMETERS), exclusions=dict(sorted(exclusions.items())), limitation=LIMITATION)
     if len(accepted) >= MINIMUM_GAMES:
         home = [r['home_points'] for r in accepted]

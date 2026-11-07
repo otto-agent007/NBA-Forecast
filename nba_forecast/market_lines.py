@@ -224,6 +224,31 @@ def closing_lines(records, start_time):
     return latest
 
 
+def closing_margins(folder, records, as_of):
+    """Each already-tipped game's closing home margin from its saved captures, for the team rating.
+
+    The close is each provider's last pregame capture (``closing_lines``), averaged
+    across providers and negated to a home margin. A game not yet tipped by
+    ``as_of``, without a capture, or with a damaged file is left out: a missing
+    line never blocks a forecast.
+    """
+    cutoff = parse_time(as_of)
+    out = {}
+    for record in records:
+        start = record.get('game_time')
+        if not start or parse_time(start) >= cutoff:
+            continue
+        try:
+            lines = closing_lines(read_game_lines(folder, record['game_id']), start)
+        except ValueError:
+            continue
+        spreads = [((line.get('lines') or {}).get('spread') or {}).get('home', {}).get('current_line') for line in lines.values()]
+        spreads = [s for s in spreads if isinstance(s, (int, float)) and math.isfinite(s)]
+        if spreads:
+            out[record['game_id']] = -sum(spreads) / len(spreads)
+    return out
+
+
 def build_index(folder):
     """Latest and first capture per game and provider, for the dashboard."""
     root = Path(folder) / 'market' / 'game-lines'

@@ -13,7 +13,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-06-rating-weight
+  --reference datasets/backtest-2026-11-07-market-strength
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -88,6 +88,14 @@ Shiller); a slope two standard errors above zero means the model knows something
 the close did not. These are reported, not gated. The lines come from ESPN's core
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
+
+`--market` also feeds the forecast itself: each team's rating blends its
+results average with the strength the closing spreads of its earlier games
+imply (`margins.market_strengths`), reading only games played before the
+replayed day, as production reads its saved pregame captures. A game's own
+line never reaches its forecast. A replay without `--market` scores the
+results-only rating, which is not the production model, so the gate command
+and CI's smoke run both pass the closing-line archives.
 
 `metrics.market.close_teacher` adds the November 6 study's descriptive teacher
 regressions, disagreement buckets, and persistent-team versus game-day split.
@@ -825,3 +833,51 @@ seasons, so part of the gain is selection on the sample; the live check is
 `market/report.json`, where the model's margin error against the close (12.41
 against 10.41 on 91 games through 2026-11-05) should narrow over the next few
 weeks of games.
+
+## Reference: 2026-11-07 (market-implied team strength)
+
+`datasets/backtest-2026-11-07-market-strength/` (T-minus-30), model code
+`regular-season-baseline-0.4.8`, one change: each team's rating blends its
+results average with the strength the closing spreads of its earlier games
+imply (`margins.market_strengths`: a weighted ridge fit of each earlier closing
+home margin on a home edge and two team strengths, weights halving every seven
+days, ridge 0.1, centred), at `market_strength_weight` 0.7 of the rating. A
+team the lines never priced keeps its results average, and so does everyone
+until 60 priced games exist in the season. The method string is
+`..._team_rating_market_strength_absence_blend_discrete_normal_v4`; the model
+key changes with the parameters. The rating weight stays 0.65. A game's own
+line is never read: the replay passes `--market` and reads the closes of games
+before each day, production reads its saved pregame captures
+(`market_lines.closing_margins`, the mean of the providers' last capture before
+tip, with recovered closes standing in after an outage).
+
+Why: the November 6 study found the model's strength layer, not its game-day
+layer, is what the close does better (`docs/beating-the-close-2026-11-06.md`).
+Re-scoring the reference margins offline with the replay's own windows
+(`scratch/2026-11-07-rating/harness.py`, exact to the digit on the current
+rating), results-only rebuilds moved nothing: recency weighting +0.03 to
++0.12, an opponent-adjusted ridge rating −0.01 ± 0.01, capped margins +0.03.
+The market-implied strength at 0.7 gave −0.090 ± 0.025 in every season; 0.5
+and 1.0 bracket it (−0.075 ± 0.018, −0.100 ± 0.036), half-lives 5 to 10 days
+and ridges 0.03 to 0.3 were within 0.01.
+
+Against `backtest-2026-11-06-rating-weight`: **improved** (pooled). Margin
+−0.090 ± 0.050 (11.25 → 11.16, floor 0.056), improved; winner Brier −0.0023 ±
+0.0011 (0.2042 → 0.2019, floor 0.0010), improved; team points −0.028 ± 0.022,
+points −0.0001, minutes +0.0000, participation +0.0000 and the interval score
+−0.0008, within noise; points bias −0.09 → −0.09, team-points bias −1.23 →
+−1.23 and margin bias +0.12 → +0.12, within noise. Improved in each season
+(2023-24 11.24 → 11.16, 2024-25 11.13 → 11.02, 2025-26 11.39 → 11.30).
+Winners 68.6% → 69.0%; the closing line stays 10.90 on the same games, so the
+gap narrows from 0.35 to 0.26; the encompassing slope rises from +0.12 to
++0.19 ± 0.17. The close-as-teacher back-to-back coefficients are unchanged
+(home −1.25 ± 0.16, away +0.87 ± 0.16): the rest term is still missing.
+
+Caveats. The 0.7 share, 7-day half-life and 0.1 ridge are one grid chosen on
+these seasons; a 0.75 rating weight with this strength scored −0.152 ± 0.032
+offline but was left for its own gate. The forecast now depends on a market
+input for its strength layer: without saved captures (the first days of a
+season, or a capture outage) it falls back to the results average, so the
+first weeks of a season score like the previous reference. The margin
+calibration family changes with the method string, so the prospective margin
+correction (PR #33) starts collecting again at this deploy.
