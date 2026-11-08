@@ -22,10 +22,6 @@ from .validation import parse_time
 
 METHOD = 'paired_final_score_outcome_dispersion_team_rating_market_strength_absence_blend_discrete_normal_v4'
 SETTLEMENT = 'final_score_including_overtime'
-# The prospective margin correction pools saved distributions of one method and settlement
-# across model keys: the refined model key carries the runner package digest, so it changes
-# with every deploy, and a correction keyed on it never reached its first 112-game window.
-CALIBRATION_FAMILY = METHOD + '|' + SETTLEMENT
 EVIDENCE_KIND = 'historical_paired_final_score_outcomes'
 MINIMUM_GAMES = 100
 MAXIMUM_GAMES = 1230
@@ -38,6 +34,23 @@ PARAMETERS = dict(minimum_games=MINIMUM_GAMES, maximum_games=MAXIMUM_GAMES,
                   market_strength_weight=.7, market_strength_half_life_days=7.,
                   market_strength_ridge=.1, market_strength_minimum_games=60,
                   absence_rating_per_minute=.1, absence_minimum_minutes=15.)
+
+
+def parameter_digest(parameters):
+    """Sixteen hex digits naming a margin parameter set; the third part of a calibration family."""
+    return hashlib.sha256(json.dumps(parameters, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:16]
+
+
+def calibration_family(method, settlement, parameters):
+    return '|'.join((str(method), str(settlement), parameter_digest(parameters)))
+
+
+# The prospective margin correction pools saved distributions of one method, settlement
+# and parameter set across model keys: the refined model key carries the runner package
+# digest, so it changes with every deploy, and a correction keyed on it never reached its
+# first 112-game window. A parameter change (the rating weight on 2026-11-06 moved the
+# location without a method bump) moves the location too, so it starts a new pool.
+CALIBRATION_FAMILY = calibration_family(METHOD, SETTLEMENT, PARAMETERS)
 LIMITATION = ('Uncalibrated estimate. Historical paired final-score dispersion '
              'is an outcome prior, not this model\'s prediction-error calibration. '
              'The location uses regulation player means; final-score and overtime '

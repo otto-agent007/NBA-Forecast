@@ -89,6 +89,17 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(M.closing_margins(self.folder, [record], '2026-10-23T22:30:00Z'), {}, 'not tipped yet')
         self.assertEqual(M.closing_margins(self.folder, [dict(record, game_id='0022600099'), dict(game_id='x', game_time=None)],
                                            '2026-10-24T05:00:00Z'), {}, 'no capture, no line')
+        # A close recovered after the game enters only forecasts made after its recovery, so earlier
+        # margin inputs rebuild the same; a malformed record is skipped, never raised.
+        path = M._lines_path(self.folder, GAME['game_id'])
+        recovered = dict(game_id=GAME['game_id'], provider_id='100', provider='Draft Kings', retrieved_at='2026-10-24T09:00:00Z',
+                         captured_at='2026-10-24T09:00:00Z', lines=dict(spread=dict(home=dict(current_line=-5.5))),
+                         recovered_close=dict(recovered_at='2026-10-24T09:00:00Z'))
+        with path.open('a') as handle:
+            handle.write(json.dumps(recovered) + '\n')
+            handle.write(json.dumps(dict(game_id=GAME['game_id'], provider_id='300', provider='Broken')) + '\n')
+        self.assertEqual(M.closing_margins(self.folder, [record], '2026-10-24T05:00:00Z'), {GAME['game_id']: 3.0}, 'before the recovery')
+        self.assertEqual(M.closing_margins(self.folder, [record], '2026-10-24T10:00:00Z'), {GAME['game_id']: 4.5}, 'recovered 5.5 with FanDuel 3.5')
 
     def test_a_cut_off_final_line_is_dropped_and_the_file_repaired(self):
         first = M.extract_game_lines(summary(), GAME, '2026-27', META)
