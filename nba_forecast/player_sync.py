@@ -238,6 +238,8 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
             if not isinstance(failure,ValueError):
                 raise failure
             skipped_sources.append(dict(error=f'Finals enrichment: {failure}'))
+        # As a second merge of the tick's merged history reported them: a game-identity
+        # disagreement the tick already reported is not repeated (``HistoryMemo.merged``).
         skipped_sources.extend(merge_errors)
     changed_rows=False
     combined={(r['game_id'],r['player_id']):r for r in history}
@@ -336,10 +338,11 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
             # Past every row's and shot game's time the cutoff selects the same evidence.
             key=_digest([code_digest(),history_key,_digest(roster),shot_files,season,'beyond'])
     previous=_read_json(output/'index.json')
+    written_record=None
     if (key is not None and record.get('key')==key and isinstance(previous,dict)
             and all((output/(pid+'.json')).exists() for pid in record.get('pages',{}))):
         # Nothing the pages are built from changed: they and their summaries stand.
-        players=len(record['pages'])
+        players=len(record.get('pages',{}))
         rotation_roles,player_summaries=previous.get('rotation_roles',{}),previous.get('player_summaries',{})
     else:
         shots=[json.loads((shots_dir/name).read_text()) for name,*_ in shot_files]
@@ -358,8 +361,8 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                 atomic_json(output/(pid+'.json'),page)
             written[pid]=[content,page['as_of']]
         times=[t for g in shots for t in (g.get('known_at'),g.get('game_time')) if isinstance(t,str)]
-        record=dict(version=PAGE_VERSION,code=code_digest(),key=key,pages=written,
-                    shots_horizon=max(times,key=parse_time) if times else None)
+        written_record=dict(version=PAGE_VERSION,code=code_digest(),key=key,pages=written,
+                            shots_horizon=max(times,key=parse_time) if times else None)
         players=len(pages['players'])
         rotation_roles={pid:page['rotation_role'] for pid,page in pages['players'].items()}
         player_summaries={pid:{'name':page['name'],'team_id':page['team_id'],
@@ -369,7 +372,6 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                      'minutes_average':s['averages']['minutes'],'as_of':page['as_of']}
                      for pid,page in pages['players'].items()
                      for s in [page['current_season'] if page['current_season']['gp'] else page['prior_season']]}
-        _write_changed(folder/PAGE_RECORD,record)
     summary=dict(as_of=now,season=season,players=players,history_rows=len(history),
                  rotation_roles=rotation_roles,player_summaries=player_summaries,
                  current_season_final_games=len(targets),shot_games_verified=sum(_shot_state(cached.get(gid),rows)[1] for gid,rows in targets.items()),
@@ -393,8 +395,17 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
         for gid,rows in sorted(targets.items(),key=lambda item:(item[1][0]['game_time'],item[0]),reverse=True)]
     if isinstance(previous,dict) and canonical({k:v for k,v in previous.items() if k!='as_of'})==canonical({k:v for k,v in summary.items() if k!='as_of'}):
         # Unchanged: the index keeps the time its content last changed.
-        return previous
-    atomic_json(output/'index.json',summary)
+        summary=previous
+    else:
+        atomic_json(output/'index.json',summary)
+    if written_record is not None:
+        # Recorded only after the pages and the index are written: a sync stopped in
+        # between finds the old key and rebuilds. A record that cannot be written
+        # costs the next sync a rebuild, never this one.
+        try:
+            _write_changed(folder/PAGE_RECORD,written_record)
+        except OSError:
+            pass
     return summary
 
 
@@ -419,10 +430,24 @@ def _read_json(path):
 
 
 def _page_record(folder):
-    """Each page's content digest (without ``as_of``) and ``as_of``, and the key of the inputs they were built from."""
+    """Each page's content digest (without ``as_of``) and ``as_of``, and the key of the inputs they were built from.
+
+    A record of another release, or with a field of the wrong shape, is no record: the pages are rebuilt.
+    """
     record=_read_json(folder/PAGE_RECORD)
     if not isinstance(record,dict) or record.get('version')!=PAGE_VERSION or record.get('code')!=code_digest():
         return {}
+    pages=record.get('pages',{})
+    text=lambda value:value is None or isinstance(value,str)
+    if not (isinstance(pages,dict) and text(record.get('key')) and text(record.get('shots_horizon'))
+            and all(isinstance(pid,str) and isinstance(kept,list) and len(kept)==2 and all(isinstance(v,str) for v in kept)
+                    for pid,kept in pages.items())):
+        return {}
+    if record.get('shots_horizon') is not None:
+        try:
+            parse_time(record['shots_horizon'])
+        except (ValueError,TypeError):
+            return {}
     return record
 
 

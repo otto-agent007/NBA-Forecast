@@ -1,5 +1,6 @@
 """The tick prepares its history once per input state and writes player pages only when they change;
 evidence replays persist across processes, keyed on what they read and on the code."""
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
 import os
@@ -49,6 +50,32 @@ def _naive_merge(history, finals):
             if old is None or old['known_at'] <= r['known_at']:
                 combined[key] = r
     return list(combined.values())
+
+
+def _shifted_final(folder, i):
+    """A captured final whose tipoff disagrees with the input history's (a game-identity mismatch)."""
+    return _final(folder, i, game_time=f'2025-03-{i % 28 + 1:02d}T19:00:00+00:00')
+
+
+class Stopped(BaseException):
+    """The process is killed here (not an error any handler catches)."""
+
+
+def _tick_patches(stack, schedule):
+    for target, value in (('nba_forecast.operations._now', dict(return_value='2026-10-21T23:00:00Z')),
+                          ('nba_forecast.operations.fetch_schedule', dict(return_value=schedule)),
+                          ('nba_forecast.operations.fetch_roster', {})):
+        stack.enter_context(patch(target, **value))
+
+
+def _tick_folder(d):
+    folder = Path(d)
+    _final(folder, 2, minutes=31)
+    (folder/'roster.json').write_text(json.dumps(dict(observed_at='2026-10-21T00:00:00Z', players=[
+        dict(player_id='1', name='1', team_id='A', status='unknown')])))
+    schedule = normalize_season(payload([game(start='2026-10-22T22:00:00Z')]), '2026-10-21T16:00:00Z')
+    schedule['version'] = 'v1'
+    return folder, schedule
 
 
 class HistoryMemoTests(unittest.TestCase):
@@ -182,6 +209,72 @@ class HistoryMemoTests(unittest.TestCase):
         self.assertEqual(first['player_sync']['history_rows'], second['player_sync']['history_rows'])
 
 
+    def test_a_stored_history_whose_bytes_changed_is_merged_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            _final(folder, 2, minutes=31)
+            merged = tick_memo.HistoryMemo(folder, _history(), 'k').merged()[0]
+            (stored,) = (folder/'cache'/'history').glob('*.pickle')
+            raw = stored.read_bytes()
+            self.assertIn(b'example.test', raw)
+            # Still a valid pickle of a list of rows, with different content.
+            stored.write_bytes(raw.replace(b'example.test', b'exbmple.test'))
+            memo = tick_memo.HistoryMemo(folder, _history(), 'k')
+            self.assertEqual(memo.merged()[0], merged)
+            self.assertEqual(memo.warnings()[0]['task'], 'history_memo')
+            self.assertEqual(tick_memo.HistoryMemo(folder, _history(), 'k').merged()[0], merged)
+
+    def test_an_unwritable_cache_does_not_stop_the_tick(self):
+        with tempfile.TemporaryDirectory() as d, ExitStack() as stack:
+            folder, schedule = _tick_folder(d)
+            (folder/'cache').write_text('not a folder')  # every write under cache/ fails
+            _tick_patches(stack, schedule)
+            first = run_tick(d, _history(), history_key='k')
+            second = run_tick(d, _history(), history_key='k')
+        for report in (first, second):
+            self.assertEqual(report['status'], 'complete', report['errors'])
+            self.assertTrue(any(w.get('task') == 'history_memo' for w in report['warnings']))
+            self.assertEqual(report['player_sync']['history_rows'], len(_merge_finals(_history(), folder/'finals')))
+
+    def test_a_malformed_record_is_no_record(self):
+        with tempfile.TemporaryDirectory() as d, ExitStack() as stack:
+            folder, schedule = _tick_folder(d)
+            (folder/'cache').mkdir()
+            stamp = dict(code=replay_cache.code_digest())
+            (folder/tick_memo.HISTORY_RECORD).write_text(json.dumps(dict(stamp, version=tick_memo.VERSION, enrich='bad', merge=[])))
+            (folder/player_sync.PAGE_RECORD).write_text(json.dumps(dict(stamp, version=player_sync.PAGE_VERSION, pages=[])))
+            _tick_patches(stack, schedule)
+            report = run_tick(d, _history(), history_key='k')
+            self.assertEqual(report['status'], 'complete', report['errors'])
+            self.assertTrue(any(w.get('task') == 'history_memo' for w in report['warnings']))
+            self.assertEqual(tick_memo.HistoryMemo(folder, _history(), 'k').merged()[0], _merge_finals(_history(), folder/'finals'))
+            self.assertTrue((folder/'players'/'1.json').exists())
+
+    def test_stale_temporary_files_and_old_stores_are_removed(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            store = folder/'cache'/'history'
+            store.mkdir(parents=True)
+            old, young = store/'.a.pickle.1.1.tmp', store/'.b.pickle.2.2.tmp'
+            for path in (old, young):
+                path.write_bytes(b'partial')
+            os.utime(old, (0, 0))
+            tick_memo.HistoryMemo(folder, _history(), 'k').merged()
+            self.assertFalse(old.exists())
+            self.assertTrue(young.exists())
+            # An old replay store whose removal fails is removed by a later save of the same process.
+            replay_cache.clear()
+            other = folder/'cache'/'replay'/('0'*16)
+            (other/'stuck').mkdir(parents=True)
+            replay_cache.replay(('k', 1), lambda: 1, d)
+            self.assertTrue(other.exists())
+            (other/'stuck').rmdir()
+            (other/'entry.pickle').write_bytes(b'x')
+            replay_cache.replay(('k', 2), lambda: 2, d)
+            self.assertFalse(other.exists())
+            replay_cache.clear()
+
+
 class PlayerPageTests(unittest.TestCase):
     def setUp(self):
         replay_cache.clear()
@@ -248,6 +341,47 @@ class PlayerPageTests(unittest.TestCase):
             (folder/'players'/'2.json').unlink()
             self._sync(folder, t2)
             self.assertEqual(json.loads((folder/'players'/'2.json').read_text())['as_of'], t2.isoformat())
+
+
+    def test_a_sync_stopped_before_the_index_is_written_rebuilds_next_time(self):
+        t1, t2, t3 = (datetime(2025, 4, day, tzinfo=timezone.utc) for day in (1, 2, 3))
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            self._sync(folder, t1)
+            # Player 3 sat out every game after all; the sync is killed between its writes.
+            zero = {k: 0 for k in ('minutes', 'fgm', 'fga', 'fg3m', 'fg3a', 'ftm', 'fta', 'tov', 'pts')}
+            for i in range(6):
+                _final(folder, i, pid='3', status='dnp', **zero)
+            real = player_sync.atomic_json
+            def killed(path, value):
+                if Path(path).name == 'index.json':
+                    raise Stopped()
+                return real(path, value)
+            with patch('nba_forecast.player_sync.atomic_json', side_effect=killed), self.assertRaises(Stopped):
+                self._sync(folder, t2)
+            third = self._sync(folder, t3)
+            page = json.loads((folder/'players'/'3.json').read_text())
+            self.assertEqual(third['player_summaries']['3']['games'], page['current_season']['gp'])
+            self.assertEqual(third['rotation_roles']['3'], page['rotation_role'])
+            self.assertEqual(json.loads((folder/'players'/'index.json').read_text())['rotation_roles']['3'], page['rotation_role'])
+
+    def test_the_sync_reports_a_mismatch_once_as_main_did(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            _shifted_final(folder, 1)
+            memo = tick_memo.HistoryMemo(folder, _history(), 'k')
+            merged, _, tick_errors, _, _ = memo.merged()
+            self.assertEqual([e['game_id'] for e in tick_errors], ['g1'])
+            _shifted_final(folder, 2)  # captured after the tick's merge, before the sync
+            main = []
+            _merge_finals(merged, folder/'finals', errors=main)  # main's sync merged the tick's merge again
+            roster = dict(observed_at='2025-03-01T00:00:00Z', players=[])
+            with patch('nba_forecast.player_sync.datetime') as clock:
+                clock.now.return_value = datetime(2025, 4, 1, tzinfo=timezone.utc)
+                summary = sync_player_data(folder, merged, roster=roster, schedule=dict(season='2024-25', games=[]),
+                                           max_shot_games=0, memo=memo)
+            self.assertEqual([e['game_id'] for e in main], ['g2'])
+            self.assertEqual(summary['skipped_sources'], main)
 
 
 class PersistentReplayTests(unittest.TestCase):

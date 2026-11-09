@@ -143,9 +143,13 @@ warnings recorded with it; the player sync uses the tick's merge instead of a
 second one. Player pages are rebuilt only when the history, roster or shot
 files change, and a page or `players/index.json` is written only when its
 content changes, so their `as_of` is when the content last changed
-(`cache/player-pages.json` holds each page's digest). Before 2026-11-09 an idle
+(`cache/player-pages.json` holds each page's digest). That record is keyed on
+the code, so a page's `as_of` means its last change or the last deploy,
+whichever is later. Before 2026-11-09 an idle
 tick spent about 14 s of CPU every minute on this; deleting `cache/` costs one
-tick the old work.
+tick the old work. The memo never stops a tick: an unreadable, malformed or
+unwritable record is treated as missing (a `history_memo` warning) and the step
+runs as before; the stored merged history is checked against its SHA-256.
 
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:

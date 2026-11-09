@@ -11,26 +11,31 @@ skipped when its key equals the one recorded after it last ran:
 - ``enrich_final_cache`` is a fixpoint (run on its own output it changes
   nothing), so its key is taken after it runs and a later tick with the same
   finals and box scores skips it, re-reporting the archives it skipped;
-- the merged history is stored under its key (``cache/history/``) and read back;
+- the merged history is stored under its key (``cache/history/``) with the
+  SHA-256 of its bytes, and read back only when the bytes still match;
 - the input history's validation is recorded once per key.
 
 Within a tick the result is shared: a second call (the player sync's) costs a
 stat of the finals unless a final was captured in between, in which case the
-steps run again exactly as before. A missing, unreadable or differently keyed
-record means the step runs. ``HISTORY_RECORD`` holds the keys; deleting
-``cache/`` only costs one tick the old work.
+steps run again exactly as before. A missing, unreadable, malformed or
+differently keyed record means the step runs, and a record or stored history
+that cannot be written costs later ticks the work, never this one: the memo
+never stops a tick (``warnings`` says what it could not use or keep).
+``HISTORY_RECORD`` holds the keys; deleting ``cache/`` only costs one tick the
+old work.
 """
 import hashlib
 import json
 import os
 from pathlib import Path
 import pickle
+import time
 
 from .files import atomic_bytes
-from .replay_cache import code_digest
+from .replay_cache import STALE_TMP_SECONDS, code_digest
 from .schedule import canonical
 
-VERSION = 1
+VERSION = 2
 HISTORY_RECORD = 'cache/history-memo.json'
 # ``enrich_archive`` reads these and only these provenance records.
 BOXSCORE_URL = '/liveData/boxscore/boxscore_002'
@@ -59,15 +64,27 @@ def history_key(paths):
     return digest(['files', stamps])
 
 
-def _read_record(path):
-    try:
-        record = json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(record, dict) or record.get('version') != VERSION or record.get('code') != code_digest():
-        # Another release's keys and archive classification are not trusted.
-        return {}
-    return record
+def _dicts(value, reserved=()):
+    """A list of objects with text keys, none of them ``reserved``."""
+    return isinstance(value, list) and all(
+        isinstance(item, dict) and all(isinstance(k, str) and k not in reserved for k in item) for item in value)
+
+
+def _text(value):
+    return value is None or isinstance(value, str)
+
+
+def _well_formed(record):
+    """Whether every field this module reads has the shape it expects."""
+    provenance = record.get('provenance', {})
+    enrich = record.get('enrich', {})
+    merge = record.get('merge', {})
+    return (isinstance(provenance, dict) and all(isinstance(k, str) and _text(v) for k, v in provenance.items())
+            and _text(record.get('validated'))
+            # Skipped archives are reported as ``dict(task=..., **item)``.
+            and isinstance(enrich, dict) and _text(enrich.get('key')) and _dicts(enrich.get('skipped', []), ('task',))
+            and isinstance(merge, dict) and _text(merge.get('key')) and _text(merge.get('sha256'))
+            and _text(merge.get('horizon')) and _dicts(merge.get('errors', [])))
 
 
 _MISSING = object()
@@ -80,6 +97,22 @@ def _horizon(rows):
     return latest
 
 
+def _prune(store, keep):
+    """Remove every stored history but ``keep`` and temporary files no writer can still own."""
+    now = time.time()
+    try:
+        entries = list(os.scandir(store))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.name != keep and (entry.name.endswith('.pickle') or (
+                    entry.name.endswith('.tmp') and now - entry.stat().st_mtime > STALE_TMP_SECONDS)):
+                os.unlink(entry.path)
+        except OSError:
+            pass
+
+
 class HistoryMemo:
     """The tick's merged history (input history plus captured finals, enriched from box scores)."""
 
@@ -89,10 +122,42 @@ class HistoryMemo:
         # Without file stamps the key is the content digest of the input rows.
         self.key = key or digest(['rows', history])
         self.path = self.folder/HISTORY_RECORD
-        self.record = _read_record(self.path)
+        self.problems = []
+        self.reported = set()
+        self.record = self._read_record()
         self.saved = canonical(self.record)
         self.current = None
         self.merged_horizon = None
+
+    def _warn(self, message):
+        if message not in self.problems:
+            self.problems.append(message)
+
+    def warnings(self):
+        """What the memo could not use or keep since the last call, as tick warnings."""
+        out = [dict(task='history_memo', error=m) for m in self.problems]
+        self.problems = []
+        return out
+
+    def _read_record(self):
+        try:
+            record = json.loads(self.path.read_text())
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            self._warn(f'History memo record unreadable; prepared again: {type(exc).__name__}: {exc}')
+            return {}
+        if not isinstance(record, dict) or record.get('version') != VERSION or record.get('code') != code_digest():
+            # Another release's keys and archive classification are not trusted.
+            return {}
+        try:
+            canonical(record)
+            if not _well_formed(record):
+                raise ValueError('a field has the wrong type')
+        except (ValueError, TypeError) as exc:
+            self._warn(f'History memo record malformed; prepared again: {exc}')
+            return {}
+        return record
 
     def horizon(self):
         """The latest game or observation time in the last merged history (``merged()`` first)."""
@@ -100,10 +165,14 @@ class HistoryMemo:
 
     def _save(self):
         self.record.update(version=VERSION, code=code_digest())
-        encoded = canonical(self.record)
-        if encoded != self.saved:
-            atomic_bytes(self.path, encoded)
-            self.saved = encoded
+        try:
+            encoded = canonical(self.record)
+            if encoded != self.saved:
+                atomic_bytes(self.path, encoded)
+                self.saved = encoded
+        except (OSError, ValueError, TypeError) as exc:
+            # The record only spares later ticks the work; this tick goes on without it.
+            self._warn(f'History memo record not saved: {type(exc).__name__}: {exc}')
 
     def validate_input(self):
         """``validate_history`` of the input history, once per input key."""
@@ -163,7 +232,19 @@ class HistoryMemo:
         returned as ``failure`` (the caller reports it as before), the merge of
         the finals as they are still returned, and nothing about it is kept, so
         the next call runs enrichment again. A merge failure raises, unrecorded.
+
+        A game-identity disagreement between a captured final and the input
+        history is returned once per tick: before the memo the player sync
+        merged the tick's merged history again, where that game already held
+        the final's rows, so it reported the disagreement only when it was new.
         """
+        from .operations import FINAL_IDENTITY_MISMATCH
+        value, skipped, errors, key, failure = self._merged()
+        new = [e for e in errors if canonical(e) not in self.reported]
+        self.reported.update(canonical(e) for e in errors if e.get('error') == FINAL_IDENTITY_MISMATCH)
+        return value, list(skipped), new, key, failure
+
+    def _merged(self):
         finals = self._finals()
         boxes = self._boxscores()
         if self.current and self.current[0] == digest(['enrich', finals, boxes]):
@@ -189,10 +270,14 @@ class HistoryMemo:
         value = None
         if merge.get('key') == merge_key:
             try:
-                value = pickle.loads((store/(merge_key+'.pickle')).read_bytes())
-            except Exception:
-                value = None
-            if not isinstance(value, list):
+                raw = (store/(merge_key+'.pickle')).read_bytes()
+                if hashlib.sha256(raw).hexdigest() != merge.get('sha256'):
+                    raise ValueError('the stored bytes differ from their recorded SHA-256')
+                value = pickle.loads(raw)
+                if not isinstance(value, list):
+                    raise ValueError('the stored value is not a list of rows')
+            except Exception as exc:
+                self._warn(f'Stored merged history not used; merged again: {type(exc).__name__}: {exc}')
                 value = None
         if value is not None:
             errors = list(merge.get('errors', []))
@@ -204,14 +289,17 @@ class HistoryMemo:
             errors = []
             value = _merge_finals(self.history, self.folder/'finals', errors=errors)
             horizon = _horizon(value)
+            name = merge_key+'.pickle'
             try:
-                atomic_bytes(store/(merge_key+'.pickle'), pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
-                for old in store.glob('*.pickle'):
-                    if old.name != merge_key+'.pickle':
-                        old.unlink()
-                self.record['merge'] = dict(key=merge_key, errors=errors, horizon=horizon)
-            except OSError:
+                raw = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+                atomic_bytes(store/name, raw)
+                self.record['merge'] = dict(key=merge_key, errors=errors, horizon=horizon,
+                                            sha256=hashlib.sha256(raw).hexdigest())
+            except Exception as exc:
                 self.record.pop('merge', None)
+                self._warn(f'Merged history not stored: {type(exc).__name__}: {exc}')
+            else:
+                _prune(store, name)
         self._save()
         self.merged_horizon = horizon
         result = (value, list(skipped), list(errors), merge_key, failure)

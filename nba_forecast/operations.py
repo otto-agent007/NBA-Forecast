@@ -414,6 +414,7 @@ def _tick(folder,history,report,history_key=None):
     else:
         report['errors'].append(dict(task='enrich_finals',error=f'{type(failure).__name__}: {failure}'))
     report['errors'].extend(merge_errors)
+    report['warnings'].extend(memo.warnings())
     prior_path=folder/'historical-priors.json'
     if prior_path.exists():
         book=json.loads(prior_path.read_text())
@@ -506,6 +507,7 @@ def _tick(folder,history,report,history_key=None):
             report['warnings'].extend(dict(task='shot_data',**e) for e in synced['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+        report['warnings'].extend(memo.warnings())
     phase('player_sync')
     # LiveData play-by-play for the postgame recaps and the daily review's exit and blowout labels.
     try:
@@ -616,6 +618,9 @@ def _game_identity(row):
     return (row['season'],parse_time(row['game_time']),tuple(sorted((row['team_id'],row['opponent_id']))))
 
 
+FINAL_IDENTITY_MISMATCH='Captured final and input history disagree on game identity; the captured final is used'
+
+
 def _merge_finals(history,cache,errors=None):
     """The input history plus every captured final, the newest known_at winning per player-game.
 
@@ -651,8 +656,7 @@ def _merge_finals(history,cache,errors=None):
             mismatched={r['game_id'] for r in rows
                         if r['game_id'] in first and _game_identity(first[r['game_id']])!=_game_identity(r)}
             if mismatched:
-                errors.append(dict(task='finals_cache',game_id=p.stem,
-                    error='Captured final and input history disagree on game identity; the captured final is used'))
+                errors.append(dict(task='finals_cache',game_id=p.stem,error=FINAL_IDENTITY_MISMATCH))
         stem=p.stem
         stale=[(gid,pid) for gid in {stem,*mismatched} for pid in players_by_game.get(gid,())
                if gid in mismatched or pid not in players]

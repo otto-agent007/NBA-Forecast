@@ -16,9 +16,11 @@ The tick is a new process every minute, so a replay given its data folder is
 also kept on disk (``cache/replay/<code>/`` under that folder) and the first
 forecast of the next tick reads it instead of replaying the season's archives
 again. The disk key adds the package's source digest: a deploy starts a new
-store and removes the old ones. An entry that cannot be read, or that was
-stored under another key, is replayed and written again. Entries are pickles
-written by this process into the operator's own data folder.
+store, and each process's saves remove the other code's stores until that
+succeeds once. An entry that cannot be read, or that was stored under another
+key, is replayed and written again. Entries are pickles written by this process
+into the operator's own data folder; a temporary file a killed process left is
+removed once it is older than any tick can run (``STALE_TMP_SECONDS``).
 
 League-wide history maps stay per process: they are rebuilt in about a second
 from the history the tick already holds in memory, and keying them on disk
@@ -30,6 +32,7 @@ import hashlib
 import os
 from pathlib import Path
 import pickle
+import time
 
 from .files import atomic_bytes
 from .schedule import canonical
@@ -38,9 +41,12 @@ REPLAYS = 4096  # archived sources kept; a season has 1,230 games
 LEAGUE = 16     # league-wide maps kept; a handful per history object
 DISK_ENTRIES = 8192  # replays kept on disk per data folder; about three per game played
 DISK_VERSION = 1
+# A tick is stopped after 10 minutes; a temporary file older than this has no writer left.
+STALE_TMP_SECONDS = 3600
 _replays = OrderedDict()
 _league = OrderedDict()
 _code = []
+_cleaned = set()  # stores whose other-code siblings this process has removed
 _MISSING = object()
 
 
@@ -99,18 +105,36 @@ def _load(path, name):
     return value
 
 
+def _remove_other_stores(store):
+    """Remove the stores other code left beside ``store``; a save tries again until this succeeds once per process."""
+    if str(store) in _cleaned:
+        return
+    done = True
+    for old in store.parent.iterdir():
+        if old == store or not old.is_dir():
+            continue
+        try:
+            for entry in old.iterdir():
+                entry.unlink()
+            old.rmdir()
+        except OSError:
+            done = False
+    if done:
+        _cleaned.add(str(store))
+
+
 def _save(store, path, name, value):
     """Write the entry; a full or read-only folder costs the next process a replay, never this forecast."""
     try:
-        fresh = not store.exists()
         atomic_bytes(path, pickle.dumps((DISK_VERSION, name, value), protocol=pickle.HIGHEST_PROTOCOL))
-        if fresh:
-            for old in store.parent.iterdir():
-                if old != store and old.is_dir():
-                    for entry in old.iterdir():
-                        entry.unlink()
-                    old.rmdir()
-        entries = [e for e in os.scandir(store) if e.name.endswith('.pickle')]
+        _remove_other_stores(store)
+        entries = []
+        now = time.time()
+        for entry in os.scandir(store):
+            if entry.name.endswith('.pickle'):
+                entries.append(entry)
+            elif entry.name.endswith('.tmp') and now - entry.stat().st_mtime > STALE_TMP_SECONDS:
+                os.unlink(entry.path)
         if len(entries) > DISK_ENTRIES:
             entries.sort(key=lambda e: e.stat().st_mtime_ns)
             for entry in entries[:len(entries) - DISK_ENTRIES]:
@@ -179,3 +203,4 @@ def cutoff_key(history, cutoff):
 def clear():
     _replays.clear()
     _league.clear()
+    _cleaned.clear()
