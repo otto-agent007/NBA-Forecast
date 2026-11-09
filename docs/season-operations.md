@@ -28,13 +28,16 @@ forecast stage. Its default view switches to the final when that run arrives.
 Static snapshot previews remain fixed until manually refreshed. The server
 keeps each payload until a file it was built from changes, so an unchanged
 poll is answered from memory (a 304 when the ETag matches, gzip when the
-browser accepts it). `/api/dashboard` carries the forecasts, injury captures,
-preflight audits and availability updates for the day the page opens on;
-the page fetches any other day from `/api/forecasts?date=YYYY-MM-DD` and each
-night's review from `/api/daily-reviews/YYYY-MM-DD`. Its `generated_at` is
-when the content last changed. The page's built files are served from
-`dashboard/dist`: run `npm run build --prefix dashboard` after a change to
-`dashboard/src`, before the deploy restarts the dashboard.
+browser accepts it). The page asks for `/api/dashboard?view=day`, which
+carries the forecasts, injury captures, preflight audits and availability
+updates for the day the page opens on; it fetches any other day from
+`/api/forecasts?date=YYYY-MM-DD` and each night's review from
+`/api/daily-reviews/YYYY-MM-DD`. Plain `/api/dashboard` still carries every
+day and every review, so a page built before this (a tab left open across a
+deploy) keeps working. `generated_at` is when the content last changed. The
+page's built files are served from `dashboard/dist`: run
+`npm run build --prefix dashboard` after a change to `dashboard/src`, before
+the deploy restarts the dashboard.
 
 Each selected forecast shows away and home team point totals and their combined
 game total. Model `regular-season-baseline-0.4.2` saves these aggregates with the

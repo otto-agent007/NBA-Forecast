@@ -154,6 +154,45 @@ class PayloadTests(unittest.TestCase):
             with self.assertRaises(BadRequest, msg=bad):
                 review_payload(self.folder, bad)
 
+    def test_plain_payload_keeps_main_shape(self):
+        """A page built before the one-day view (an open tab across a deploy, a skipped build) gets everything."""
+        _, body = dashboard_payload(self.folder, full=True)
+        value = json.loads(body)
+        expected = dashboard_data(self.folder, compact=True)
+        value.pop('generated_at'), expected.pop('generated_at')
+        self.assertEqual(value, json.loads(json.dumps(expected)))
+        self.assertNotIn('detail_days', value)
+        self.assertEqual(value['daily_reviews'], {'2026-10-22': REVIEW})
+        _write(self.folder / 'daily-reviews/2026-10-22.json', dict(REVIEW, status='partial'))
+        self.assertEqual(json.loads(dashboard_payload(self.folder, full=True)[1])['daily_reviews']['2026-10-22']['status'],
+                         'partial', 'a rewritten review rebuilds the full payload')
+
+    def test_empty_or_missing_performance_is_served_as_main_served_it(self):
+        for value in ({}, None):
+            _write(self.folder / 'performance.json', value)
+            self.assertEqual(self.page()[1]['performance'], value)
+            self.assertEqual(json.loads(dashboard_payload(self.folder, full=True)[1])['performance'], value)
+
+    def test_a_file_written_during_a_build_is_checked_again(self):
+        """A run's profiles are saved just after the run: one written while a payload was built is not taken as seen."""
+        tracked = self.folder / 'runs/R/profiles.json'
+        builds = []
+
+        def build():
+            builds.append(1)
+            if len(builds) == 1:
+                _write(tracked, dict(players={}))  # lands mid-build, after the build read the run
+            return dict(value=len(builds)), [tracked]
+
+        dashboard._cached(('test', 'x', None), 'key', build, stamped=False)
+        dashboard._cached(('test', 'x', None), 'key', build, stamped=False)
+        self.assertEqual(len(builds), 2, 'the next request rebuilds')
+        old = datetime.now().timestamp() - 60
+        os.utime(tracked, (old, old))
+        dashboard._cached(('test', 'x', None), 'key', build, stamped=False)
+        dashboard._cached(('test', 'x', None), 'key', build, stamped=False)
+        self.assertEqual(len(builds), 3, 'a file older than the build is taken as seen')
+
     def test_default_day_follows_the_page_rule(self):
         games = [dict(game_id='A', status='final', start_time='2026-10-22T02:00:00Z'),
                  dict(game_id='B', status='scheduled', start_time='2026-10-24T03:00:00Z'),
@@ -210,6 +249,15 @@ class ServerTests(unittest.TestCase):
             self.assertEqual((status, body), (304, b''))
         self.assertEqual(self.get('/api/dashboard', **{'If-None-Match': '"other"'})[0], 200)
         self.assertIn("default-src 'self'", headers['Content-Security-Policy'])
+
+    def test_view_parameter(self):
+        light = json.loads(self.get('/api/dashboard?view=day')[2])
+        full = json.loads(self.get('/api/dashboard')[2])
+        self.assertIn('detail_days', light)
+        self.assertNotIn('detail_days', full)
+        self.assertEqual(full['daily_reviews'], {'2026-10-22': REVIEW})
+        for path in ('/api/dashboard?view=all', '/api/dashboard?view=day&view=day', '/api/dashboard?view='):
+            self.assertEqual(self.get(path)[0], 400, path)
 
     def test_day_and_review_endpoints(self):
         status, headers, body = self.get('/api/forecasts?date=2026-10-22')

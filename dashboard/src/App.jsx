@@ -33,6 +33,8 @@ function TileTeam({ game, side }) {
   );
 }
 
+const DETAIL_FIELDS = ["forecast", "forecast_stage", "forecasts", "injury_capture", "preflight", "availability_update"];
+
 export default function App() {
   const [data, setData] = useState(null),
     [error, setError] = useState(""),
@@ -50,6 +52,7 @@ export default function App() {
     [reviews, setReviews] = useState({}),
     [now, setNow] = useState(Date.now());
   const refreshInFlight = useRef(false);
+  const dataRef = useRef(null);
   const reload = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -60,7 +63,9 @@ export default function App() {
         new URLSearchParams(location.search).get("snapshot") === "1";
       // no-cache revalidates with the server's ETag: an unchanged page costs a 304, not 20 MB.
       const response = await fetch(
-        staticMode ? "./dashboard.json" : "/api/dashboard",
+        // view=day: one game day's forecasts with the page, the rest on demand (plain
+        // /api/dashboard is the whole payload, for pages built before this one).
+        staticMode ? "./dashboard.json" : "/api/dashboard?view=day",
         { cache: "no-cache" },
       );
       if (!response.ok)
@@ -77,6 +82,21 @@ export default function App() {
       // The server names each game's opening forecast by stage instead of repeating it.
       for (const g of next.games)
         g.forecast = g.forecast ?? g.forecasts?.[g.forecast_stage] ?? null;
+      // A day the server stops carrying (the opening day moves once tonight's games
+      // tip) keeps the details it had until its own fetch returns.
+      const previous = dataRef.current;
+      if (Array.isArray(previous?.detail_days) && Array.isArray(next.detail_days)) {
+        const dropped = previous.detail_days.filter((day) => !next.detail_days.includes(day));
+        if (dropped.length)
+          setDetails((old) => {
+            const kept = { ...old };
+            for (const day of dropped)
+              kept[day] = Object.fromEntries(previous.games.filter((g) => gameDay(g) === day)
+                .map((g) => [g.game_id, Object.fromEntries(DETAIL_FIELDS.filter((k) => k in g).map((k) => [k, g[k]]))]));
+            return kept;
+          });
+      }
+      dataRef.current = next;
       setData(next);
       setRefreshRevision((old) => old + 1);
       setDate((old) => old || next.default_day || initialDay(next));
@@ -120,7 +140,12 @@ export default function App() {
     if (!reviewDates || tab !== "Performance" || !reviewDates.includes(date)) return;
     const controller = new AbortController();
     fetch(`/api/daily-reviews/${encodeURIComponent(date)}`, { cache: "no-cache", signal: controller.signal })
-      .then((response) => (response.ok ? response.json() : null))
+      // 404: no review saved for that night. Any other failure stays pending; the next poll retries.
+      .then((response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Daily review unavailable");
+        return response.json();
+      })
       .then((report) => setReviews((old) => ({ ...old, [date]: report })))
       .catch(() => {});
     return () => controller.abort();

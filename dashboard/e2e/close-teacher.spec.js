@@ -24,7 +24,7 @@ const payload = {schema_version: 1, season: '2026-27', source_mode: 'saved_opera
 test('historical and provider-specific live diagnostics show uncertainty and expandable team split', async ({page}) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/api/dashboard', route => route.fulfill({json: payload}));
+  await page.route('**/api/dashboard*', route => route.fulfill({json: payload}));
   await page.goto('/');
   await page.getByRole('button', {name: 'Performance', exact: true}).click();
   const section = page.getByRole('region', {name: 'Close-teacher diagnostics'});
@@ -44,7 +44,7 @@ test('historical and provider-specific live diagnostics show uncertainty and exp
 });
 
 test('older exports show missing diagnostics honestly', async ({page}) => {
-  await page.route('**/api/dashboard', route => route.fulfill({json: {...payload, close_teacher: null, market: null}}));
+  await page.route('**/api/dashboard*', route => route.fulfill({json: {...payload, close_teacher: null, market: null}}));
   await page.goto('/');
   await page.getByRole('button', {name: 'Performance', exact: true}).click();
   await expect(page.getByText('Historical diagnostics are not available in this export.')).toBeVisible();

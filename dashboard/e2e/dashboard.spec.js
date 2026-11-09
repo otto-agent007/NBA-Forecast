@@ -45,7 +45,7 @@ test.beforeEach(async ({ page }) => {
 test("View review queue includes projected role reviews and excludes routine players", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: dashboard }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: dashboard }));
   await page.goto("/");
   await expect(page).toHaveTitle("NBA Forecast · Game day");
   await expect(page.getByRole("heading", { name: "Game day", exact: true })).toBeVisible();
@@ -59,7 +59,7 @@ test("runner separates waiting checkpoints from actionable errors", async ({ pag
   const response=structuredClone(dashboard);
   response.runner={status:'complete',finished_at:new Date().toISOString(),errors:[],missed_final_games:[],
     waiting_jobs:[{game_id:'later',ready_at:'2026-10-24T09:00:00-07:00'}]};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));
   await page.goto('/');
   await expect(page.getByText('Runner recently completed',{exact:true})).toBeVisible();
   await expect(page.getByLabel('Upcoming forecast checkpoints')).toContainText('1 upcoming game');
@@ -83,7 +83,7 @@ test("historical validation is separated from prospective calibration evidence",
       team_baseline:{mae:10.36,n:532},team_candidate:{mae:10.14,n:532},
       intervals:{coverage:.779,sample_count:5661}}},
     prospective:{status:'not_ready',sample_count:0,game_count:0,minimum_games:20,minimum_samples:200}};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));
   await page.goto('/');await page.getByRole('button',{name:'Performance',exact:true}).click();
   const report=page.getByLabel('Historical model validation');
   await expect(report).toContainText('77.9%');
@@ -100,7 +100,7 @@ test("daily review shows date-specific coverage and preserves partial forecast t
     games:[{game_id:gameId,matchup:'GSW @ LAL',home_team_id:'1610612747',away_team_id:'1610612744',score:{'1610612747':100,'1610612744':98},actuals:{status:'verified'},
       stages:{final:{model_version:'test-v1',totals:{status:'partial',points_mean:180},totals_origin:'saved_forecast',game_total_error:18,
         team_total_errors:[{team_id:'1610612747',team:'LAL',forecast:90,actual:100,error:10,status:'partial'},{team_id:'1610612744',team:'GSW',forecast:90,actual:98,error:8,status:'partial'}]}},play_by_play_available:false}]}};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));await page.goto('/');
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));await page.goto('/');
   await page.getByRole('button',{name:'Performance',exact:true}).click();
   const review=page.getByLabel('Daily forecast review');
   await expect(review).toContainText('1 / 1 final boxscores');
@@ -132,7 +132,7 @@ test("daily review weighs DNPs, splits noise from model misses, and shows the ma
       stages:{final:{model_version:'test-v1',totals:{status:'complete',points_mean:190},totals_origin:'saved_forecast',game_total_error:8,team_total_errors:[]}},play_by_play_available:true}]}};
   response.daily_review_recurrence={window:{nights:14,dates:['2026-10-19','2026-10-20','2026-10-21']},policy:'Final-stage forecasts in the saved nightly reviews.',
     queue:[{code:'recurring_minutes',player_id:'7',title:'Role Changer: minutes over by 6+ on 3 straight nights',evidence:[{date:'2026-10-19'},{date:'2026-10-20'},{date:'2026-10-21'}]}]};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));await page.goto('/');
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));await page.goto('/');
   await page.getByRole('button',{name:'Performance',exact:true}).click();
   const review=page.getByLabel('Daily forecast review');
   await expect(review).toContainText('6.4 expected minutes lost');
@@ -152,7 +152,7 @@ test("player details show applied environment effects and empirical interval evi
   const response=structuredClone(dashboard);
   response.games[0].forecast.predictions[0].components={game_environment:{expected_possessions:101.2,pace_factor:1.01,defense_factor:.98,context_factor:.993},
     uncertainty:{calibration:{status:'calibrated',audit:{label:'empirical retrospective',sample_count:4024}}}};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));
   await page.route('**/api/players/101',route=>route.fulfill({json:{player_id:'101',missing_reason:'Not synchronized.'}}));
   await page.goto('/');await page.getByRole('button',{name:'Role Player',exact:false}).click();
   const environment=page.getByLabel('Game environment');
@@ -166,7 +166,7 @@ test("Refresh reloads newly available and corrected postgame evidence for the sa
   let requests = 0;
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: dashboard }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: dashboard }));
   await page.route(`**/api/postgame/${gameId}`, (route) => {
     requests += 1;
     return route.fulfill({ json: response });
@@ -192,7 +192,7 @@ test("switching games cancels a pending recap and keeps the newly selected game"
   const pending = new Promise((resolve) => { release = resolve; });
   let firstRequested;
   const requested = new Promise((resolve) => { firstRequested = resolve; });
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: {
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: {
     ...dashboard,
     games: [game, { ...game, game_id: secondId, home_tricode: "BOS", away_tricode: "NYK", forecast: null }],
   } }));
@@ -223,7 +223,7 @@ test("player outlook separates teams and places starters before bench by minutes
     ...[104,105,106,107].map((id) => ({ ...game.forecast.predictions[0], player_id: String(id), name: `Starter ${id}`, expected_minutes: 25, rotation_role: { label: "starter", recent_minutes: 25 } })),
     game.forecast.predictions[1],
   ];
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: staged }));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Los Angeles Lakers", exact: true })).toBeVisible();
   const lakers = page.locator('tbody[data-team-id="1610612747"]');
@@ -241,7 +241,7 @@ test("preliminary forecast remains selectable alongside the final checkpoint", a
   staged.games[0].forecasts = { preliminary, final };
   staged.games[0].forecast = final;
   staged.games[0].injury_capture = { games: [{ game_id: gameId, ...final.injury_check }] };
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: staged }));
   await page.goto("/");
   await page.getByRole("button", { name: "Preliminary forecast", exact: true }).click();
   await expect(page.locator(".forecast-stage-summary")).toContainText("Preliminary");
@@ -255,7 +255,7 @@ test("preliminary forecast remains selectable alongside the final checkpoint", a
 test("an open dashboard automatically shows a newly saved final forecast", async ({ page }) => {
   await page.clock.install();
   let response = structuredClone(dashboard);
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: response }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: response }));
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Final forecast", exact: true })).toBeDisabled();
   const preliminary = structuredClone(response.games[0].forecast);
@@ -276,7 +276,7 @@ test("automatic refresh preserves an explicitly selected preliminary and player 
   const final = { ...structuredClone(preliminary), stage: "final" };
   response.games[0].forecast = final;
   response.games[0].forecasts = { preliminary, final };
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: response }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: response }));
   await page.goto("/");
   await page.getByRole("button", { name: "Preliminary forecast", exact: true }).click();
   await page.getByRole("textbox", { name: "Search players" }).fill("Role Player");
@@ -298,7 +298,7 @@ test("team and game point totals follow the forecast stage and ignore player fil
   const final={...structuredClone(preliminary),stage:'final',totals:{status:'complete',points_mean:205.15,
     teams:[{...teams[0],points_mean:110.05},{...teams[1],points_mean:95.1}]}};
   response.games[0].forecasts={preliminary,final};response.games[0].forecast=final;
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));
   await page.goto('/');
   const totals=page.getByLabel('Forecast point totals');
   await expect(totals.getByLabel('Golden State Warriors point total').getByTestId('point-total')).toHaveText('110.1');
@@ -319,7 +319,7 @@ test("partial point totals disclose missing coverage and unavailable teams stay 
     {team_id:'1610612744',side:'away',status:'partial',points_mean:92.3,projected_minutes:210,projected_players:8,withheld_player_ids:['999'],unallocated_minutes:30},
     {team_id:'1610612747',side:'home',status:'unavailable',points_mean:null,projected_minutes:0,projected_players:0,withheld_player_ids:['101'],unallocated_minutes:240},
   ]};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));
   await page.goto('/');
   const totals=page.getByLabel('Forecast point totals');
   await expect(totals.getByLabel('Golden State Warriors point total')).toContainText('Partial');
@@ -342,7 +342,7 @@ test("Bucks information stays accessible with five projected starters and a visi
   g.forecast.predictions = bucks.map((p,i) => ({ ...p, status: "needs_review", availability: "unknown", points_mean: null,
     rotation_role: { label: "starter", observations: 5, recent_minutes: 40-i }, projected_starter: i < 5 }));
   g.preflight = { status: "blocked", checked_at: "2026-10-22T01:00:00Z", issues: [{ team_id: "1610612749", detail: "Official injury report does not completely cover this team for this game/date." }] };
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: staged }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: staged }));
   const errors = []; page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
   await expect(page.getByText("New forecast blocked by cross-check", { exact: true })).toBeVisible();
@@ -369,7 +369,7 @@ test('recovered zero-injury update is visible without rewriting the saved foreca
   }] };
   staged.games[0].forecast.predictions[0].status = 'needs_review';
   staged.games[0].forecast.predictions[0].points_mean = null;
-  await page.route('**/api/dashboard', route => route.fulfill({json:staged}));
+  await page.route('**/api/dashboard*', route => route.fulfill({json:staged}));
   await page.goto('/');
   const update = page.getByLabel('Latest injury information');
   await expect(update).toContainText('Los Angeles Lakers: No injuries reported');
@@ -390,7 +390,7 @@ test('roster quarantine stays visible while verified player projections remain i
     nba_only:['Peripheral Player'],espn_only:[],quarantine_player_ids:['999'],
   }]};
   staged.games[0].forecast.preflight=structuredClone(staged.games[0].preflight);
-  await page.route('**/api/dashboard',route=>route.fulfill({json:staged}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:staged}));
   await page.goto('/');
   await expect(page.getByText('Cross-check passed with roster review',{exact:true})).toBeVisible();
   await expect(page.locator('.preflight-status')).toContainText('Peripheral Player');
@@ -406,7 +406,7 @@ test('player details disclose historical scoring seasons and samples used by the
   staged.games[0].forecast.predictions[0].components={historical_prior:{seasons:[
     {season:'2023-24',games:77,ppg:28.7},{season:'2024-25',games:65,ppg:26},{season:'2025-26',games:74,ppg:26},
   ],source:{source_url:'https://site.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/99/stats'}}};
-  await page.route('**/api/dashboard',route=>route.fulfill({json:staged}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:staged}));
   await page.route('**/api/players/101',route=>route.fulfill({json:{missing_reason:'Synthetic fixture',recent_games:[]}}));
   await page.goto('/');await page.getByRole('button',{name:'Role Player',exact:false}).click();
   const prior=page.getByLabel('Historical scoring prior');
@@ -418,7 +418,7 @@ test('player details disclose historical scoring seasons and samples used by the
 test("final games show each team's score under its logo with the winner emphasized", async ({ page }) => {
   const response = structuredClone(dashboard);
   response.games[0].final_score = { home: 131, away: 126, periods: 5 };
-  await page.route("**/api/dashboard", (route) => route.fulfill({ json: response }));
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: response }));
   await page.goto("/");
   const tile = page.getByRole("button", { name: "GSW at LAL, final 126–131" });
   await expect(tile.locator(".final-score")).toHaveText(["126", "131"]);
@@ -436,7 +436,7 @@ test("live server sends one day's forecasts and the page fetches other days and 
   const response={...structuredClone(dashboard),detail_days:['2026-10-21'],default_day:'2026-10-21',
     daily_reviews:{},daily_review_dates:['2026-10-21'],games:[{...game,forecasts:{preliminary:game.forecast},forecast_stage:'preliminary'},light]};
   const dayRequests=[],reviewRequests=[];
-  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/dashboard*',route=>route.fulfill({json:response}));
   await page.route('**/api/forecasts?*',route=>{dayRequests.push(route.request().url());
     const preliminary={...game.forecast,predictions:[{...game.forecast.predictions[1],game_id:otherId,start_time:otherStart,name:'Next Day Player',player_id:'102'}]};
     route.fulfill({json:{schema_version:1,date:'2026-10-22',games:{[otherId]:{forecast_stage:'preliminary',forecasts:{preliminary},injury_capture:null,preflight:null,availability_update:null}}}});});
@@ -456,4 +456,39 @@ test("live server sends one day's forecasts and the page fetches other days and 
   await expect(review).toContainText('1 / 1 final boxscores');
   expect(reviewRequests.some(url=>url.endsWith('/api/daily-reviews/2026-10-21'))).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test("tonight's forecasts stay visible while the opening day moves to tomorrow", async ({ page }) => {
+  await page.clock.install();
+  const detail = ["forecast", "forecasts", "forecast_stage", "injury_capture", "preflight", "availability_update"];
+  const otherId = "0022600002", otherStart = "2026-10-23T02:00:00Z";
+  const tomorrow = { ...game, game_id: otherId, start_time: otherStart, status: "scheduled" };
+  for (const k of detail) delete tomorrow[k];
+  const tonight = { ...game, forecasts: { preliminary: game.forecast }, forecast_stage: "preliminary" };
+  const tonightLight = { ...game };
+  for (const k of detail) delete tonightLight[k];
+  let response = { ...structuredClone(dashboard), detail_days: ["2026-10-21"], default_day: "2026-10-21",
+    daily_reviews: {}, daily_review_dates: [], games: [tonight, tomorrow] };
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const dayRequests = [];
+  await page.route("**/api/dashboard*", (route) => route.fulfill({ json: response }));
+  await page.route("**/api/forecasts?*", async (route) => {
+    dayRequests.push(route.request().url());
+    await held;
+    await route.fulfill({ json: { schema_version: 1, date: "2026-10-21", games: { [game.game_id]: {
+      forecast_stage: "preliminary", forecasts: { preliminary: game.forecast }, injury_capture: null, preflight: null,
+      availability_update: null } } } }).catch(() => {});
+  });
+  await page.goto("/");
+  await expect(page.locator(".player-row .points").first()).toHaveText(/\d/);
+  // Tonight's games tip: the server now opens on tomorrow and sends tonight without details.
+  response = { ...response, detail_days: ["2026-10-22"], default_day: "2026-10-22",
+    games: [tonightLight, { ...tomorrow, forecasts: {}, forecast_stage: null }] };
+  await page.clock.runFor(30000);
+  await expect.poll(() => dayRequests.length).toBeGreaterThan(0);
+  // Its own fetch is still pending: the forecast it had stays on screen.
+  await expect(page.getByText("No forecast saved.", { exact: false })).toHaveCount(0);
+  await expect(page.locator(".player-row .points").first()).toHaveText(/\d/);
+  release();
 });

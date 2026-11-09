@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import re
 import threading
+import time
 from urllib.parse import parse_qs,urlsplit,unquote
 from zoneinfo import ZoneInfo
 from .validation import parse_time
@@ -69,7 +70,6 @@ _VIEWS={}        # the assembled views for one ledger state and schedule
 _RUN_VIEWS={}    # run_id -> the stage views of one immutable run, kept while a game still shows it
 _ROSTERS={}      # run_id -> (players, observed_at) of the run whose roster is the newest
 _PREDICTIONS={}  # the player pages' index, extended run by run
-_PAYLOAD={}      # the page's serialized JSON and its ETag
 
 # The forecast components the page shows (PlayerDetail); the ledger holds every
 # audit field, and the full view keeps them for Python callers such as postgame.
@@ -318,6 +318,8 @@ def default_day(games,now=None):
 
 def _compact_performance(performance):
     """The page shows each group's metrics, counts and diagnostics, not its matched rows."""
+    if not performance:
+        return performance
     return dict(performance,groups=[{k:v for k,v in g.items() if k not in ('matched','selected_forecasts','excluded','pending')}
                                     for g in performance.get('groups',[])])
 
@@ -494,6 +496,7 @@ def _cached(slot,key,build,stamped=True):
     if entry is not None and entry['key']==key and all(_stamp(p)==s for p,s in entry['extra']):
         _PAYLOADS.move_to_end(slot)
         return entry
+    started=time.time_ns()
     value,extra=build()
     stamp=value.pop('generated_at',None) if stamped else None
     stable=json.dumps(value,allow_nan=False,sort_keys=True).encode()
@@ -504,12 +507,20 @@ def _cached(slot,key,build,stamped=True):
         entry=dict(etag=etag,body=body,gzip=None)
     else:
         entry=dict(entry)
-    entry.update(key=key,extra=[(p,_stamp(p)) for p in extra])
+    # The extra files are known only after the build. One written during it (a run's profiles
+    # are saved just after the run) may postdate what the build read: it is checked again next time.
+    entry.update(key=key,extra=[(p,_unseen(p,started)) for p in extra])
     _PAYLOADS[slot]=entry
     _PAYLOADS.move_to_end(slot)
     while len(_PAYLOADS)>PAYLOAD_ENTRIES:
         _PAYLOADS.popitem(last=False)
     return entry
+
+
+def _unseen(path,started):
+    """``path``'s stamp, or None when it was modified within a second of the build starting or later."""
+    stamp=_stamp(path)
+    return None if stamp is not None and stamp[1]>=started-1_000_000_000 else stamp
 
 
 def _light_games(folder):
@@ -538,6 +549,19 @@ def _base_entry(folder,now=None):
     return _cached((str(folder),'page',None),key,build)
 
 
+def _full_entry(folder):
+    """The whole payload in main's shape (every game's details and every review), for a page that
+    does not ask for one day: a tab opened before a deploy, or a page whose build was skipped."""
+    _,games,finals=_light_games(folder)
+    details=tuple(_stamp(p) for g in games for p in _detail_files(folder,g['game_id']))
+    reviews=tuple((p.name,_stamp(p)) for p in sorted((folder/'daily-reviews').glob('????-??-??.json')))
+    key=(tuple(_stamp(folder/name) for name in BASE_FILES),_ledger_stamps(folder),finals,details,reviews)
+    def build():
+        value=dashboard_data(folder,compact=True,shared=True)
+        return value,_run_files(folder,value['games'])
+    return _cached((str(folder),'full',None),key,build)
+
+
 def _day_entry(folder,day):
     _,games,finals=_light_games(folder)
     ids=[g['game_id'] for g in games if game_day(g)==day]
@@ -562,15 +586,16 @@ def _review_entry(folder,day):
     return _cached((str(folder),'review',day),stamp,build,stamped=False)
 
 
-def dashboard_payload(directory,now=None):
+def dashboard_payload(directory,now=None,full=False):
     """The page's JSON and its ETag: the season's calendar, one game day's details (the day the
-    page opens on), the review dates and every summary report.
+    page opens on), the review dates and every summary report (``/api/dashboard?view=day``).
+    ``full`` is plain ``/api/dashboard``: every game's details and every review, as before.
 
     ``generated_at`` is when the content last changed, not when it was asked
     for, so a poll that finds nothing new revalidates to 304 and sends no body.
     """
     with _PAYLOAD_LOCK:
-        entry=_base_entry(Path(directory),now)
+        entry=_full_entry(Path(directory)) if full else _base_entry(Path(directory),now)
         return entry['etag'],entry['body']
 
 
@@ -620,8 +645,11 @@ def make_server(directory,assets,port=8765):
         def _entry(self,path,query):
             """The cached entry for a payload path, None for a missing review; ValueError for a malformed request."""
             if path=='/api/dashboard':
+                views=query.get('view',[])
+                if views not in ([],['day']):
+                    raise BadRequest('Expected view=day or no view')
                 with _PAYLOAD_LOCK:
-                    return _base_entry(folder)
+                    return _base_entry(folder) if views else _full_entry(folder)
             if path=='/api/forecasts':
                 days=query.get('date',[])
                 if len(days)!=1:
