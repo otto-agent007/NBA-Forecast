@@ -191,18 +191,23 @@ def main():
     print(f'source {source}\nledger {ledger} (newest rowid {last})\nnow {now}\n')
     wanted = args.scenarios.split(',')
     results, outputs = {}, {}
+    sidecar_name = None
     for name in wanted:
         folder = args.work / name
         _prepare(source, ledger, folder)
         if name in ('warm', 'new'):
-            shutil.copyfile(args.work / 'cold-cache.sqlite', folder / 'forecast.derived-cache.sqlite')
+            shutil.copyfile(args.work / 'cold-cache.sqlite', folder / sidecar_name)
         repo = args.main if name == 'main' else args.branch
         results[name] = _run(repo, folder, now, forget=max(0, last - args.new_runs) if name == 'new' else -1)
         if name == 'cold':
-            # Keep the cold sidecar, checkpointed, for the warm scenarios.
-            with sqlite3.connect(folder / 'forecast.derived-cache.sqlite') as conn:
+            # Keep the cold sidecar (named for the branch's code version), checkpointed, for the warm scenarios.
+            found = sorted(folder.glob('forecast.*.derived-cache.sqlite'))
+            if len(found) != 1:
+                raise SystemExit(f'cold: expected one derived sidecar, found {[p.name for p in found]}')
+            sidecar_name = found[0].name
+            with sqlite3.connect(found[0]) as conn:
                 conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
-            shutil.copyfile(folder / 'forecast.derived-cache.sqlite', args.work / 'cold-cache.sqlite')
+            shutil.copyfile(found[0], args.work / 'cold-cache.sqlite')
         outputs[name] = _outputs(folder, source)
         print(f"{name:5} total {results[name]['timings']['TOTAL'][0]:8.1f} s wall, {results[name]['timings']['TOTAL'][1]:8.1f} s CPU")
     steps = sorted({k for r in results.values() for k in r['timings'] if k != 'TOTAL'})

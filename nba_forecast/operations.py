@@ -1057,21 +1057,27 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     atomic_json(folder/'performance.json',performance)
     atomic_json(folder/'benchmarks.json',benchmark_report(db,performance))
     if active_model:
-        from .prospective_calibration import fit_prospective
+        from .prospective_calibration import fit_prospective, verify_prospective_sources
         from .prospective_margin_calibration import fit_prospective_margin, verify_margin_calibration_sources
         from .margins import CALIBRATION_FAMILY
         from .enhancements import install_artifact
-        assessed=fit_prospective(folder,active_model['model_key'],_now(),interval_family=INTERVAL_FAMILY)
+        assessed_at=_now()
+        assessed=fit_prospective(folder,active_model['model_key'],assessed_at,interval_family=INTERVAL_FAMILY)
         atomic_json(folder/'prospective-calibration-status.json',assessed)
         report['prospective_calibration']={k:assessed.get(k) for k in ('status','sample_count','game_count','minimum_games','reason')}
         report['errors'].extend(dict(task='prospective_calibration',detail=e) for e in assessed.get('collection_errors',[]))
         if assessed['status']=='ready' and assessed.get('residual_evidence_sha256')!=(active_model.get('calibration') or {}).get('residual_evidence_sha256'):
-            updated=deepcopy(active_model)
-            updated['calibration']=assessed
-            updated['known_at']=_now()
-            digest=install_artifact(folder,updated)
-            if _activate(folder,model_digest,digest,report):
-                active_model,model_digest=updated,digest
+            # The fit read the derived sidecar; an activation is fitted again from the ledger and final bytes.
+            if verify_prospective_sources(folder,assessed,assessed_at):
+                updated=deepcopy(active_model)
+                updated['calibration']=assessed
+                updated['known_at']=_now()
+                digest=install_artifact(folder,updated)
+                if _activate(folder,model_digest,digest,report):
+                    active_model,model_digest=updated,digest
+            else:
+                report['errors'].append(dict(task='prospective_calibration',
+                    detail='Ready calibration did not replay against the ledger and final bytes read directly'))
         margin_assessed=fit_prospective_margin(folder,CALIBRATION_FAMILY,_now())
         atomic_json(folder/'prospective-margin-calibration-status.json',margin_assessed)
         report['prospective_margin_calibration']={k:margin_assessed.get(k) for k in ('status','reason','sample_count','training_games','validation_games')}

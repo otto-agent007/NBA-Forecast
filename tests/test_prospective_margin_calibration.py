@@ -185,6 +185,39 @@ class ProspectiveMarginTests(unittest.TestCase):
         self.assertEqual(result['samples'],[])
         self.assertEqual(result['exclusions']['unverified_final_source'],1)
 
+    def test_repaired_official_page_is_verified_again(self):
+        # A damaged earlier archive write is replaced by the next capture (files.archive_bytes); the
+        # final file itself is unchanged, so a kept verdict keyed on it alone would keep the failure.
+        from nba_forecast.files import archive_bytes
+        self.run_row(margin=distribution('0022600001'))
+        self.final()
+        source=next((self.folder/'raw').glob('*.html'))
+        good=source.read_bytes()
+        source.write_bytes(good[:-7])
+        damaged=collect_margin_samples(self.folder,FAMILY,ASOF)
+        self.assertEqual(damaged['samples'],[])
+        self.assertEqual([e['reason'] for e in damaged['errors']],['Official box page hash differs'])
+        self.assertEqual(archive_bytes(source,good),'repaired')
+        repaired=collect_margin_samples(self.folder,FAMILY,ASOF)
+        self.assertEqual(repaired['errors'],[])
+        self.assertEqual(len(repaired['samples']),1)
+
+    def test_promotion_reads_ledger_bytes_not_the_derived_sidecar(self):
+        from nba_forecast.prospective_margin_calibration import verify_margin_calibration_sources
+        self.run_row(margin=distribution('0022600001'))
+        self.final()
+        collected=collect_margin_samples(self.folder,FAMILY,ASOF)
+        self.assertEqual(len(collected['samples']),1)
+        artifact=dict(margin_family=FAMILY,training_cutoff=ASOF,window_index=0,
+                      evidence_samples=collected['samples'],evidence_sha256=_sha(collected['samples']))
+        with patch('nba_forecast.prospective_margin_calibration.validate_margin_calibration',return_value=True):
+            self.assertTrue(verify_margin_calibration_sources(self.folder,artifact))
+            # The run's bytes change outside the store after this rebuild extracted its facts.
+            with sqlite3.connect(self.folder/'forecast.sqlite') as db:
+                db.execute('DROP TRIGGER runs_no_update')
+                db.execute("UPDATE run_records SET forecast_json=forecast_json||' ' WHERE run_id='first'")
+            self.assertFalse(verify_margin_calibration_sources(self.folder,artifact))
+
     def test_official_page_score_must_match_saved_final(self):
         self.run_row(margin=distribution('0022600001'))
         self.final()

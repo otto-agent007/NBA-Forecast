@@ -125,7 +125,7 @@ def run_ops(parsed):
     return dict(time_error=None, pre_error=None, model_key=model_key, post=post)
 
 
-def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family=None):
+def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family=None, direct=False):
     """Latest pregame prediction per game/player.
 
     With ``interval_family`` every live run whose predictions built their sd
@@ -133,13 +133,17 @@ def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interva
     exact ``model_key`` are.
 
     Each run's contribution (``run_ops``) is read from the derived sidecar, which
-    opens the ledger read-only and extracts each run once in its lifetime.
+    opens the ledger read-only and extracts each run once in its lifetime;
+    ``direct`` (an activation) reads and verifies every run's bytes on this call.
     """
     from contextlib import closing
-    from .derived_cache import open_cache
+    from .derived_cache import direct_rows, open_cache
     selected = {}
-    with closing(open_cache(db)) as cache:
-        runs = cache.rows("prospective")
+    if direct:
+        runs = direct_rows(db, "prospective")
+    else:
+        with closing(open_cache(db)) as cache:
+            runs = cache.rows("prospective")
     for run in runs:
         if run["mode"] != "live" or run["scope"] != "league":
             continue
@@ -184,7 +188,7 @@ def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interva
     return {key: entry[1] for key, entry in selected.items()}
 
 
-def collect_samples(directory, model_key, as_of, interval_family=None):
+def collect_samples(directory, model_key, as_of, interval_family=None, *, direct=False):
     """Return prospective samples, exclusion audit and saved-interval scores.
 
     With ``interval_family`` the samples pool across model keys sharing that
@@ -215,7 +219,7 @@ def collect_samples(directory, model_key, as_of, interval_family=None):
         result.update(counts=dict(counts), exclusions=dict(excluded))
         return result
     try:
-        selected = _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family)
+        selected = _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family, direct)
     except sqlite3.Error as exc:
         errors.append(dict(path=str(db), reason=str(exc)))
         result.update(counts=dict(counts), exclusions=dict(excluded))
@@ -314,7 +318,7 @@ def collect_samples(directory, model_key, as_of, interval_family=None):
     return result
 
 
-def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_games=20, interval_family=None):
+def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_games=20, interval_family=None, *, direct=False):
     """Fit a candidate artifact; frozen saved-interval assessment stays separate.
 
     Player observations within a game are dependent. The minimum game count is
@@ -323,7 +327,7 @@ def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_ga
     """
     if isinstance(minimum_games, bool) or not isinstance(minimum_games, int) or minimum_games < 1:
         raise ValueError("minimum_games must be a positive integer")
-    collection = collect_samples(directory, model_key, as_of, interval_family)
+    collection = collect_samples(directory, model_key, as_of, interval_family, direct=direct)
     artifact = fit_calibration(collection["samples"], model_key=model_key, as_of=as_of,
                                minimum_samples=minimum_samples, interval_family=interval_family)
     artifact.update(game_count=collection["counts"]["games"], minimum_games=minimum_games,
@@ -335,3 +339,19 @@ def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_ga
     if artifact["game_count"] < minimum_games:
         artifact.update(status="not_ready", reason="insufficient_games", quantile=None)
     return artifact
+
+
+def verify_prospective_sources(directory, artifact, as_of):
+    """Fit ``artifact`` again from the ledger and final bytes read and verified on this call, never the derived sidecar.
+
+    An activation installs only a fit this reproduces exactly; it differs only when
+    the sidecar's facts no longer describe the ledger's bytes.
+    """
+    try:
+        again = fit_prospective(directory, artifact["model_key"], as_of, minimum_samples=artifact["minimum_samples"],
+                                minimum_games=artifact["minimum_games"], interval_family=artifact.get("interval_family"),
+                                direct=True)
+    except (KeyError, TypeError, ValueError):
+        return False
+    encode = lambda value: json.dumps(value, sort_keys=True, default=str)
+    return encode(again) == encode(artifact)

@@ -171,15 +171,17 @@ def run_ops(parsed):
     return dict(time_error=None,ops=ops)
 
 
-def collect_margin_samples(directory,family,as_of):
+def collect_margin_samples(directory,family,as_of,*,direct=False):
     """Select each game's latest pregame run of the calibration family before opening a single final file.
 
     Each run's contribution (``run_ops``) is read from the derived sidecar, which
     opens the ledger read-only and extracts each run once in its lifetime; a final
-    page verified once is not parsed again while its final file is unchanged.
+    page verified once is not parsed again while its final file and archived page
+    files are unchanged. ``direct`` (a promotion) reads and verifies every run's
+    bytes and every final page on this call instead, as the collection always did.
     """
     from contextlib import closing
-    from .derived_cache import open_cache
+    from .derived_cache import direct_rows,open_cache
     cutoff=parse_time(as_of)
     root=Path(directory)
     result=_empty()
@@ -188,55 +190,77 @@ def collect_margin_samples(directory,family,as_of):
     db=root/'forecast.sqlite'
     if not db.exists():
         return result
+    if direct:
+        return _collect(root,family,cutoff,result,direct_rows(db,'margin'),None)
+    with closing(open_cache(db)) as cache:
+        return _collect(root,family,cutoff,result,cache.rows('margin'),cache)
+
+
+def _collect(root,family,cutoff,result,runs,cache):
     chosen={}
     counts=Counter(result['counts'])
     excluded=Counter()
-    with closing(open_cache(db)) as cache:
-        runs=cache.rows('margin')
-        for run in runs:
-            if run['mode']!='live' or run['scope']!='league':
-                continue
-            counts['live_runs']+=1
-            ops=run['value']
-            if ops['time_error'] is not None:
-                result['errors'].append(dict(run_id=run['run_id'],reason=ops['time_error']))
-                continue
-            created=parse_time(run['created_at'])
-            if created>cutoff:
-                excluded['future_run']+=1
-                continue
-            for op in ops['ops']:
-                if op[0]=='count':
-                    counts[op[1]]+=1
-                elif op[0]=='exclude':
-                    excluded[op[1]]+=1
-                elif op[0]=='item':
-                    rank=(created,run['insertion_order'])
-                    if op[1] not in chosen or rank>chosen[op[1]][0]:
-                        chosen[op[1]]=(rank,op[2])
-                else:
-                    result['errors'].append(dict(run_id=run['run_id'],reason=op[1]))
-        return _finish(root,family,cutoff,result,chosen,counts,excluded,cache)
+    for run in runs:
+        if run['mode']!='live' or run['scope']!='league':
+            continue
+        counts['live_runs']+=1
+        ops=run['value']
+        if ops['time_error'] is not None:
+            result['errors'].append(dict(run_id=run['run_id'],reason=ops['time_error']))
+            continue
+        created=parse_time(run['created_at'])
+        if created>cutoff:
+            excluded['future_run']+=1
+            continue
+        for op in ops['ops']:
+            if op[0]=='count':
+                counts[op[1]]+=1
+            elif op[0]=='exclude':
+                excluded[op[1]]+=1
+            elif op[0]=='item':
+                rank=(created,run['insertion_order'])
+                if op[1] not in chosen or rank>chosen[op[1]][0]:
+                    chosen[op[1]]=(rank,op[2])
+            else:
+                result['errors'].append(dict(run_id=run['run_id'],reason=op[1]))
+    return _finish(root,family,cutoff,result,chosen,counts,excluded,cache)
+
+
+def _archive_identity(root,rows):
+    """The archived official page and provenance files a final names, as they are on disk now (inode, size, mtime), or None."""
+    try:
+        digests={r.get('source_sha256') for r in rows if r['status']=='played'}
+    except (KeyError,TypeError,AttributeError):
+        return None
+    digest=next(iter(digests)) if len(digests)==1 else None
+    if not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest):
+        return None
+    parts=[]
+    for name in (digest+'.html',digest+'.provenance.json'):
+        try:
+            stat=(root/'raw'/name).stat()
+        except OSError:
+            return None
+        parts.append(f'{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}')
+    return '|'.join(parts)
 
 
 def _verified_final_source_once(cache,root,game_id,rows,raw_sha256):
-    """``_verified_final_source`` once per final file's bytes; an archive not found yet is looked for again next time."""
-    key=f'{game_id}|{raw_sha256}'
-    saved=cache.get('final_source',key) if cache is not None else None
+    """``_verified_final_source``; a success is kept per final file's bytes and the archived files as they are on disk.
+
+    A failure is never kept, so a page repaired later (``files.archive_bytes``) is
+    verified again; any rewrite of the archived page or its provenance changes its
+    inode, size or mtime and so the key. Without a sidecar every call verifies.
+    """
+    identity=_archive_identity(root,rows) if cache is not None else None
+    if identity is None:
+        return _verified_final_source(root,game_id,rows)
+    key=f'{game_id}|{raw_sha256}|{identity}'
+    saved=cache.get('final_source',key)
     if saved is not None:
-        if 'error' in saved[0]:
-            raise ValueError(saved[0]['error'])
-        return saved[0]['digest']
-    try:
-        digest=_verified_final_source(root,game_id,rows)
-    except FileNotFoundError:
-        raise
-    except ValueError as exc:
-        if cache is not None:
-            cache.put('final_source',key,dict(error=str(exc)))
-        raise
-    if cache is not None:
-        cache.put('final_source',key,dict(digest=digest))
+        return saved[0]
+    digest=_verified_final_source(root,game_id,rows)
+    cache.put('final_source',key,digest)
     return digest
 
 
@@ -429,7 +453,8 @@ def verify_margin_calibration_sources(directory,artifact):
     """Re-select the immutable ledger/final inputs before any promotion."""
     if not validate_margin_calibration(artifact,artifact.get('margin_family'),artifact.get('training_cutoff')):
         return False
-    collection=collect_margin_samples(directory,artifact['margin_family'],artifact['training_cutoff'])
+    # Read and verified from the ledger and archive bytes on this call, never the derived sidecar.
+    collection=collect_margin_samples(directory,artifact['margin_family'],artifact['training_cutoff'],direct=True)
     if collection['errors']:
         return False
     index=artifact['window_index']

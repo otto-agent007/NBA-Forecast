@@ -57,10 +57,12 @@ def review_facts(parsed):
                 season=_sql_json(forecast,('season',)),stage=_sql_json(forecast,('forecast_stage',)))
 
 
-def _runs(folder,game_ids):
+def _runs(folder,game_ids,*,forecast=True):
     """Live league runs that saved one of these games, in insertion order; no other run is read.
 
     Read from the derived sidecar (``derived_cache``), extracted once per run.
+    ``forecast=False`` is ``_later``'s query, which never read the forecast JSON:
+    no season or stage, and a forecast that cannot be decoded is not an error here.
     """
     from contextlib import closing
     from .derived_cache import game_ids as saved_ids,open_cache
@@ -74,6 +76,10 @@ def _runs(folder,game_ids):
         if facts['snapshot_malformed']:
             raise sqlite3.OperationalError('malformed JSON')
         if not any(gid in wanted for gid in saved_ids(facts['games'])):
+            continue
+        if not forecast:
+            yield dict(insertion_order=run['insertion_order'],run_id=run['run_id'],created_at=run['created_at'],
+                       saved_games=facts['games'])
             continue
         if facts['forecast_malformed']:
             raise sqlite3.OperationalError('malformed JSON')
@@ -492,7 +498,7 @@ def _later(folder,games,schedule,as_of):
     targets={g['game_id']:g for g in following.values()}
     runs={}
     latest={}
-    for row in _runs(folder,targets):
+    for row in _runs(folder,targets,forecast=False):
         created=parse_time(row['created_at'])
         for saved in saved_games(row['saved_games']):
             target=targets.get(saved['game_id'])
