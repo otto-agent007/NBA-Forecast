@@ -22,16 +22,29 @@ finals and their enrichment, contemporary environment finals, the saved lines
 of already-tipped games the team ratings price, collected shot files and
 archived NBA box-score pages), the game's schedule entry and rest/travel
 context and the T−30 checkpoints of the two teams' earlier games, plus the
-model, parser, validator, priors and reviews. The report is one league-wide
+model, parser, validator and priors. A game with a sourced review (`reviews/`)
+also keys on which of its entries the applied edition supersedes (an entry
+older than the edition's status for that player is skipped, so a newer edition
+repeating a line can still change the forecast); a game with a roster review
+(`roster-reviews/`) keys on the quarantine it imposes now: whether the review is
+in force (observed within six hours, not expired) and whether ESPN's and the
+official NBA rosters, read through the preflight's fifteen-minute reference
+cache while it is in force, still show the reviewed difference. The report is one league-wide
 PDF, and before 2026-11-10 its digest keyed every game, so each fifteen-minute
 edition re-forecast the whole slate: of 907 consecutive re-forecasts of a game
 on 2026-11-06 to 11-09, 823 came out identical to two decimals. A new edition
 that leaves a game's lines alone makes no run for it; its check is still
 archived under `injuries/games/GAME_ID/records/` once per edition and phase.
-A forecast kept that way drifts from what a rebuild would give only through the
-team ratings' time decay (at most 0.002 margin points on those days). Each
-edition is parsed once per tick for the keys. An unusable check still keys on a
-fifteen-minute slot (five near tipoff), so it is retried rather than never.
+A forecast kept that way is not rebuilt for inputs the key leaves out: the
+clock in the team ratings' time decay (at most 0.002 margin points on those
+days), roster fields other than membership and status (a renamed player), and
+the preflight's live ESPN cross-checks (rosters without a roster review, the
+scoreboard), which add notes or block a forecast but do not change one that
+was made. Each edition is parsed once per tick for the keys. An unusable check
+still keys on a fifteen-minute slot (five near tipoff), so it is retried rather
+than never; so does a game whose key cannot be computed (an unreadable input
+is reported as an `evidence_key` error for that game and the tick goes on), and
+an unreadable review fails that game's forecast instead of running without it.
 The T−30 final checkpoint always produces a run.
 Earlier upcoming jobs are recorded as waiting, without treating unpublished
 next-day reports as forecast failures. An early-morning game's final window
