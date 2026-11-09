@@ -18,7 +18,9 @@ def check(sha):
                             latest_report=dict(source_url='https://ak-static.cms.nba.com/referee/injury/Injury-Report_2026-10-21_01_30PM.pdf', sha256=sha))])
 
 
-class EvidenceKeyTests(unittest.TestCase):
+class TickFixture(unittest.TestCase):
+    """A one-game slate whose sources are patched; ``tick`` runs one operations tick at NOW + seconds."""
+
     def setUp(self):
         schedule = normalize_season(payload([game()]), NOW)
         schedule['version'] = 'v1'
@@ -45,6 +47,8 @@ class EvidenceKeyTests(unittest.TestCase):
              patch('nba_forecast.store._now', return_value=datetime.fromisoformat(clock)):
             return operations.run_tick(self.folder, [])
 
+
+class EvidenceKeyTests(TickFixture):
     def test_same_evidence_is_not_reforecast_and_new_report_edition_is(self):
         self.assertEqual(self.tick(0)['created_runs'], 1)
         self.assertEqual(self.tick(1000)['created_runs'], 0, 'same report, same roster: nothing to rebuild')
@@ -99,6 +103,176 @@ class EvidenceKeyTests(unittest.TestCase):
         self.assertEqual(self.tick(120)['created_runs'], 0)
         state.write_text(json.dumps(dict(version='x', captured={}, evidence={'0022600002': 'd' * 64})))
         self.assertEqual(self.tick(180)['created_runs'], 0, 'another game\'s digest is not this game\'s evidence')
+
+
+
+GAME = '0022600001'
+HOME, AWAY, ELSEWHERE = '1610612752', '1610612738', '1610612737'  # P16, P2, P1 in the fixture roster
+
+
+def edition(sha, published='2026-10-21T15:30:00+00:00'):
+    from datetime import datetime, timedelta
+    retrieved = (datetime.fromisoformat(published) + timedelta(minutes=5)).isoformat()
+    report = dict(source_url=f'https://ak-static.cms.nba.com/referee/injury/Injury-Report_{sha[:6]}.pdf', sha256=sha,
+                  published_at=published, retrieved_at=retrieved)
+    return dict(games=[dict(game_id=GAME, start_time='2026-10-22T00:00:00+00:00', checkpoint_at='2026-10-21T23:30:00+00:00',
+                            phase='preliminary', anchor_report=dict(report), latest_report=dict(report),
+                            report_status='captured_pending_review', later_report_available=False, action='x')])
+
+
+def extraction(evidence, statuses, other_rows=()):
+    """A parsed edition covering this game's two teams; ``statuses`` maps player_id -> (team, status, reported)."""
+    rows = [dict(game_id=GAME, player_id=pid, team_id=team, status=status, reported_status=reported,
+                 source_line=f'{pid} {reported} {evidence["sha256"][:4]}', source_name=pid, **evidence)
+            for pid, (team, status, reported) in statuses.items()]
+    rows += [dict(row, **evidence) for row in other_rows]
+    coverage = [dict(date='2026-10-21', matchup='BOS@NYK', team_id=t) for t in (HOME, AWAY)]
+    return dict(evidence=evidence, rows=rows, team_coverage=coverage, complete_teams=coverage, issues=[],
+                pages_complete=True, heading_matches=True)
+
+
+class PerGameEvidenceTests(TickFixture):
+    """Only what this game's forecast is built from rebuilds it."""
+
+    def setUp(self):
+        super().setUp()
+        self.parses = {}
+        self.enterContext(patch('nba_forecast.operations.pdf_text', return_value='Injury Report:'))
+        self.enterContext(patch('nba_forecast.operations.parse_report',
+                                side_effect=lambda text, schedule, roster, evidence: self.parses[evidence['sha256']](evidence)))
+        self.parses['a' * 64] = lambda e: extraction(e, {'P16': (HOME, 'out', 'Out')})
+        self.injuries.return_value = edition('a' * 64)
+
+    def records(self):
+        return sorted((self.folder / 'injuries/games' / GAME / 'records').glob('*.json'))
+
+    def test_an_edition_that_leaves_this_game_alone_makes_no_run_and_is_still_archived(self):
+        self.assertEqual(self.tick(0)['created_runs'], 1)
+        self.assertEqual(len(self.records()), 1)
+        other = dict(game_id='0022600002', player_id='P1', team_id=ELSEWHERE, status='out', reported_status='Out')
+        self.parses['b' * 64] = lambda e: extraction(e, {'P16': (HOME, 'out', 'Out')}, [other])
+        self.injuries.return_value = edition('b' * 64, published='2026-10-21T15:45:00+00:00')
+        self.assertEqual(self.tick(900)['created_runs'], 0, 'same lines for this game in a new edition')
+        self.assertEqual(len(self.records()), 2, 'the new edition was checked and archived')
+        latest = json.loads((self.folder / 'injuries/games' / GAME / 'latest.json').read_text())
+        self.assertEqual(latest['games'][0]['latest_report']['sha256'], 'b' * 64)
+        self.assertEqual(self.tick(960)['created_runs'], 0)
+        self.assertEqual(len(self.records()), 2, 'the same edition is archived once')
+
+    def test_an_edition_that_changes_this_games_lines_rebuilds(self):
+        self.assertEqual(self.tick(0)['created_runs'], 1)
+        self.parses['c' * 64] = lambda e: extraction(e, {'P16': (HOME, 'questionable', 'Questionable')})
+        self.injuries.return_value = edition('c' * 64)
+        self.assertEqual(self.tick(900)['created_runs'], 1, 'out -> questionable')
+        self.parses['d' * 64] = lambda e: extraction(e, {'P16': (HOME, 'questionable', 'Probable')})
+        self.injuries.return_value = edition('d' * 64)
+        self.assertEqual(self.tick(1800)['created_runs'], 1, 'the reported status alone is evidence')
+
+    def test_roster_moves_elsewhere_do_not_rebuild_and_on_these_teams_do(self):
+        self.assertEqual(self.tick(0)['created_runs'], 1)
+        path = self.folder / 'roster.json'
+        roster = json.loads(path.read_text())
+        for p in roster['players']:
+            if p['team_id'] == ELSEWHERE:
+                p['status'] = 'out'
+        path.write_text(json.dumps(roster))
+        self.assertEqual(self.tick(60)['created_runs'], 0, 'another team\'s player')
+        attempts = self.preflight.call_count
+        roster['players'].append(dict(player_id='P31', name='Player 31', team_id=AWAY, status='unknown'))
+        path.write_text(json.dumps(roster))
+        self.tick(120)
+        self.assertEqual(self.preflight.call_count, attempts + 1, 'a new member of this game\'s team rebuilds it')
+
+    def test_league_inputs_rebuild_and_an_upcoming_games_line_capture_does_not(self):
+        import hashlib
+        self.assertEqual(self.tick(0)['created_runs'], 1)
+        record = json.dumps(dict(game_id='0022600000', game_time='2026-10-20T23:00:00+00:00', known_at='2026-10-21T02:00:00+00:00',
+                                 home_team_id=HOME, away_team_id=ELSEWHERE)).encode()
+        finals = self.folder / 'environment-finals/records'
+        finals.mkdir(parents=True)
+        (finals / (hashlib.sha256(record).hexdigest() + '.json')).write_bytes(record)
+        self.assertEqual(self.tick(60)['created_runs'], 1, 'an environment final')
+        lines = self.folder / 'market/game-lines'
+        lines.mkdir(parents=True)
+        (lines / (GAME + '.jsonl')).write_text('{}\n')
+        self.assertEqual(self.tick(120)['created_runs'], 0, 'a capture of this upcoming game is not a preparation input')
+        (lines / '0022600000.jsonl').write_text('{}\n')
+        self.assertEqual(self.tick(180)['created_runs'], 1, 'a tipped game\'s close prices the team ratings')
+        shots = self.folder / 'shots'
+        shots.mkdir(exist_ok=True)
+        (shots / '0022600000.json').write_text(json.dumps(dict(missing_reason='Shot evidence queued for collection')))
+        self.assertEqual(self.tick(240)['created_runs'], 0, 'a pending shot file is read by no preparation')
+        (shots / '0022600000.json').write_text(json.dumps(dict(game_id='0022600000', shots=[])))
+        self.assertEqual(self.tick(270)['created_runs'], 1, 'a collected shot file')
+        raw = self.folder / 'raw'
+        raw.mkdir(exist_ok=True)
+        (raw / ('e' * 64 + '.provenance.json')).write_text(json.dumps(dict(source_url='https://official.nba.com/nba-injury-report-2026-27-season/')))
+        self.assertEqual(self.tick(300)['created_runs'], 0, 'an archive the preparation does not read')
+        (raw / ('f' * 64 + '.provenance.json')).write_text(json.dumps(dict(source_url='https://www.nba.com/game/0022600000/box-score')))
+        self.assertEqual(self.tick(360)['created_runs'], 1, 'an NBA box-score page (injury role context)')
+
+    def test_a_new_final_in_the_history_rebuilds(self):
+        from tests.test_store import actual
+        from datetime import datetime
+        def final(gid, day):
+            return [dict(actual(player), game_id=gid, game_time=f'2026-10-{day}T23:00:00Z', known_at=f'2026-10-{day + 1}T02:00:00Z')
+                    for player in ('P1', 'P2')]
+        history = final('0022500001', 18) + final('0022500002', 19)
+        def tick(seconds, rows):
+            clock = at(NOW, seconds)
+            with patch('nba_forecast.operations._now', return_value=clock), \
+                 patch('nba_forecast.store._now', return_value=datetime.fromisoformat(clock)):
+                return operations.run_tick(self.folder, rows)
+        self.assertEqual(tick(0, history[:2])['created_runs'], 1)
+        self.assertEqual(tick(60, history[:2])['created_runs'], 0)
+        self.assertEqual(tick(120, history)['created_runs'], 1, 'a final joined the history')
+
+
+class ReportStateTests(unittest.TestCase):
+    def setUp(self):
+        self.game = dict(game_id=GAME, home_team_id=HOME, away_team_id=AWAY, start_time='2026-10-22T00:00:00+00:00',
+                         home_tricode='NYK', away_tricode='BOS')
+        self.now = operations.parse_time('2026-10-21T16:00:00+00:00')
+        self.roster = dict(players=[])
+
+    def state(self, check, parse):
+        with patch('nba_forecast.operations.pdf_text', return_value='Injury Report:'), \
+             patch('nba_forecast.operations.parse_report', side_effect=lambda t, s, r, e: parse(e)):
+            return operations._report_state(Path('/nonexistent'), check, self.game, {'games': []}, self.roster, {}, self.now)
+
+    def test_edition_metadata_and_other_games_are_not_this_games_state(self):
+        a = self.state(edition('a' * 64), lambda e: extraction(e, {'P16': (HOME, 'out', 'Out')}))
+        other = dict(game_id='0022600002', player_id='P1', team_id=ELSEWHERE, status='out', reported_status='Out')
+        b = self.state(edition('b' * 64, published='2026-10-21T15:45:00+00:00'),
+                       lambda e: dict(extraction(e, {'P16': (HOME, 'out', 'Out')}, [other]),
+                                      issues=[dict(date='2026-10-21', kind='team_not_submitted', matchup='MIL@NYC', team_id=ELSEWHERE)]))
+        self.assertEqual(a, b)
+        c = self.state(edition('c' * 64), lambda e: dict(extraction(e, {'P16': (HOME, 'out', 'Out')}),
+                                                        issues=[dict(date='2026-10-21', kind='team_not_submitted', matchup='BOS@NYK', team_id=AWAY)]))
+        self.assertNotEqual(a, c, 'an issue for this matchup decides the no-injury supplement')
+
+    def test_a_stale_or_unparsed_edition(self):
+        stale = self.state(edition('a' * 64, published='2026-10-20T15:00:00+00:00'), lambda e: extraction(e, {}))
+        self.assertFalse(stale['applied'], 'more than 24 hours old: apply_report refuses it')
+        def broken(e):
+            raise ValueError('unreadable')
+        self.assertEqual(self.state(edition('b' * 64), broken), dict(edition='b' * 64))
+
+
+class LeagueInputTests(unittest.TestCase):
+    def test_once_per_tick_digest_ignores_report_and_upcoming_line_archives(self):
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        now = '2026-10-21T16:00:00+00:00'
+        first = operations._league_inputs(folder, [], None, now)
+        (folder / 'raw').mkdir()
+        (folder / 'raw' / ('a' * 64 + '.pdf')).write_bytes(b'%PDF-')
+        (folder / 'market/game-lines').mkdir(parents=True)
+        (folder / 'market/game-lines' / (GAME + '.jsonl')).write_text('{}\n')
+        self.assertEqual(operations._league_inputs(folder, [], None, now), first)
+        model = dict(team_games=[dict(game_id=GAME, game_time='2026-10-22T00:00:00+00:00')])
+        self.assertEqual(operations._league_inputs(folder, [], model, now), first, 'not tipped yet')
+        self.assertNotEqual(operations._league_inputs(folder, [], model, '2026-10-22T03:00:00+00:00'),
+                            operations._league_inputs(folder, [], None, '2026-10-22T03:00:00+00:00'), 'tipped: its close is priced')
 
 
 if __name__ == '__main__':

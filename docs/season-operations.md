@@ -11,9 +11,28 @@ backdates a missed capture. `injuries/status.json` exposes waiting, captured
 or retrying state to the dashboard.
 
 Each scheduled game gets preliminary forecasts before its final window,
-starting at 9 AM Pacific on its game date and rebuilt whenever its evidence
-changes: a new official report edition for the game, ESPN's injury list, or the
-roster. The T−30 final checkpoint always produces a run.
+starting at 9 AM Pacific on its game date and rebuilt whenever what that
+game's forecast is built from changes (`operations._evidence_key`): its own
+lines in the official report edition it applies (the two teams' statuses and
+reported statuses, their coverage of the game, the completeness flags and the
+issues the no-injury supplement consults, and whether the edition is applied
+at all), ESPN's injury list for the game, the two teams' roster members and
+statuses, the league-wide preparation inputs (the merged history with captured
+finals and their enrichment, contemporary environment finals, the saved lines
+of already-tipped games the team ratings price, collected shot files and
+archived NBA box-score pages), the game's schedule entry and rest/travel
+context and the T−30 checkpoints of the two teams' earlier games, plus the
+model, parser, validator, priors and reviews. The report is one league-wide
+PDF, and before 2026-11-10 its digest keyed every game, so each fifteen-minute
+edition re-forecast the whole slate: of 907 consecutive re-forecasts of a game
+on 2026-11-06 to 11-09, 823 came out identical to two decimals. A new edition
+that leaves a game's lines alone makes no run for it; its check is still
+archived under `injuries/games/GAME_ID/records/` once per edition and phase.
+A forecast kept that way drifts from what a rebuild would give only through the
+team ratings' time decay (at most 0.002 margin points on those days). Each
+edition is parsed once per tick for the keys. An unusable check still keys on a
+fifteen-minute slot (five near tipoff), so it is retried rather than never.
+The T−30 final checkpoint always produces a run.
 Earlier upcoming jobs are recorded as waiting, without treating unpublished
 next-day reports as forecast failures. An early-morning game's final window
 still opens at T−30, even before 9 AM. At tipoff minus 30 minutes, the next automatic
@@ -150,7 +169,8 @@ derived service has recovered its report edition, ESPN close and Kalshi close
 (below); older and recovered misses stay on the record and in the dashboard's
 count without marking every later tick.
 Later PDF editions are archived as
-separate evidence. To deliberately revise after a later change, provide new
+separate evidence (and, when they change a game's lines inside the final
+window, make another final-stage run). To deliberately revise after a later change, provide new
 sourced review input before tipoff; the original run remains immutable.
 
 After an outage, `python -m nba_forecast recover-evidence --directory DIR
@@ -214,11 +234,18 @@ An idle tick does little work. Live runs are rescored only when one of their
 (`evaluation-state.json`). Performance, benchmarks, calibration, postgame and
 daily reviews are the derived service's job, not the tick's: `python -m
 nba_forecast derived` runs from its own one-minute timer (`nba-derived.timer`,
-at :30, below the tick's CPU priority) and rebuilds them only when the ledger,
-finals contents, archived box scores or play-by-play, calendar games, active
-model, roster presence, Pacific date, code or an explicit request
+at :30, below the tick's CPU priority) and rebuilds them only when the
+evaluations, finals contents, archived box scores or play-by-play, calendar
+games, active model, roster presence, Pacific date, code or an explicit request
 (`derived-request.json`, written by a tick that recovered run artifacts)
-changes, and at least every six hours. A rebuild takes minutes (on 2026-10-28
+changes, and at least every six hours. New forecast runs alone rebuild them at
+most every 30 minutes (`DERIVED_RUNS_REFRESH_SECONDS`): a pregame run changes
+no scored figure (the market report covers finished games; accuracy and
+calibration move when a run is scored), so only the lists of unscored
+forecasts (performance's pending groups, today's daily review, the calibration
+collection counts) wait up to half an hour. Before 2026-11-10 every new run
+set off a full rebuild, and the service rebuilt 180 times in 58.6 hours on
+2026-11-07 to 11-09, back to back from the 9 AM forecasts to the last final. A rebuild takes minutes (on 2026-10-28
 the performance report alone took 84 s and the ticks that rebuilt took 5 to 10
 minutes, so near-tip Kalshi captures were skipped and the T−30 checkpoints ran
 late); beside the tick it costs the checkpoints and captures nothing. The tick
@@ -236,7 +263,8 @@ forecast, so before 2026-11-02 every game of a slate replayed every source of
 the season twice: a forecast cost 30 to 35 s, 23 to 30 of them in that
 preparation, and a fifteen-game slate 8 minutes per injury-report edition,
 beyond the tick's ten-minute start limit (the NBA publishes an edition every
-fifteen minutes on a game day, and each edition re-forecasts the slate). Now
+fifteen minutes on a game day, and until 2026-11-10 each edition re-forecast the
+slate). Now
 each source is replayed once per tick process and each league-wide history
 map built once per history object (`nba_forecast/replay_cache.py`): the first
 game of a tick pays the replays (about 20 s), each further game 6 to 8 s, and
