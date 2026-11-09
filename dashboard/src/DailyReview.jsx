@@ -62,7 +62,8 @@ function EvidenceTable({rows,onPlayer}) {
       <td>{number(p.predicted.minutes)}</td><td>{number(p.actual?.minutes)}</td><td>{number(p.predicted.pts)}</td><td>{number(p.actual?.pts)}</td></tr>)}</tbody></table></div>;
 }
 
-export default function DailyReview({report,recurrence,date,onGame,onPlayer}) {
+export default function DailyReview({report,pending,recurrence,date,onGame,onPlayer}) {
+  if(!report && pending) return <section className="performance-group" aria-label="Daily forecast review"><h3>Daily review</h3><p role="status">Loading the daily review for {date}…</p></section>;
   if(!report) return <section className="performance-group" aria-label="Daily forecast review"><h3>Daily review</h3><p>No daily review saved for {date || "this date"}.</p></section>;
   const final=report.stages.final,metrics=final.projected,paired=report.paired_stages;
   return <section className="performance-group daily-review" aria-label="Daily forecast review">

@@ -427,3 +427,33 @@ test("final games show each team's score under its logo with the winner emphasiz
   await expect(matchup.locator(".final-score.won")).toHaveText("131");
   await expect(matchup).toContainText("Final/OT");
 });
+
+test("live server sends one day's forecasts and the page fetches other days and review nights on demand",async({page})=>{
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const otherId='0022600002',otherStart='2026-10-23T02:00:00Z';
+  const light={...game,game_id:otherId,start_time:otherStart,status:'scheduled'};
+  delete light.forecast;
+  const response={...structuredClone(dashboard),detail_days:['2026-10-21'],default_day:'2026-10-21',
+    daily_reviews:{},daily_review_dates:['2026-10-21'],games:[{...game,forecasts:{preliminary:game.forecast},forecast_stage:'preliminary'},light]};
+  const dayRequests=[],reviewRequests=[];
+  await page.route('**/api/dashboard',route=>route.fulfill({json:response}));
+  await page.route('**/api/forecasts?*',route=>{dayRequests.push(route.request().url());
+    const preliminary={...game.forecast,predictions:[{...game.forecast.predictions[1],game_id:otherId,start_time:otherStart,name:'Next Day Player',player_id:'102'}]};
+    route.fulfill({json:{schema_version:1,date:'2026-10-22',games:{[otherId]:{forecast_stage:'preliminary',forecasts:{preliminary},injury_capture:null,preflight:null,availability_update:null}}}});});
+  await page.route('**/api/daily-reviews/*',route=>{reviewRequests.push(route.request().url());
+    route.fulfill({json:{date:'2026-10-21',status:'complete',coverage:{scheduled_games:1,verified_finals:1,final_forecasts:1,play_by_play_games:0},
+      stages:{final:{projected:{count:10,points_mae:4.25,minutes_mae:5.88,interval80_coverage:.64},projected_dnp:{count:0,minutes:0,points:0},model_versions:{},largest_misses:[]}},
+      paired_stages:{count:0},improvement_queue:[],games:[]}});});
+  await page.goto('/');
+  await expect(page.getByRole('button',{name:'Role Player',exact:false})).toBeVisible();
+  expect(dayRequests).toEqual([]);
+  await page.getByLabel('Game date',{exact:true}).fill('2026-10-22');
+  await expect(page.getByRole('button',{name:'Next Day Player',exact:false})).toBeVisible();
+  expect(dayRequests.some(url=>url.endsWith('/api/forecasts?date=2026-10-22'))).toBe(true);
+  await page.getByLabel('Game date',{exact:true}).fill('2026-10-21');
+  await page.getByRole('button',{name:'Performance',exact:true}).click();
+  const review=page.getByLabel('Daily forecast review');
+  await expect(review).toContainText('1 / 1 final boxscores');
+  expect(reviewRequests.some(url=>url.endsWith('/api/daily-reviews/2026-10-21'))).toBe(true);
+  expect(errors).toEqual([]);
+});
