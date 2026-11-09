@@ -221,7 +221,14 @@ model, roster presence, Pacific date, code or an explicit request
 changes, and at least every six hours. A rebuild takes minutes (on 2026-10-28
 the performance report alone took 84 s and the ticks that rebuilt took 5 to 10
 minutes, so near-tip Kalshi captures were skipped and the T−30 checkpoints ran
-late); beside the tick it costs the checkpoints and captures nothing. The tick
+late); beside the tick it costs the checkpoints and captures nothing. A
+rebuild reads only the runs saved since the last one: what each report takes
+from a run is extracted once, when the run is first seen, into
+`forecast.derived-cache.sqlite` beside the ledger (`derived_cache`). A run's
+stored digests are checked against its bytes at extraction, and each rebuild
+checks again the 32 runs checked longest ago, so every run is checked again
+within a week. The file is disposable: deleting it, or deploying other code,
+costs the next rebuild a full extraction and gives the same reports. The tick
 carries the last rebuild's summary, errors and warnings into its report
 (`derived_reports`, `derived-reports.json`); the service writes
 `last-derived.json` and appends `derived.jsonl`, and each tick report lists its

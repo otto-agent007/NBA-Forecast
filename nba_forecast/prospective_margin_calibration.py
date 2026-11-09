@@ -113,8 +113,73 @@ def _verified_final_source(root,game_id,rows):
     return digest
 
 
+_CAUGHT=(KeyError,ValueError,TypeError,OverflowError,AttributeError)
+
+
+def run_ops(parsed):
+    """What one live league run contributes once its creation is before the cutoff, as ordered operations.
+
+    ``parsed`` is a ``derived_cache.Parsed`` row. ``count``/``exclude`` add one to a
+    counter, ``item`` offers a game's saved distribution to the selection, ``error``
+    ends the run with its reason: the order collect_margin_samples meets them in.
+    """
+    row=parsed.row
+    try:
+        created=parse_time(row['created_at'])
+    except _CAUGHT as exc:
+        return dict(time_error=str(exc))
+    ops=[]
+    try:
+        if any(parsed.digest(k)!=row[k+'_sha256'] for k in ('snapshot','forecast')):
+            raise ValueError('Immutable run hash differs')
+        forecast=parsed.forecast()
+        if not isinstance(forecast.get('model_key'),str) or not forecast['model_key']:
+            if forecast.get('margin_forecasts'):
+                raise ValueError('Run with margin distributions lacks a model key')
+            ops.append(['exclude','unkeyed_run'])  # runs before model keys existed carry no margin distribution
+            return dict(time_error=None,ops=ops)
+        if forecast.get('margin_forecasts'):
+            ops.append(['count','model_runs'])
+        snapshot=parsed.snapshot()
+        if not parse_time(row['as_of'])==parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])<=created:
+            raise ValueError('Run observation chronology differs')
+        if forecast['season']!=snapshot['season']:
+            raise ValueError('Season identity differs')
+        games=snapshot['games']
+        distributions=forecast.get('margin_forecasts',[])
+        if not isinstance(games,list) or not isinstance(distributions,list):
+            raise ValueError('Game or margin list is malformed')
+        for game in games:
+            gid=game['game_id']
+            start=parse_time(game['start_time'])
+            if created>=start:
+                ops.append(['exclude','not_pregame'])
+                continue
+            if game.get('season_type')!='Regular Season':
+                continue
+            if not gid.startswith('002') or len(gid)!=10 or not gid.isdigit():
+                raise ValueError('Invalid NBA game ID')
+            candidates=[d for d in distributions if d.get('game_id')==gid]
+            if len(candidates)>1:
+                raise ValueError('Duplicate saved margin distribution')
+            ops.append(['item',gid,dict(game=game,distribution=candidates[0] if candidates else None,
+                season=snapshot['season'],run_id=row['run_id'],created_at=row['created_at'],
+                forecast_sha256=row['forecast_sha256'],model_key=forecast['model_key'],
+                parameters=((snapshot.get('model_enhancements') or {}).get('margin_inputs') or {}).get('parameters'))])
+    except _CAUGHT as exc:
+        ops.append(['error',str(exc)])
+    return dict(time_error=None,ops=ops)
+
+
 def collect_margin_samples(directory,family,as_of):
-    """Select each game's latest pregame run of the calibration family before opening a single final file."""
+    """Select each game's latest pregame run of the calibration family before opening a single final file.
+
+    Each run's contribution (``run_ops``) is read from the derived sidecar, which
+    opens the ledger read-only and extracts each run once in its lifetime; a final
+    page verified once is not parsed again while its final file is unchanged.
+    """
+    from contextlib import closing
+    from .derived_cache import open_cache
     cutoff=parse_time(as_of)
     root=Path(directory)
     result=_empty()
@@ -126,60 +191,56 @@ def collect_margin_samples(directory,family,as_of):
     chosen={}
     counts=Counter(result['counts'])
     excluded=Counter()
-    with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
-        conn.row_factory=sqlite3.Row
-        conn.execute('PRAGMA query_only=ON')
-        for row in conn.execute("SELECT rowid AS insertion_order,run_id,created_at,as_of,snapshot_json,"
-                                "snapshot_sha256,forecast_json,forecast_sha256 FROM runs "
-                                "WHERE mode='live' AND scope='league'"):
+    with closing(open_cache(db)) as cache:
+        runs=cache.rows('margin')
+        for run in runs:
+            if run['mode']!='live' or run['scope']!='league':
+                continue
             counts['live_runs']+=1
-            try:
-                created=parse_time(row['created_at'])
-                if created>cutoff:
-                    excluded['future_run']+=1
-                    continue
-                if any(hashlib.sha256(row[k+'_json'].encode()).hexdigest()!=row[k+'_sha256']
-                       for k in ('snapshot','forecast')):
-                    raise ValueError('Immutable run hash differs')
-                forecast=json.loads(row['forecast_json'])
-                if not isinstance(forecast.get('model_key'),str) or not forecast['model_key']:
-                    if forecast.get('margin_forecasts'):
-                        raise ValueError('Run with margin distributions lacks a model key')
-                    excluded['unkeyed_run']+=1  # runs before model keys existed carry no margin distribution
-                    continue
-                if forecast.get('margin_forecasts'):
-                    counts['model_runs']+=1
-                snapshot=json.loads(row['snapshot_json'])
-                if not parse_time(row['as_of'])==parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])<=created:
-                    raise ValueError('Run observation chronology differs')
-                if forecast['season']!=snapshot['season']:
-                    raise ValueError('Season identity differs')
-                games=snapshot['games']
-                distributions=forecast.get('margin_forecasts',[])
-                if not isinstance(games,list) or not isinstance(distributions,list):
-                    raise ValueError('Game or margin list is malformed')
-                for game in games:
-                    gid=game['game_id']
-                    start=parse_time(game['start_time'])
-                    if created>=start:
-                        excluded['not_pregame']+=1
-                        continue
-                    if game.get('season_type')!='Regular Season':
-                        continue
-                    if not gid.startswith('002') or len(gid)!=10 or not gid.isdigit():
-                        raise ValueError('Invalid NBA game ID')
-                    candidates=[d for d in distributions if d.get('game_id')==gid]
-                    if len(candidates)>1:
-                        raise ValueError('Duplicate saved margin distribution')
-                    item=dict(game=game,distribution=candidates[0] if candidates else None,
-                        season=snapshot['season'],run_id=row['run_id'],created_at=row['created_at'],
-                        forecast_sha256=row['forecast_sha256'],model_key=forecast['model_key'],
-                        parameters=((snapshot.get('model_enhancements') or {}).get('margin_inputs') or {}).get('parameters'))
-                    rank=(created,row['insertion_order'])
-                    if gid not in chosen or rank>chosen[gid][0]:
-                        chosen[gid]=(rank,item)
-            except (KeyError,ValueError,TypeError,OverflowError,AttributeError) as exc:
-                result['errors'].append(dict(run_id=row['run_id'],reason=str(exc)))
+            ops=run['value']
+            if ops['time_error'] is not None:
+                result['errors'].append(dict(run_id=run['run_id'],reason=ops['time_error']))
+                continue
+            created=parse_time(run['created_at'])
+            if created>cutoff:
+                excluded['future_run']+=1
+                continue
+            for op in ops['ops']:
+                if op[0]=='count':
+                    counts[op[1]]+=1
+                elif op[0]=='exclude':
+                    excluded[op[1]]+=1
+                elif op[0]=='item':
+                    rank=(created,run['insertion_order'])
+                    if op[1] not in chosen or rank>chosen[op[1]][0]:
+                        chosen[op[1]]=(rank,op[2])
+                else:
+                    result['errors'].append(dict(run_id=run['run_id'],reason=op[1]))
+        return _finish(root,family,cutoff,result,chosen,counts,excluded,cache)
+
+
+def _verified_final_source_once(cache,root,game_id,rows,raw_sha256):
+    """``_verified_final_source`` once per final file's bytes; an archive not found yet is looked for again next time."""
+    key=f'{game_id}|{raw_sha256}'
+    saved=cache.get('final_source',key) if cache is not None else None
+    if saved is not None:
+        if 'error' in saved[0]:
+            raise ValueError(saved[0]['error'])
+        return saved[0]['digest']
+    try:
+        digest=_verified_final_source(root,game_id,rows)
+    except FileNotFoundError:
+        raise
+    except ValueError as exc:
+        if cache is not None:
+            cache.put('final_source',key,dict(error=str(exc)))
+        raise
+    if cache is not None:
+        cache.put('final_source',key,dict(digest=digest))
+    return digest
+
+
+def _finish(root,family,cutoff,result,chosen,counts,excluded,cache=None):
     counts['selected_games']=len(chosen)
     for gid,(_,item) in sorted(chosen.items()):
         game=item['game']
@@ -218,7 +279,7 @@ def collect_margin_samples(directory,family,as_of):
                 excluded['incomplete_final']+=1
                 continue
             try:
-                _verified_final_source(root,gid,rows)
+                _verified_final_source_once(cache,root,gid,rows,hashlib.sha256(raw).hexdigest())
             except FileNotFoundError:
                 excluded['unverified_final_source']+=1
                 continue
