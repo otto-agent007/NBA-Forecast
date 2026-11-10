@@ -15,6 +15,9 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `clutch.py` | Whether clutch shooting persists year to year beyond a player's season shooting, against what chance alone gives | the NBA clutch archive (`datasets/clutch-2026-10-22`), the gate's histories |
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
 | `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
+| `path_scoreboards.py` | The baseline and production paths side by side: levels pooled and per season, the close on the same games, the gate's paired production-minus-baseline differences, and the winner Brier under the published distribution's home-win probability | two references' `scoreboard.json` and `rows.json.gz` |
+| `export_production_artifact.py` | Whether a dataset artifact still matches what production runs (every field `backtest --production-path` reads), and the export of the live one for it | an operations directory (read only) |
+| `live_inputs.py` | What live forecasts carry that the production-path replay does not build: historical priors, shot quality, role context, lineups, calibration, margin status | an operations directory's saved runs (read only) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 
 ## Reproduced on 2026-10-26

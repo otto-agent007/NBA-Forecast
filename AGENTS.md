@@ -36,9 +36,35 @@ gating it (`docs/backtest.md`). A change that improves the
 backtest is then also expected to show up in the live `performance.json`
 benchmarks after enough games; both are reported, neither is hidden.
 
-When a change is merged, commit its scoreboard as the new reference
-(`datasets/backtest-<date>/`, both files) and point this file at it. See
-`docs/backtest.md` for what the replay can and cannot measure.
+That command replays the baseline path. Production forecasts go through
+`candidate.forecast_candidate` as well (minutes redistribution, pace and
+defense budgets, rest and travel), so every model change is also replayed on
+the production path, against its own reference, in about thirty-five minutes:
+
+```bash
+python -m nba_forecast backtest \
+  --history datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history.json.gz datasets/regular-season-expanded-2026-10-22/history.json.gz \
+  --team-games datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz datasets/model-upgrade-2026-10-23/team-games.json.gz \
+  --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
+  --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
+  --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
+  --output /tmp/backtest-production-$(date +%Y%m%d-%H%M) \
+  --reference datasets/backtest-2026-11-09-production-path
+```
+
+A change must not be `worse` on either path, by the rules above. A change
+inside the production-only layers (`candidate.py`, `rotation_allocation.py`,
+`game_environment.py`, `context_effects.py`, the artifact's parameters or
+context model) leaves the baseline replay identical and is judged on the
+production path. The backtest refuses a reference replayed on the other path.
+
+When a change is merged, commit both scoreboards as the new references
+(`datasets/backtest-<date>/` and `datasets/backtest-<date>-production-path/`,
+both files each) and point this file at them. A live artifact with new
+parameters or a new context model is exported with
+`scripts/research/export_production_artifact.py` and gets a new
+production-path reference. See `docs/backtest.md` for what each replay can and
+cannot measure.
 
 ## Before changing the model
 
