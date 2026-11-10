@@ -1,5 +1,6 @@
 """The scoreboard replays a season from earlier game days and judges changes against noise."""
 import gzip
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -348,8 +349,8 @@ class BacktestTests(unittest.TestCase):
                 expected, _ = margins.blended_location(teams[gid, home] - teams[gid, away], edge, ratings, home, away)
                 self.assertAlmostEqual(location, expected)
 
-    def test_the_production_path_reads_only_earlier_games_and_moves_the_forecast(self):
-        from nba_forecast import candidate
+    def _production_inputs(self):
+        """The season as the production path needs it, and a model artifact."""
         counts = ('minutes', 'fgm', 'fga', 'fg3m', 'fg3a', 'ftm', 'fta', 'tov', 'pts', 'reb', 'ast', 'stl', 'blk')
         # The production path validates history strictly: a did-not-play row has zero counts.
         history = [r if r['status'] == 'played' else dict(r, **dict.fromkeys(counts, 0)) for r in self.history]
@@ -364,6 +365,11 @@ class BacktestTests(unittest.TestCase):
         artifact = dict(model_version='regular-season-baseline-0.5.0', model_key='k' * 64, known_at='2026-01-01T00:00:00Z',
                         parameters=dict(pace_strength=.25, defense_strength=1., context_strength=.5, rotation_enabled=True,
                                         context_features_enabled=True), context_model=None, excluded_history_game_ids=[])
+        return history, records, artifact
+
+    def test_the_production_path_reads_only_earlier_games_and_moves_the_forecast(self):
+        from nba_forecast import candidate
+        history, records, artifact = self._production_inputs()
         seen, real = [], candidate.forecast_candidate
         def spy(snapshot, history):
             seen.append(snapshot)
@@ -385,6 +391,73 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual((production['model_path'], baseline['model_path']), ('production', 'baseline'))
         self.assertEqual(production['parameters']['production_artifact']['parameters'], artifact['parameters'])
         self.assertNotEqual([r[5] for r in rows['p']], [r[5] for r in rows['b']])  # pace and defense move points
+
+    def test_a_reference_from_the_other_path_is_refused_unless_the_paths_are_what_is_compared(self):
+        history, records, artifact = self._production_inputs()
+        seasons = [dict(history=history, records=records)]
+        run = lambda out, **options: backtest.run_seasons(seasons, out, warmup_fraction=.5, as_of=AS_OF, **options)
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / 'artifact.json').write_text(json.dumps(artifact))
+            source = dict(path='artifact.json', sha256=backtest.sha256_of(d / 'artifact.json'))
+            production = run(d / 'p', artifact=artifact, artifact_source=source)
+            run(d / 'b')
+            # Refused before anything is replayed: a path difference would read as a change.
+            with self.assertRaisesRegex(ValueError, 'baseline-path scoreboard and this replay is the production path'):
+                run(d / 'x', artifact=artifact, reference=d / 'b')
+            with self.assertRaisesRegex(ValueError, 'production-path scoreboard and this replay is the baseline path'):
+                run(d / 'x', reference=d / 'p')
+            self.assertFalse((d / 'x').exists())
+            # A scoreboard saved before the production path existed is a baseline one.
+            (d / 'old').mkdir()
+            (d / 'old' / 'rows.json.gz').write_bytes((d / 'b' / 'rows.json.gz').read_bytes())
+            board = json.loads((d / 'b' / 'scoreboard.json').read_text())
+            del board['model_path']
+            (d / 'old' / 'scoreboard.json').write_text(json.dumps(board))
+            with self.assertRaisesRegex(ValueError, 'baseline-path scoreboard'):
+                run(d / 'x', artifact=artifact, reference=d / 'old')
+            self.assertEqual(run(d / 'b2', reference=d / 'old')['comparison']['reference_model_path'], 'baseline')
+            same = run(d / 'p2', artifact=artifact, reference=d / 'p')
+            crossed = run(d / 'c', artifact=artifact, reference=d / 'b', cross_path=True)
+        recorded = production['parameters']['production_artifact']
+        self.assertEqual({k: recorded[k] for k in source}, source)
+        self.assertEqual(recorded['context_model_sha256'], hashlib.sha256(b'null').hexdigest())
+        self.assertEqual((same['comparison']['reference_model_path'], same['comparison']['verdict']), ('production', 'within_noise'))
+        self.assertNotIn('cross_path', same['comparison'])
+        self.assertEqual({same['comparison'][k]['mean'] for k in ('points', 'minutes', 'team_points', 'margin', 'participation',
+                                                                  'interval_score')}, {0})
+        self.assertIn(', production path): WITHIN_NOISE', backtest.format_scoreboard(same))
+        self.assertEqual((crossed['comparison']['reference_model_path'], crossed['comparison']['cross_path']), ('baseline', True))
+        self.assertIn('the production path against a baseline-path reference', backtest.format_scoreboard(crossed))
+
+    def test_the_command_records_the_artifact_file_and_does_not_gate_a_comparison_of_the_paths(self):
+        import contextlib
+        import io
+        from nba_forecast.__main__ import main
+        history, records, artifact = self._production_inputs()
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for name, value in (('history', history), ('team-games', records), ('artifact', artifact)):
+                (d / (name + '.json')).write_text(json.dumps(value))
+            inputs = ['backtest', '--history', str(d / 'history.json'), '--team-games', str(d / 'team-games.json'), '--warmup-fraction', '.5']
+            production = ['--production-path', str(d / 'artifact.json')]
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                codes = [main(inputs + ['--output', str(d / 'b')]),
+                         main(inputs + production + ['--output', str(d / 'x'), '--reference', str(d / 'b')]),
+                         main(inputs + production + ['--output', str(d / 'c'), '--reference', str(d / 'b'), '--cross-path', '--json'])]
+            self.assertEqual(codes, [0, 2, 0])
+            self.assertIn('baseline-path scoreboard and this replay is the production path', err.getvalue())
+            self.assertFalse((d / 'x').exists())
+            board = json.loads((d / 'c' / 'scoreboard.json').read_text())
+            self.assertEqual(board['parameters']['production_artifact']['path'], str(d / 'artifact.json'))
+            self.assertEqual(board['parameters']['production_artifact']['sha256'], backtest.sha256_of(d / 'artifact.json'))
+            # Exit code 3 is the gate's: a worse verdict between the two paths is a measurement.
+            for comparison, code in ((dict(verdict='worse'), 3), (dict(verdict='worse', cross_path=True), 0)):
+                with unittest.mock.patch.object(backtest, 'run_seasons', return_value=dict(comparison=comparison)), \
+                        contextlib.redirect_stdout(out):
+                    self.assertEqual(main(inputs + ['--output', str(d / 'unused'), '--json']), code)
+        self.assertTrue(board['comparison']['cross_path'])
 
     def test_refuses_future_known_sources_and_a_used_output(self):
         with self.assertRaisesRegex(ValueError, 'future-known'):

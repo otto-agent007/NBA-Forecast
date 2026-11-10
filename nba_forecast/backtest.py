@@ -769,10 +769,13 @@ def _subset(rows, game_ids):
 
 
 def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=None, as_of=None, progress=None,
-                artifact=None):
+                artifact=None, artifact_source=None, cross_path=False):
     """Replay each season on its own and score them together; write and return the scoreboard.
 
-    With a model ``artifact`` every season replays production's path (``replay``).
+    With a model ``artifact`` every season replays production's path (``replay``);
+    ``artifact_source`` (the file's ``path`` and ``sha256``) is recorded beside it.
+    A reference replayed on the other path is refused before anything is replayed,
+    unless ``cross_path`` says the difference between the paths is what is wanted.
 
     Each season is a dict of ``history``, ``records`` and optional ``sources``,
     ``market``, ``injuries`` and the previous season's ``previous_history`` and
@@ -790,6 +793,14 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
     out = Path(output)
     if out.exists() and any(out.iterdir()):
         raise ValueError('output directory exists and is not empty')
+    model_path = 'production' if artifact else 'baseline'
+    ref_board = read_json(Path(reference) / 'scoreboard.json') if reference is not None else None
+    # A scoreboard saved before the production path existed is a baseline one.
+    reference_path = ref_board.get('model_path', 'baseline') if ref_board is not None else None
+    if reference_path not in (None, model_path) and not cross_path:
+        raise ValueError(f'{reference} is a {reference_path}-path scoreboard and this replay is the {model_path} path: '
+                         'a change is judged against the reference of its own path (AGENTS.md); '
+                         '--cross-path compares the two paths instead')
     rows = dict(version=VERSION, player_fields=list(PLAYER_FIELDS), team_fields=list(TEAM_FIELDS), game_fields=list(GAME_FIELDS),
                 players=[], teams=[], games=[])
     parts, dates, totals, skipped = [], {}, dict(total=0, evaluated=0), defaultdict(int)
@@ -823,15 +834,18 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
     scoreboard = dict(
         schema_version=1, version=VERSION, created_at=as_of,
         model_version=artifact['model_version'] if artifact else MODEL_VERSION,
-        model_path='production' if artifact else 'baseline',
+        model_path=model_path,
         code_sha256=package_digest(Path(__file__).parent),
         sources=parts[0]['sources'] if len(parts) == 1 else [p['sources'] for p in parts],
         parameters=dict(warmup_fraction=warmup_fraction, limit=limit,
                         interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80,
                         **({'previous_season_seeded': [bool(s.get('previous_records')) for s in seasons]}
                            if any(s.get('previous_records') for s in seasons) else {}),
-                        **(dict(production_artifact=dict(model_version=artifact['model_version'], model_key=artifact['model_key'],
-                                                         parameters=artifact['parameters'])) if artifact else {})),
+                        **(dict(production_artifact=dict(
+                            model_version=artifact['model_version'], model_key=artifact['model_key'],
+                            parameters=artifact['parameters'],
+                            context_model_sha256=hashlib.sha256(canonical(artifact.get('context_model'))).hexdigest(),
+                            **(artifact_source or {}))) if artifact else {})),
         games=dict(totals, skipped=dict(skipped)),
         metrics=summarize(rows['players'], rows['teams'], rows['games']),
         limitations=INJURY_LIMITATIONS if with_injuries else LIMITATIONS)
@@ -847,11 +861,12 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
             season_by_game={r['game_id']: p['label'] for s, p in zip(seasons, parts) for r in s['records']})
     if reference is not None:
         ref_rows = read_json(Path(reference) / 'rows.json.gz')
-        ref_board = read_json(Path(reference) / 'scoreboard.json')
         ungated = LIMIT_UNGATED if limit else None
         scoreboard['comparison'] = dict(reference=str(reference), reference_created_at=ref_board.get('created_at'),
                                         reference_code_sha256=ref_board.get('code_sha256'),
                                         reference_model_version=ref_board.get('model_version'),
+                                        reference_model_path=reference_path,
+                                        **({'cross_path': True} if reference_path != model_path else {}),
                                         **compare(rows, ref_rows, dates, ungated=ungated))
         if len(parts) > 1:
             for part in parts:
@@ -936,8 +951,12 @@ def format_scoreboard(board):
                          + ', '.join(f"{k} {v['played']}/{v['players']}" for k, v in av['by_status'].items()))
     c = board.get('comparison')
     if c:
-        lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}): {c['verdict'].upper()}"
-                     + (' (pooled over seasons)' if board.get('seasons') else ''))
+        lines.append(f"vs reference ({c['reference_model_version']} {str(c['reference_code_sha256'])[:12]}"
+                     + (f", {c['reference_model_path']} path" if c.get('reference_model_path') else '')
+                     + f"): {c['verdict'].upper()}" + (' (pooled over seasons)' if board.get('seasons') else ''))
+        if c.get('cross_path'):
+            lines.append(f"  the {board.get('model_path', 'baseline')} path against a {c['reference_model_path']}-path reference: "
+                         'the difference between the paths, not a gate verdict')
         for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner', 'interval_score'):
             item = c.get(name, {})
             if item.get('mean') is not None:

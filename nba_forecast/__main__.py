@@ -150,7 +150,8 @@ def _parser():
     backtest.add_argument('--injuries', nargs='+', help='Anchor injury reports for the replayed games (datasets/injury-reports-*/statuses.json.gz), one per season')
     backtest.add_argument('--previous-history', nargs='+', help="Each season's previous season of box scores, seeding the history (one per season)")
     backtest.add_argument('--previous-team-games', nargs='+', help="Each season's previous season of team games, seeding the ratings (one per season)")
-    backtest.add_argument('--production-path', metavar='ARTIFACT', help="Replay production's path with this model artifact's parameters and context model (datasets/model-upgrade-2026-10-23/artifact.json.gz)")
+    backtest.add_argument('--production-path', metavar='ARTIFACT', help="Replay production's path with this model artifact's version, parameters and context model (datasets/production-artifact-2026-11-09/artifact.json.gz)")
+    backtest.add_argument('--cross-path', action='store_true', help='Allow a --reference replayed on the other path: the difference between the paths, not a gate (exit code 0)')
     backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
@@ -300,9 +301,12 @@ def main(argv=None):
                                     sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
             artifact = read_source(args.production_path) if args.production_path else None
             board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction, artifact=artifact,
+                                artifact_source=dict(path=str(args.production_path), sha256=sha256_of(args.production_path)) if artifact else None,
+                                cross_path=args.cross_path,
                                 limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
             print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
-            return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
+            comparison = board.get('comparison', {})
+            return 3 if comparison.get('verdict') == 'worse' and not comparison.get('cross_path') else 0
         elif args.command == 'dedupe-histories':
             import fcntl
             from .store import dedupe_histories
