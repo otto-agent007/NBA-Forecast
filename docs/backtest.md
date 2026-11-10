@@ -1017,8 +1017,8 @@ The same layer replay with the change: the turnover layer −0.060 ± 0.012 (tea
 projected volume matches the actual: FGA 88.43 against 88.63 (−0.20 ± 0.18), FTA 22.18 against
 21.83 (+0.36 ± 0.18), turnovers 13.17 against 12.99 (+0.18 ± 0.10). The other layers are
 unchanged to the reported precision. One case remains: where the FGA budget leaves room, the
-turnover additions pass at its scale even when the allocator placed almost no shots, because
-its shots were limited by the recipients' caps rather than the budget. Turnovers still
+turnover additions pass at its scale even when the allocator itself placed almost no shots
+(the scale follows the budget, not the share of vacated shots placed). Turnovers still
 survive in 89 of the 1,738 team-games, −1.17 points on each and −0.060 a team-game overall;
 in `espn-401585608` (team 1610612764) teammates gained 0.14 FGA and 4.85 turnovers, −4.34
 points. Scaling the turnovers by the shots placed over the shots vacated would close it; it
