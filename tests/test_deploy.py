@@ -42,6 +42,7 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active, 'a dry run writes nothing')
             self.assertFalse((root / 'deployed.json').exists())
             self.assertFalse((units / 'nba-derived.timer').exists())
+            self.assertFalse((units / 'nba-capture.timer').exists())
             import sqlite3
             self.assertEqual(sqlite3.connect(root / 'forecast.sqlite').execute('PRAGMA journal_mode').fetchone()[0], 'delete')
             result = D.deploy(root, units, systemd=False)
@@ -65,6 +66,10 @@ class DeployTests(unittest.TestCase):
             self.assertIn(f'-m nba_forecast derived --directory "{root}"', derived)
             self.assertIn('Nice=10', derived)
             self.assertIn('Unit=nba-derived.service', (units / 'nba-derived.timer').read_text())
+            capture = (units / 'nba-capture.service').read_text()
+            self.assertIn(f'-m nba_forecast capture --directory "{root}"', capture)
+            self.assertIn(f'WorkingDirectory={root / "runner-releases" / digest}', capture)
+            self.assertIn('OnCalendar=*-*-* *:*:45', (units / 'nba-capture.timer').read_text())
             recorded = json.loads((root / 'deployed.json').read_text())
             self.assertEqual((recorded['package_sha256'], recorded['artifact_sha256']), (digest, result['artifact_sha256']))
             self.assertEqual(recorded['previous']['artifact_sha256'], old_active)
@@ -134,6 +139,21 @@ class DeployTests(unittest.TestCase):
             reader.rollback()
             reader.close()
             self.assertEqual(D.deploy(root, units, systemd=False, wait=2)['ledger_journal_mode'], 'wal')
+
+    def test_deploy_enables_each_timer_it_creates_and_only_those(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _, units = production(root)
+            (units / 'nba-derived.service').write_text('[Service]\nWorkingDirectory=/old/release\nExecStart=x\n')
+            (units / 'nba-derived.timer').write_text('[Timer]\nOnCalendar=*-*-* *:*:30\n')  # a host from PR #17: derived units only
+            with patch('nba_forecast.deploy.subprocess.run') as run, patch('nba_forecast.deploy._git', return_value=('c' * 40, False)):
+                result = D.deploy(root, units, systemd=True)
+            self.assertEqual(result['units_created'], ['nba-capture.service', 'nba-capture.timer'])
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertIn(['systemctl', '--user', 'enable', '--now', 'nba-capture.timer'], commands)
+            self.assertNotIn(['systemctl', '--user', 'enable', '--now', 'nba-derived.timer'], commands)
+            self.assertIn('nba-derived.service', result['units_rewritten'])
 
     def test_a_unit_without_one_working_directory_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

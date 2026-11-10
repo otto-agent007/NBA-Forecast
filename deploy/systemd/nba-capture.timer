@@ -1,0 +1,11 @@
+[Unit]
+Description=Capture NBA market lines every minute at :45, fifteen seconds before each tick reads the saved injury-list digests
+
+[Timer]
+OnCalendar=*-*-* *:*:45
+AccuracySec=1s
+Persistent=true
+Unit=nba-capture.service
+
+[Install]
+WantedBy=timers.target

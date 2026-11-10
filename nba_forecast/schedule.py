@@ -288,6 +288,24 @@ def fetch_verified_secondary_schedule(cached,directory,as_of):
     return result
 
 
+def saved_calendar(folder):
+    """The calendar the ticks are using, from disk alone: the day's ESPN-verified copy while it is in use, else the saved NBA calendar.
+
+    Returns ``(schedule, source)``; the schedule is None until the first tick saves one.
+    The derived and capture services read it this way, without the tick's imports.
+    """
+    folder=Path(folder)
+    read=lambda path,default:json.loads(path.read_text()) if path.exists() else default
+    saved=read(folder/'schedule/latest.json',None)
+    if saved is None:
+        return None,None
+    if read(folder/'schedule/fetch-state.json',{}).get('source')=='espn':
+        verified=read(folder/'schedule/secondary/verified-latest.json',None)
+        if verified and verified.get('crosscheck',{}).get('nba_base_version')==saved.get('version'):
+            return verified,'espn_verified_cached_nba'
+    return saved,'saved_nba'
+
+
 def due_jobs(schedule,now,*,include_waiting=False):
     now=parse_time(now)
     jobs=[]
@@ -309,6 +327,13 @@ def due_jobs(schedule,now,*,include_waiting=False):
             if waiting:
                 jobs[-1].update(waiting=True,ready_at=ready.isoformat())
     return jobs
+
+
+def upcoming_games(schedule,now):
+    """The games the tick captures market lines for: every scheduled game tipping within 24 hours,
+    including those still waiting for the 9 AM forecast checkpoint (``due_jobs`` with waiting jobs)."""
+    by_id={g['game_id']:g for g in schedule['games']}
+    return [by_id[j['game_id']] for j in due_jobs(schedule,now,include_waiting=True)]
 
 
 def game_context(schedule,game_id):

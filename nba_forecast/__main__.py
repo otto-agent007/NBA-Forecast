@@ -133,6 +133,10 @@ def _parser():
     derived = sub.add_parser('derived', help='Rebuild the derived reports (performance, calibration, postgame, daily reviews, market) when their inputs changed; the derived service runs this every minute')
     derived.add_argument('--directory', required=True)
     derived.add_argument('--output')
+    capture = sub.add_parser('capture', help='Capture market lines (ESPN, Kalshi game lines and player props) for the upcoming games of the saved calendar; the capture service runs this every minute')
+    capture.add_argument('--directory', required=True)
+    capture.add_argument('--output', help='Write the full report to this new file')
+    capture.add_argument('--full-report', action='store_true', help='Print the full report instead of the one-line summary')
     benchmarks = sub.add_parser('benchmarks')
     benchmarks.add_argument('--db', required=True)
     benchmarks.add_argument('--output')
@@ -272,6 +276,13 @@ def main(argv=None):
             from .operations import run_derived
             value=run_derived(args.directory)
             exit_code=0 if value['status']!='error' and not value['errors'] else 2
+        elif args.command == 'capture':
+            from .capture import run_capture, summary_line
+            value=run_capture(args.directory)
+            exit_code=0 if value['status']!='error' else 2
+            if not args.output and not args.full_report:
+                print(json.dumps(summary_line(value), sort_keys=True, allow_nan=False))
+                return exit_code
         elif args.command == 'benchmarks':
             from .benchmarks import benchmark_report
             value=benchmark_report(args.db)

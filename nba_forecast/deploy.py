@@ -14,10 +14,11 @@ Each step is idempotent, so a second run after a success changes nothing:
 4. store write-ahead logging in the ledger (``PRAGMA journal_mode=WAL``), retrying
    while a reader such as a dashboard request holds the file; the derived
    service's long reads then never hold up the tick's commits;
-5. write the units this release needs that the host lacks (the derived service
-   and its timer, from ``nba_forecast.units``), rewrite ``WorkingDirectory`` in
-   every service unit, reload systemd, restart the dashboard and enable a new
-   timer: the timers run the new release on their next tick;
+5. write the units this release needs that the host lacks (the derived and
+   capture services and their timers, from ``nba_forecast.units``), rewrite
+   ``WorkingDirectory`` in every service unit, reload systemd, restart the
+   dashboard and enable each new timer: the timers run the new release on their
+   next tick;
 6. write ``deployed.json``: the commit, package digest, release, artifact, time,
    the ledger's journal mode and the units written or rewritten.
 
@@ -47,7 +48,7 @@ from .model_versions import REFINED_VERSION
 from .prospective_margin_calibration import validate_margin_calibration
 from .refinement_upgrade import build_artifact
 from .runner_release import package_digest, pin_release
-from .units import CREATED_BY_DEPLOY, SERVICES, derived_units
+from .units import CREATED_BY_DEPLOY, SERVICES, created_units
 
 UNITS = SERVICES  # each has a WorkingDirectory to point at the release
 LOCKS = ('tick.lock', 'derived.lock')
@@ -154,7 +155,7 @@ def _missing_units(units):
 
 def _create_units(units, release, directory):
     """Write the units this release needs that the host does not have yet, pointed at the release."""
-    files = derived_units(sys.executable, release, directory)
+    files = created_units(sys.executable, release, directory)
     created = _missing_units(units)
     for name in created:
         units.mkdir(parents=True, exist_ok=True)
@@ -209,8 +210,8 @@ def deploy(directory, units, *, systemd=True, dry_run=False, package=PACKAGE, wa
         atomic_json(directory / 'deployed.json', plan)
     if systemd and 'nba-dashboard.service' in rewritten:
         subprocess.run(['systemctl', '--user', 'restart', 'nba-dashboard.service'], check=True)
-    if systemd and 'nba-derived.timer' in created:
-        subprocess.run(['systemctl', '--user', 'enable', '--now', 'nba-derived.timer'], check=True)
+    for timer in [name for name in created if name.endswith('.timer')] if systemd else []:
+        subprocess.run(['systemctl', '--user', 'enable', '--now', timer], check=True)
     return plan
 
 
