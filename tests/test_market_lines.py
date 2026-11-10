@@ -161,7 +161,7 @@ class ReportTests(unittest.TestCase):
             finals = [dict(game_id=GAME['game_id'], team_id='H', pts=60), dict(game_id=GAME['game_id'], team_id='H', pts=55),
                       dict(game_id=GAME['game_id'], team_id='A', pts=50), dict(game_id=GAME['game_id'], team_id='A', pts=58)]
             (folder / 'finals' / (GAME['game_id'] + '.json')).write_text(json.dumps(finals))
-            selected = {(GAME['game_id'], 'final'): dict(run_id='r1', totals=dict(points_mean=224, teams=[
+            selected = {(GAME['game_id'], 'final'): dict(run_id='r1', totals=dict(status='complete', points_mean=224, teams=[
                 dict(team_id='H', side='home', points_mean=114), dict(team_id='A', side='away', points_mean=110)]),
                 margin_forecast=dict(home_win_probability=.6))}
             report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z', selected=selected)
@@ -182,7 +182,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(diagnostic['overall']['slope']['status'], 'insufficient_games')
         self.assertEqual(diagnostic['persistent']['team_seasons'], 2)
         self.assertAlmostEqual(s['winner']['model_brier'], .16)
-        # Without an estimated margin forecast the run published its player sum.
+        # Without an estimated margin forecast a run with complete team totals published its player sum.
         self.assertEqual((row['model_margin_basis'], row['player_sum_margin']), ('player_sum', 4))
 
     def test_the_model_margin_is_the_published_one_not_the_player_sum(self):
@@ -193,7 +193,7 @@ class ReportTests(unittest.TestCase):
             finals = [dict(game_id=GAME['game_id'], team_id='H', pts=115), dict(game_id=GAME['game_id'], team_id='A', pts=108)]
             (folder / 'finals' / (GAME['game_id'] + '.json')).write_text(json.dumps(finals))
             # Player sum +4; the published margin blends it with the team rating to +6.
-            selected = {(GAME['game_id'], 'final'): dict(run_id='r1', totals=dict(points_mean=224, teams=[
+            selected = {(GAME['game_id'], 'final'): dict(run_id='r1', totals=dict(status='complete', points_mean=224, teams=[
                 dict(team_id='H', side='home', points_mean=114), dict(team_id='A', side='away', points_mean=110)]),
                 margin_forecast=dict(status='estimated', mean_margin=6., home_win_probability=.6))}
             report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z', selected=selected)
@@ -202,6 +202,38 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((row['spread_edge'], row['margin_abs_error']), (3.5, dict(model=1., market=4.5)))
         self.assertEqual(report['summary']['spread_leans']['edge>=3']['picks'], 1)
         self.assertEqual(report['summary']['margin_abs_error']['model'], 1.)
+
+    def test_a_partial_roster_player_sum_is_not_a_game_margin(self):
+        # Hawks at Pacers, 2026-11-02: the last final run projected seven Pacers for 60.9 points; the
+        # difference of its partial totals, -55.7, was scored as the model margin.
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            (folder / 'finals').mkdir()
+            M.record_game_lines(folder, M.extract_game_lines(summary(), GAME, '2026-27', META), '2026-10-23T21:00:30Z')
+            finals = [dict(game_id=GAME['game_id'], team_id='H', pts=108), dict(game_id=GAME['game_id'], team_id='A', pts=112)]
+            (folder / 'finals' / (GAME['game_id'] + '.json')).write_text(json.dumps(finals))
+            broken = dict(run_id='r2', totals=dict(status='partial', points_mean=177.5, teams=[
+                dict(team_id='H', side='home', status='partial', points_mean=60.9),
+                dict(team_id='A', side='away', status='complete', points_mean=116.6)]),
+                margin_forecast=dict(status='unavailable', reason='incomplete_team_totals', mean_margin=None))
+            report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z',
+                                     selected={(GAME['game_id'], 'final'): broken})
+            self.assertEqual(report['games'], [])
+            self.assertEqual(report['summary']['margin_unavailable'],
+                             [dict(game_id=GAME['game_id'], run_id='r2', stage='final', reason='incomplete_team_totals')])
+            # The game's latest earlier run with complete totals is scored instead (daily_review._selected).
+            estimated = dict(run_id='r1', stage='preliminary', totals=dict(status='complete', points_mean=226, teams=[
+                dict(team_id='H', side='home', status='complete', points_mean=107.3),
+                dict(team_id='A', side='away', status='complete', points_mean=118.7)]),
+                margin_forecast=dict(status='estimated', mean_margin=-11.4, player_sum_margin=-12., home_win_probability=.2))
+            report = M.market_report(folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z',
+                                     selected={(GAME['game_id'], 'final'): dict(broken, margin_selection=estimated)})
+        row = report['games'][0]
+        self.assertEqual((row['run_id'], row['stage'], row['model_margin'], row['model_margin_basis'], row['model_total']),
+                         ('r1', 'preliminary', -11.4, 'margin_forecast', 226))
+        self.assertEqual(row['superseded'], dict(run_id='r2', stage='final', reason='incomplete_team_totals'))
+        self.assertAlmostEqual(row['margin_abs_error']['model'], 7.4)
+        self.assertEqual(report['summary']['margin_unavailable'], [])
 
 
 class CaptureBudgetTests(unittest.TestCase):

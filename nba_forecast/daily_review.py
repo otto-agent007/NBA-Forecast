@@ -47,7 +47,10 @@ def _selected(folder,games,as_of,season):
     """Freeze one entire run per game/stage before opening any outcome file.
 
     Runs are ranked from the ledger columns and the saved game identities; only
-    the chosen run per game and stage is opened, verified and returned.
+    the chosen run per game and stage is opened, verified and returned. When the
+    chosen run (final, else preliminary) saved incomplete team totals it publishes
+    no game margin (market_lines.published_margin); the latest earlier pregame run
+    of the game with complete totals is then opened too, as its ``margin_selection``.
     """
     db=folder/'forecast.sqlite'
     chosen={}
@@ -57,12 +60,15 @@ def _selected(folder,games,as_of,season):
     with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
         conn.row_factory=sqlite3.Row
         ranked={}
-        columns="created_at,json_extract(forecast_json,'$.season') AS season,json_extract(forecast_json,'$.forecast_stage') AS stage,json_extract(snapshot_json,'$.games') AS saved_games"
+        complete={}
+        columns=("created_at,json_extract(forecast_json,'$.season') AS season,json_extract(forecast_json,'$.forecast_stage') AS stage,"
+                 "json_extract(snapshot_json,'$.games') AS saved_games,json_extract(forecast_json,'$.game_totals') AS saved_totals")
         for row in _runs(conn,games,columns):
             created=parse_time(row['created_at'])
             stage=row['stage'] or 'preliminary'
             if created>cutoff or row['season']!=season or stage not in ('preliminary','final'):
                 continue
+            totals={t.get('game_id') for t in json.loads(row['saved_totals'] or '[]') if t.get('status')=='complete'}
             for saved in json.loads(row['saved_games']):
                 game=games.get(saved['game_id'])
                 if not game or game.get('status') in ('postponed','cancelled','tbd'):
@@ -76,7 +82,10 @@ def _selected(folder,games,as_of,season):
                 key=(game['game_id'],stage)
                 if key not in ranked or rank>ranked[key]:
                     ranked[key]=rank
-        for (gid,stage),rank in sorted(ranked.items()):
+                if game['game_id'] in totals:
+                    complete.setdefault(game['game_id'],[]).append((rank,stage))
+
+        def frozen(gid,rank):
             game=games[gid]
             start=parse_time(game['start_time'])
             row=conn.execute('SELECT run_id,created_at,as_of,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE rowid=?',(rank[1],)).fetchone()
@@ -92,12 +101,26 @@ def _selected(folder,games,as_of,season):
             predictions=[p for p in forecast['predictions'] if p['game_id']==gid]
             if any(p['team_id'] not in (game['home_team_id'],game['away_team_id']) or parse_time(p['start_time'])!=start for p in predictions):
                 raise ValueError('Frozen prediction identity differs: '+row['run_id'])
-            chosen[(gid,stage)]=dict(rank=rank,run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
+            return dict(rank=rank,run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
                 model_version=forecast['model_version'],model_key=forecast.get('model_key'),season=forecast['season'],
                 forecast_sha256=row['forecast_sha256'],predictions=predictions,
                 totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==gid),None),
                 margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==gid),None),
                 lineups=snapshot.get('preflight',{}).get('lineups'))
+
+        for (gid,stage),rank in sorted(ranked.items()):
+            chosen[(gid,stage)]=frozen(gid,rank)
+        from .market_lines import published_margin
+        for gid in sorted({gid for gid,_ in ranked}):
+            selection=chosen.get((gid,'final')) or chosen[(gid,'preliminary')]
+            if published_margin(selection,games[gid])[0] is not None:
+                continue
+            earlier=[(rank,stage) for rank,stage in complete.get(gid,[]) if rank<selection['rank']]
+            if earlier:
+                rank,stage=max(earlier)
+                fallback=frozen(gid,rank)
+                if published_margin(fallback,games[gid])[0] is not None:
+                    selection['margin_selection']=dict(fallback,stage=stage)
     return chosen
 
 

@@ -316,6 +316,34 @@ def _record(picks):
                 win_rate=wins / (wins + losses) if wins + losses else None)
 
 
+def published_margin(selection, game):
+    """The game margin a saved run publishes: (margin, basis, player-sum margin, reason).
+
+    The margin forecast's location when it is estimated; otherwise the player-sum
+    difference, but only of two complete team totals. A partial total sums only the
+    players the run could project, so its difference is not a game margin (Hawks at
+    Pacers, 2026-11-02: seven Pacers projected for 60.9 points published -55.7; the
+    close was -10.5, the game's earlier estimated forecast -11.4 and the result -4).
+    Such a run publishes no margin (``None``, basis ``unavailable``, with the reason).
+    """
+    totals = selection.get('totals') or {}
+    teams = {t.get('side') or ('home' if t['team_id'] == game['home_team_id'] else 'away'): t for t in totals.get('teams', [])}
+    home, away = (teams.get(side, {}).get('points_mean') for side in ('home', 'away'))
+    finite = lambda value: isinstance(value, (int, float)) and math.isfinite(value)
+    margin_forecast = selection.get('margin_forecast') or {}
+    saved = margin_forecast.get('player_sum_margin')
+    # Reconciled team totals already differ by the margin (scoreline.py); the player
+    # model's own difference is the one the margin forecast saved.
+    player_sum = saved if finite(saved) else home - away if finite(home) and finite(away) else None
+    published = margin_forecast.get('mean_margin') if margin_forecast.get('status') == 'estimated' else None
+    if finite(published):
+        return published, 'margin_forecast', player_sum, None
+    if totals.get('status') == 'complete' and player_sum is not None:
+        return player_sum, 'player_sum', player_sum, None
+    reason = 'incomplete_team_totals' if totals else margin_forecast.get('reason') or 'no_team_totals'
+    return None, 'unavailable', player_sum, reason
+
+
 def market_report(folder, schedule, as_of=None, *, selected=None):
     """Compare each game's latest pregame forecast with the closing line and the final score.
 
@@ -323,9 +351,12 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     box score: the model's margin and total against the spread and the total,
     the record of model leans at several edge thresholds, and the head-to-head
     error of model versus market against the actual result. The model margin is
-    the published one (``model_margin_basis``), with the player-sum difference
-    beside it. A lean is 'home' when the model margin exceeds the market margin
-    by the threshold.
+    the published one (``model_margin_basis``, ``published_margin``), with the
+    player-sum difference beside it. When the selected run publishes no margin
+    (incomplete team totals), the game is scored on the latest earlier pregame run
+    that does (``daily_review._selected``), the row naming the run it replaced; a
+    game without one is listed under ``margin_unavailable``, not scored. A lean is
+    'home' when the model margin exceeds the market margin by the threshold.
     """
     from .daily_review import _selected
     from .kalshi_lines import closing_kalshi_line, read_kalshi_lines
@@ -335,6 +366,7 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     chosen = selected if selected is not None else _selected(folder, games, as_of, schedule.get('season'))
     rows = []
     errors = []
+    unavailable = []
     for gid, game in sorted(games.items(), key=lambda item: item[1]['start_time']):
         selection = chosen.get((gid, 'final')) or chosen.get((gid, 'preliminary'))
         try:
@@ -348,22 +380,24 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
         finals = json.loads(final_path.read_text())
         home_pts = sum(r['pts'] for r in finals if r['team_id'] == game['home_team_id'])
         away_pts = sum(r['pts'] for r in finals if r['team_id'] == game['away_team_id'])
+        stage = 'final' if (gid, 'final') in chosen else 'preliminary'
+        superseded = None
+        model_margin, basis, player_sum_margin, reason = published_margin(selection, game)
+        if model_margin is None:
+            if not selection.get('margin_selection'):
+                unavailable.append(dict(game_id=gid, run_id=selection['run_id'], stage=stage, reason=reason))
+                continue
+            superseded = dict(run_id=selection['run_id'], stage=stage, reason=reason)
+            selection = selection['margin_selection']
+            stage = selection['stage']
+            model_margin, basis, player_sum_margin, _ = published_margin(selection, game)
         totals = selection.get('totals') or {}
         teams = {t.get('side') or ('home' if t['team_id'] == game['home_team_id'] else 'away'): t for t in totals.get('teams', [])}
-        if not teams.get('home') or not teams.get('away') or teams['home'].get('points_mean') is None or teams['away'].get('points_mean') is None:
+        if (model_margin is None or not teams.get('home') or not teams.get('away')
+                or teams['home'].get('points_mean') is None or teams['away'].get('points_mean') is None):
             continue
         model_total = teams['home']['points_mean'] + teams['away']['points_mean']
         margin_forecast = selection.get('margin_forecast') or {}
-        # Reconciled team totals already differ by the margin (scoreline.py); the player
-        # model's own difference is the one the margin forecast saved.
-        saved = margin_forecast.get('player_sum_margin')
-        player_sum_margin = (saved if isinstance(saved, (int, float)) and math.isfinite(saved)
-                             else teams['home']['points_mean'] - teams['away']['points_mean'])
-        # The published margin is the margin forecast's location (the player sum blended with
-        # the team rating); a run without an estimated margin forecast published the player sum.
-        published = margin_forecast.get('mean_margin') if margin_forecast.get('status') == 'estimated' else None
-        basis = 'margin_forecast' if isinstance(published, (int, float)) and math.isfinite(published) else 'player_sum'
-        model_margin = published if basis == 'margin_forecast' else player_sum_margin
         model_home_win = margin_forecast.get('home_win_probability')
         if model_home_win is None and margin_forecast.get('status') == 'estimated':
             from .margins import probability_above
@@ -385,13 +419,15 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             market_margin = -spread if spread is not None else None
             row = dict(game_id=gid, start_time=game['start_time'], provider=line['provider'], provider_id=pid,
                        season=schedule.get('season'), home_team_id=game['home_team_id'], away_team_id=game['away_team_id'],
-                       run_id=selection['run_id'], stage='final' if (gid, 'final') in chosen else 'preliminary',
+                       run_id=selection['run_id'], stage=stage,
                        model_margin=model_margin, model_margin_basis=basis,
                        player_sum_margin=player_sum_margin, model_total=model_total, model_home_win=model_home_win,
                        spread_home=spread, total_line=total, home_moneyline=home_ml, away_moneyline=away_ml,
                        actual_margin=actual_margin, actual_total=actual_total,
                        market_margin=market_margin, line_captured_at=line['captured_at'],
                        close_recovered=bool(line.get('recovered_close')))
+            if superseded:
+                row['superseded'] = superseded
             if market_margin is not None:
                 row['spread_edge'] = model_margin - market_margin
                 cover = actual_margin + spread
@@ -412,7 +448,7 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                            kalshi_abs_error=abs(kalshi['implied_home_margin'] - actual_margin))
             rows.append(row)
     from .close_teacher import live_diagnostics
-    summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows),
+    summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows), margin_unavailable=unavailable,
                    close_teacher=live_diagnostics(rows, schedule.get('season')))
     spread_rows = [r for r in rows if 'spread_edge' in r]
     total_rows = [r for r in rows if 'total_edge' in r]

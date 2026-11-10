@@ -92,7 +92,7 @@ class KalshiTests(unittest.TestCase):
         (self.folder / 'finals').mkdir()
         finals = [dict(game_id=espn['game_id'], team_id='H', pts=115), dict(game_id=espn['game_id'], team_id='A', pts=108)]
         (self.folder / 'finals' / (espn['game_id'] + '.json')).write_text(json.dumps(finals))
-        selected = {(espn['game_id'], 'final'): dict(run_id='r1', totals=dict(points_mean=224, teams=[
+        selected = {(espn['game_id'], 'final'): dict(run_id='r1', totals=dict(status='complete', points_mean=224, teams=[
             dict(team_id='H', side='home', points_mean=114), dict(team_id='A', side='away', points_mean=110)]),
             margin_forecast=dict(home_win_probability=.6))}
         report = M.market_report(self.folder, dict(season='2026-27', games=[espn]), '2026-10-24T05:00:00Z', selected=selected)
