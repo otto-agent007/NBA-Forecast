@@ -160,3 +160,34 @@ per run (median over the 30, `nice -n 19` on the busy host): the added
 `_validate_forecast` of the whole forecast 24 ms, all of `stored_forecast` (JSON
 round trip of snapshot and forecast plus that validation) 132 ms, `save_run`'s own
 validation of the stored shape 17 ms.
+
+On the fresh copy (`scratch/2026-11-09-rebuild/production-copy-1109`, copied
+2026-11-10T10:11:59Z, 4106 runs, 16.80 GB), after the B2-1 fix:
+`stored_run_bytes.py --runs 8 --step 60` (runs of 11-08 to 11-10):
+`forecast_json` 2.228 MB, off-game rows 0.981 (44.0%), the game's rows 0.981,
+the rest 0.267 (`allocation_audit` 0.234); `snapshot_json` 1.139 MB, other
+teams' roster 0.096 (8.4%); `profiles.json` 0.914, 0.843 of it other teams'
+players; evaluation `report_json` 162–168 kB, 39.3–39.7 kB of it `no_game`
+exclusions. Ledger rows 808 → 573 MB a day at 240 runs (−235 MB), run files
+1027 → 792 MB. A compaction of what is stored would remove about 4.03 GB of
+the ledger's `forecast_json` (4106 runs), 0.29 GB of `report_json` (7372
+revisions) and 4.03 GB of `forecast.json` files (estimates: sample mean times
+count).
+`stored_forecast_equivalence.py --sample-days 5 --per-day 3 --replay all`: 29
+runs of 11-06 to 11-10 UTC (14 final, 15 preliminary, four model keys), 18
+slim, 11 kept as stored; main and the branch recompute the same bytes 29/29;
+21/29 reproduce their stored forecast exactly (every run of model keys
+`bed6565e` and `0168f8c3`), the 8 of 11-06 and 11-07 (keys `717925c7`,
+`35523790`) differ under main the same way in `game_totals`,
+`margin_forecasts` and `predictions`, and both validators reject them the same
+way; all 18 slim runs saved through the branch's `save_run`, 18/18 equal to the
+stored forecast in every top-level key and game row; evaluations differ only in
+`sample_counts.predictions`, `sample_counts.excluded` and `excluded` (487.9
+entries fewer, 166.2 → 126.7 kB), main writes the same revisions 29/29 from the
+mixed ledger, and the full ledger's reports equal production's own 29/29;
+derived reports 154 of 162 files identical, the rest only off-slate counters,
+the stored hash and digests over it (7/7 recomputed; the refitted interval
+calibration artifact differs only in `off_slate` and
+`residual_evidence_sha256`, hence its file name and `artifact_sha256`); main on
+the mixed ledger writes the same 165 files; dashboard game payloads equal
+1206/1206 (12 showing a slim run). RESULT OK.
