@@ -14,6 +14,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `previous_ids.py` | A previous season's box scores under the next season's player IDs, for seeding 2025-26 from ESPN's 2024-25 | the two histories |
 | `clutch.py` | Whether clutch shooting persists year to year beyond a player's season shooting, against what chance alone gives | the NBA clutch archive (`datasets/clutch-2026-10-22`), the gate's histories |
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
+| `dashboard_compare_servers.py` | Serves one frozen operations copy from main and from this branch and checks every game's calendar fields, each day's details, the other top-level keys and the daily reviews are equal; page and endpoint timings | a frozen production copy, two checkouts |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 
 ## Reproduced on 2026-10-26
