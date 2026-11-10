@@ -9,8 +9,11 @@ Use a frozen copy (never the live production directory: its files change
 between requests). Both servers open the ledger read-only (URI mode=ro).
 
 Checks (exit 1 on any mismatch):
+- plain /api/dashboard on the branch (what a page built before the branch asks
+  for) equals main's payload in full, except generated_at; any other view value
+  answers 400;
 - every game's calendar fields (everything but the detail fields) on the branch
-  page equal main's;
+  page (/api/dashboard?view=day, what the branch's page asks for) equal main's;
 - for every game day, /api/forecasts?date=D on the branch returns exactly main's
   detail fields (forecast_stage, forecasts, injury_capture, preflight,
   availability_update) for that day's games, and no other games;
@@ -19,8 +22,9 @@ Checks (exit 1 on any mismatch):
   and the branch's new keys detail_days, default_day, daily_review_dates);
 - daily_review_dates equals main's review dates, and /api/daily-reviews/D equals
   main's daily_reviews[D] for every date.
-Timings: main's page twice (it rebuilds per request); the branch's page cold,
-warm, warm with gzip, and a 304; every day endpoint cold and warm.
+Timings: main's page twice (it rebuilds per request); the branch's plain page
+cold and a 304; the branch's day-view page cold, warm, warm with gzip, and a 304;
+every day endpoint cold and warm.
 """
 import argparse
 import gzip
@@ -113,16 +117,29 @@ def main():
         second = get(main_url + '/api/dashboard', **{'If-None-Match': first['headers'].get('ETag', '')})
         t['main_page'] = dict(cold_s=first['seconds'], revalidate_s=second['seconds'], revalidate_status=second['status'], bytes=first['bytes'])
         full = decode(first)
-        cold = get(branch_url + '/api/dashboard')
-        warm = get(branch_url + '/api/dashboard')
-        zipped = get(branch_url + '/api/dashboard', **{'Accept-Encoding': 'gzip'})
-        not_modified = get(branch_url + '/api/dashboard', **{'If-None-Match': zipped['headers']['ETag'], 'Accept-Encoding': 'gzip'})
+        whole = get(branch_url + '/api/dashboard')
+        whole_again = get(branch_url + '/api/dashboard', **{'If-None-Match': whole['headers'].get('ETag', '')})
+        t['branch_plain_page'] = dict(cold_s=whole['seconds'], not_modified_s=whole_again['seconds'],
+                                      not_modified_status=whole_again['status'], bytes=whole['bytes'])
+        plain = decode(whole) if whole['status'] == 200 else {}
+        differing = sorted(k for k in set(plain) | set(full) if k != 'generated_at' and plain.get(k) != full.get(k))
+        if differing:
+            mismatches.append(f'plain /api/dashboard differs from main in {differing}')
+        if get(branch_url + '/api/dashboard?view=other')['status'] != 400:
+            mismatches.append('/api/dashboard?view=other did not answer 400')
+        light_url = branch_url + '/api/dashboard?view=day'
+        cold = get(light_url)
+        warm = get(light_url)
+        zipped = get(light_url, **{'Accept-Encoding': 'gzip'})
+        not_modified = get(light_url, **{'If-None-Match': zipped['headers']['ETag'], 'Accept-Encoding': 'gzip'})
         t['branch_page'] = dict(cold_s=cold['seconds'], warm_s=warm['seconds'], gzip_s=zipped['seconds'], not_modified_s=not_modified['seconds'],
                                 not_modified_status=not_modified['status'], bytes=cold['bytes'], gzip_bytes=zipped['bytes'])
         page = decode(cold)
-        if decode(zipped) != page:
-            mismatches.append('gzip body differs from identity body')
+        if decode(zipped) != page or decode(warm) != page:
+            mismatches.append('day-view bodies differ between requests (identity, warm, gzip)')
         report['default_day'] = page.get('default_day')
+        if not page.get('default_day'):
+            mismatches.append('day-view page names no default day')
         if not full['games']:
             mismatches.append('main served no games: wrong --directory?')
         light = {g['game_id']: g for g in page['games']}
