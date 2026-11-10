@@ -13,7 +13,7 @@ A team's points are linear in those, so the total is rebuilt layer by layer:
     second budget       the enhanced-stage usage budget applied to the baseline's numbers alone
     minute grants       vacancy minutes ``rotation_allocation`` granted, after the caller's volume scale
     shot rates          FGA, 3PA and FTA rates it added, after the caller's volume caps
-    turnover rates      turnover rates it added (the caller does not cap them)
+    turnover rates      turnover rates it added, after the caller's FGA volume scale (uncapped before 2026-11-09)
     pace                the pace factor on every rate and on the usage target
     defense, context    the opponent-defense and rest/travel factors replacing the baseline's opponent proxy
     scoreline           ``scoreline.reconcile`` moving points between the two teams
@@ -43,6 +43,8 @@ SEASONS = (
     ('2024-25', 'espn-season-2024-25/history.json.gz', 'espn-season-2024-25/team-games.json.gz'),
     ('2025-26', 'regular-season-expanded-2026-10-22/history.json.gz', 'model-upgrade-2026-10-23/team-games.json.gz'),
 )
+# docs/backtest.md (2026-11-09) passed the live 0.6.0 export instead (--artifact); the replay reads
+# the same parameters and context model from both, and the two runs agreed to the digit.
 ARTIFACT = 'model-upgrade-2026-10-23/artifact.json.gz'
 LAYERS = ('baseline', 'second budget', 'minute grants', 'shot rates', 'turnover rates', 'pace', 'defense, context', 'scoreline')
 RATES = ('fga', 'fg3a', 'fta', 'tov')
@@ -273,6 +275,14 @@ def details(records):
               f"{mean_se([r['fga_conditional'] for r in donors], dates)[0]:.2f} (participation-weighted "
               f"{mean_se([r['fga_weighted'] for r in donors], dates)[0]:.2f}); no room for added shots in {len(donors) - room} of {len(donors)} "
               f"team-games ({(len(donors) - room) / len(donors):.1%}); room in {weighted_room} if the baseline were weighted")
+    turnovers = lambda r: r['totals'][4] - r['totals'][3]
+    kept = [r for r in records if turnovers(r) < -1e-9]
+    if kept:
+        top = min(kept, key=turnovers)
+        print(f"  turnover additions that survive the caller's volume scale: {len(kept)} of {len(records)} team-games, "
+              f"{mean_se([turnovers(r) for r in kept], [r['date'] for r in kept])[0]:+.2f} points on each, "
+              f"{sum(turnovers(r) for r in records) / len(records):+.3f} per team-game overall; largest {top['game_id']} "
+              f"{top['team_id']}: {turnovers(top):+.2f} points, teammates added {top['added']['fga']:+.2f} FGA and {top['added']['tov']:+.2f} TOV")
     budget = mean_se([r['budget_factors'][4] - r['budget_factors'][3] for r in donors], dates)
     print(f"  usage-budget factor change from the turnover rates: {budget[0]:+.4f} ± {budget[1]:.4f}")
     if all('projected' in r and 'actual_volume' in r for r in records):

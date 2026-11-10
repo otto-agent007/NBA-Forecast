@@ -957,7 +957,10 @@ team-games), production minus baseline is −0.95, −1.88, −2.64 and −2.53 
 path and rebuilds each team total layer by layer from the players' baseline numbers and the
 minutes, rates and factors the production layers gave them (exact to 1e-6 against the
 forecast; the usage budget is reapplied after every layer as production applies it once at
-the end). 1,738 team-games, main's code:
+the end). 1,738 team-games, main's code, with `--artifact` set to the live 0.6.0 export the
+production-path reference used (the script's default, the 0.5.0 artifact of
+`datasets/model-upgrade-2026-10-23`, carries the same parameters and context model and gave
+the same table to the digit):
 
 | Layer | Change to the team total |
 |---|---|
@@ -1005,7 +1008,7 @@ within noise), −0.48 ± 0.28 and −0.67 ± 0.34 (improved); margin −0.078 �
 0.070 (improved) and −0.003 ± 0.073.
 
 Baseline gate against `backtest-2026-11-07-market-strength`: `rows.json.gz` byte-identical
-(sha256 `6e52e7defe2d8797…`), every metric +0.0000 ± 0.0000; `candidate.py` is production-only
+(file sha256 `e1006551999ebd4c…`), every metric +0.0000 ± 0.0000; `candidate.py` is production-only
 code. The preliminary replay was not run: the change does not touch availability or
 participation.
 
@@ -1013,7 +1016,13 @@ The same layer replay with the change: the turnover layer −0.060 ± 0.012 (tea
 0.07 of the 4.26 vacated turnovers), the usage-budget factor change from it −0.0006, and the
 projected volume matches the actual: FGA 88.43 against 88.63 (−0.20 ± 0.18), FTA 22.18 against
 21.83 (+0.36 ± 0.18), turnovers 13.17 against 12.99 (+0.18 ± 0.10). The other layers are
-unchanged to the reported precision.
+unchanged to the reported precision. One case remains: where the FGA budget leaves room, the
+turnover additions pass at its scale even when the allocator placed almost no shots, because
+its shots were limited by the recipients' caps rather than the budget. Turnovers still
+survive in 89 of the 1,738 team-games, −1.17 points on each and −0.060 a team-game overall;
+in `espn-401585608` (team 1610612764) teammates gained 0.14 FGA and 4.85 turnovers, −4.34
+points. Scaling the turnovers by the shots placed over the shots vacated would close it; it
+is a follow-up, not part of this change.
 
 
 Live, `scripts/research/totals_live.py` re-forecast the saved snapshot and history of each
