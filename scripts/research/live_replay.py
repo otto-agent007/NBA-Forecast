@@ -1010,8 +1010,8 @@ def print_comparison(result):
     for name in ('base', 'candidate'):
         h = result[name]
         print(f"{name:<9} mode {h['mode']}, {h['which']} run, code {h['commit'] or 'no commit'} package {h['package_sha256'][:8]}, {h['games']} games, copy {h['copy']}")
-    if result['base']['mode'] != result['candidate']['mode'] or result['base']['which'] != result['candidate']['which']:
-        print('WARNING: the two outputs differ in mode or in the run chosen per game; the difference below is not a code change alone.')
+    if any(result['base'].get(k) != result['candidate'].get(k) for k in ('mode', 'which', 'finals', 'copy')):
+        print('WARNING: the two outputs differ in mode, run choice, finals source or copy; the difference below is not a code change alone.')
     print(f"paired on the same original run: {result['games_paired']} games; not paired: {len(result['unpaired'])}"
           + (' ' + json.dumps(Counter(u['reason'] for u in result['unpaired'])) if result['unpaired'] else ''))
     print(f"closing-line rows whose replayed margin differs between the two: {result['margins_moved']}; ± is {SE_LABEL}; negative = the candidate is better")

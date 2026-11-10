@@ -67,6 +67,15 @@ before 2026-10-27).
 window; per ten uncounted last-season minutes over the first 30% of dates, model
 miss −0.04 ± 0.16, close −0.12 ± 0.04 relative to the model.
 
+## Run on 2026-11-10
+
+`live_replay.py` with main `1385e80` on the 134 finished live games with a
+pregame run (`docs/backtest.md`, "Live replay"): on the 122 with a close,
+rebuilt margin MAE 11.77 against 12.51 published and the close's 10.76, today −
+close +1.01 ± 0.29 (one standard error, Eastern-date clusters); without the
+four games published 10+ points from the close +1.04 ± 0.29, and today −
+published +0.03 ± 0.12. Every v4 run came back byte for byte.
+
 ## Run on 2026-11-06
 
 `close_teacher.py --reference datasets/backtest-2026-11-06-rating-weight`:
