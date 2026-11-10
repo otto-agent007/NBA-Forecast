@@ -477,6 +477,25 @@ questionable stay unresolved. Omitted/conflicting/unmatched players become
 unknown. Missing team reports and NOT YET SUBMITTED remain review issues.
 
 A tick writes `runs/RUN_ID/profiles.json`, `snapshot.json` and `forecast.json`.
+The ledger row and `forecast.json` hold the forecast as `store.stored_forecast`
+leaves it: the rows of the game's two teams and every other key exactly as the
+model returned them. The model still returns a row for every roster player; the
+other teams' players are `no_game` rows with no numbers (487 of 522 rows, 45%
+of the stored forecast, on runs of 2026-10-28 and 10-29) and are left out. They stay
+on record as counts: `coverage.roster_players` and `coverage.pool_rows` are the
+roster players the model considered, `coverage.by_status` counts all of them,
+and its `no_game` is the number of rows left out. `store.save_run` accepts a
+forecast of every roster player once or of every roster player of the slate's
+teams once with those counts, nothing in between. Runs saved before keep every
+row; every reader takes both shapes and returns the same for the same run except
+the counters of skipped off-slate rows (`performance.json`
+`off_slate_rows_ignored`, `collection_exclusions.off_slate` in the calibration
+and model status), the run's own evaluation report (`sample_counts.predictions`
+and `sample_counts.excluded` count, and `excluded` lists, the stored rows), and
+the stored bytes' hash (`forecast_sha256`) with the digests over it (daily-review
+`input_signature`, `residual_evidence_sha256`) wherever a report quotes it
+(`scripts/research/stored_forecast_equivalence.py`). The snapshot keeps the
+league roster (`validate_inputs` requires it for live runs).
 Profiles cover every roster player and expose prior/current observations,
 recent minutes/FGA, scoring attempt rates, starter evidence when actually
 present, and potential vacancies. Prior cached history without starter fields

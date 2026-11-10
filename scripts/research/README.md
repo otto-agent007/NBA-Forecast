@@ -16,6 +16,8 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
 | `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
+| `stored_run_bytes.py` | Where a stored run's bytes are: `forecast_json` on-game / off-game rows / rest, `snapshot_json` by key, the `runs/<run_id>/` files, the evaluations; growth per day and what a compaction would remove | a copy of an operations directory (read-only, rows by rowid) |
+| `stored_forecast_equivalence.py` | Whether leaving the off-slate rows out of stored forecasts (`store.stored_forecast`) changes anything a reader uses: replay, stored rows, evaluations, derived reports, dashboard, and main reading slim runs | a copy of an operations directory, a main checkout and the branch |
 
 ## Reproduced on 2026-10-26
 
@@ -100,3 +102,39 @@ half-life, ridge 0.1) blended into the rating: 0.5 share −0.075 ± 0.018,
 +0.186 at the 0.7 share. The 0.7 share is what `backtest-2026-11-07-market-strength`
 gated (margin −0.090 ± 0.050 at two standard errors, winner Brier −0.0023 ±
 0.0011, improved).
+
+## Run on 2026-11-09
+
+`stored_run_bytes.py --directory scratch/2026-10-29-derived/production-copy --runs 6 --step 40`
+(six live runs of 10-28 and 10-29 read by rowid; their `runs/<run_id>/` files read,
+read-only, from production): `forecast_json` 2.084 MB a run, of which the
+game's 35 rows 0.927 MB, the other 487 rows 0.945 MB (45.3%; every one `no_game`
+with no game; 447 kB of it each player's history game IDs, 291 kB null
+fields) and the rest 0.212 MB (`allocation_audit` 0.180). `snapshot_json`
+0.863 MB: `model_enhancements` 0.347, `shot_quality` 0.190, `role_context`
+0.093, the other teams' roster entries 0.095 (11.1%), the game's 0.017. Run
+files: `forecast.json` 2.084 MB, `snapshot.json` 0.863, `profiles.json` 0.831
+(0.766 of it other teams' players). An evaluation's `report_json` is about
+164 kB, 39 kB of it `no_game` exclusions. At 240 runs a day the ledger rows
+grow 707 MB a day before and 481 MB after (−227 MB), the run files 907 → 680 MB.
+
+`stored_forecast_equivalence.py` on the same copy, 24 live runs of 10-26 to
+10-29 UTC (12 final, 12 preliminary, three model keys), the newer 15 saved
+slim in the mixed ledger and 9 kept as stored: main and the branch recompute
+the same bytes 24/24, none of them its stored forecast (saved by releases
+before 10-30; main's and the branch's validators both reject all 24 stored
+forecasts, "Forecast margins disagree…", so the 15 slim runs were inserted
+with their own hash); 15/15 slim runs equal the stored forecast in every
+top-level key and every row of the game; evaluations equal except
+`sample_counts.predictions`, `sample_counts.excluded` and `excluded` (486.2
+`no_game` entries fewer a report, 163.7 → 124.4 kB), and main scoring the
+mixed ledger writes the same bytes 21/21; derived reports: 64 of 72 files
+identical, the rest differ only in the off-slate counters
+(`performance.json` `off_slate_rows_ignored`, `collection_exclusions.off_slate`
+in the calibration and model status), the quoted `forecast_sha256` and the
+digests over it (daily-review `input_signature`, `residual_evidence_sha256`),
+9/9 such digests checked by recomputation; main on the mixed ledger writes the
+same 75 files; dashboard game payloads equal 1206/1206 (12 showing a slim
+run). With `--dev-recompute` (today's forecasts from the same snapshots, so
+both ledgers save through `save_run`): 15/15 slim runs through the branch's
+`save_run`, the same results.

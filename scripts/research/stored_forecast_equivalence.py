@@ -240,8 +240,15 @@ def child_derived(args):
         last_tick = folder / 'last-tick.json'
         report['final_sync'] = json.loads(last_tick.read_text()).get('final_sync') if last_tick.exists() else None
         ops._derived_reports(folder, folder / 'forecast.sqlite', schedule, active, model_digest, report)
-    Path(args.out).write_text(json.dumps(dict(seconds=round(time.monotonic() - started, 1), errors=report['errors'],
-                                              warnings=report['warnings']), default=str))
+        seconds = round(time.monotonic() - started, 1)
+        # The samples behind the interval calibration's residual_evidence_sha256, as the fit read them.
+        samples = []
+        if active:
+            from nba_forecast.prospective_calibration import collect_samples
+            from nba_forecast.intervals import INTERVAL_FAMILY
+            samples = collect_samples(folder, active['model_key'], args.now, interval_family=INTERVAL_FAMILY)['samples']
+    Path(args.out).write_text(json.dumps(dict(seconds=seconds, errors=report['errors'], warnings=report['warnings'],
+                                              samples=samples), default=str))
 
 
 def child_dashboard(args):
@@ -345,6 +352,71 @@ def outputs(folder, source):
             except ValueError:
                 found[str(relative)] = path.read_bytes().hex()
     return found
+
+
+def complete(found, folder, other):
+    """Add to ``found`` (one side's rewritten files) the files only ``other`` rewrote that this side left as COPY had them."""
+    out = dict(found)
+    for key in other:
+        if key not in out and (folder / key).is_file():
+            path = folder / key
+            try:
+                out[key] = strip(json.loads(path.read_text()))
+            except ValueError:
+                out[key] = path.read_bytes().hex()
+    return out
+
+
+def substitute(value, mapping):
+    """``value`` with every string that is a key of ``mapping`` replaced by its value."""
+    if isinstance(value, dict):
+        return {k: substitute(v, mapping) for k, v in value.items()}
+    if isinstance(value, list):
+        return [substitute(v, mapping) for v in value]
+    return mapping.get(value, value) if isinstance(value, str) else value
+
+
+def verify_signatures(work, keys, stored, samples):
+    """Show that every derived digest differs only because it covers the stored hash.
+
+    ``stored`` maps each slim run's forecast_sha256 to the full run's. For the daily reviews (date reports and their
+    revisions, then the recurrence and the index, which quote the date reports' signatures), each side's
+    ``input_signature`` must be the SHA-256 of its own report without it (and without ``generated_at``), and the slim
+    report with the stored hashes and the date signatures mapped must equal the full one. For the interval
+    calibration, the samples its residual_evidence_sha256 is computed from must be equal once the stored hash is mapped.
+    Returns (files checked, files that fail).
+    """
+    mapping = dict(stored)
+    checked, failed = 0, []
+    name = lambda key: key if isinstance(key, str) else key[0]
+    reviews = sorted((k for k in keys if name(k).startswith('daily-reviews/')), key=name)
+    # The recurrence quotes the date reports' signatures and the index all of them: in that order.
+    last = ('recurrence.json', 'index.json')
+    order = [k for k in reviews if Path(name(k)).name not in last] + \
+        [k for n in last for k in reviews if Path(name(k)).name == n]
+    signatures = {}
+    for key in order:
+        full_key, slim_key = key if isinstance(key, tuple) else (key, key)
+        a, b = (json.loads((work / side / k).read_text()) for side, k in (('full', full_key), ('slim', slim_key)))
+        checked += 1
+        ok = True
+        for value in (a, b):
+            if 'input_signature' in value:
+                body = {k: v for k, v in value.items() if k not in ('input_signature', 'generated_at')}
+                ok &= hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest() \
+                    == value['input_signature']
+        mapped = substitute(b, {**mapping, **signatures})
+        ok &= strip({k: v for k, v in mapped.items() if k != 'input_signature'}) == strip({k: v for k, v in a.items() if k != 'input_signature'})
+        if 'input_signature' in a and 'input_signature' in b:
+            signatures[b['input_signature']] = a['input_signature']
+        if not ok:
+            failed.append(key)
+    if samples is not None:
+        checked += 1
+        full_samples, slim_samples = samples
+        if substitute(slim_samples, mapping) != full_samples:
+            failed.append('interval calibration samples')
+    return checked, failed
 
 
 def classify(differences, hash_pairs):
@@ -702,6 +774,9 @@ def main():
             ran[shape] = json.loads((work / f'derived-{shape}.json').read_text())
             print(f"  {shape}: {ran[shape]['seconds']} s, {len(ran[shape]['errors'])} errors, {len(ran[shape]['warnings'])} warnings")
         a, b = outputs(work / 'full', source), outputs(work / 'slim', source)
+        rewritten = (len(a), len(b))
+        # A report one side rewrote and the other left unchanged is compared with the other side's unchanged copy.
+        a, b = complete(a, work / 'full', b), complete(b, work / 'slim', a)
         differences, only = [], []
         identical_files = 0
         per_file = {}
@@ -716,7 +791,8 @@ def main():
             differences += [(key + path, x, y) for path, x, y in found]
         for part in ('errors', 'warnings'):
             differences += [(f'report.{part}' + path, x, y) for path, x, y in diff(strip(ran['full'][part]), strip(ran['slim'][part]))]
-        print(f'  output files written by both: {len(set(a) & set(b))}; identical: {identical_files}; with differences: {len(per_file)}')
+        print(f'  output files rewritten: full {rewritten[0]}, slim {rewritten[1]}; compared (rewritten by either, present in both): '
+              f'{len(set(a) & set(b))}; identical: {identical_files}; with differences: {len(per_file)}')
         for key, n in sorted(per_file.items()):
             print(f'    {key}: {n} fields')
         for key, side in only:
@@ -727,6 +803,18 @@ def main():
         folders = {}
         for key, side in only:
             folders.setdefault(str(Path(key).parent), {}).setdefault(side, []).append(key)
+        # A revision one side wrote and the other did not (its report unchanged from COPY's) pairs with the revision
+        # the other side's report names: daily-reviews/revisions/DATE/<that report's input_signature>.json.
+        for folder, sides in folders.items():
+            parts = Path(folder).parts
+            if len(parts) == 3 and parts[:2] == ('daily-reviews', 'revisions') and len(sides) == 1:
+                (side, keys), = sides.items()
+                other, values = ('slim', b) if side == 'full' else ('full', a)
+                report = values.get(f'daily-reviews/{parts[2]}.json') or {}
+                key = f"{folder}/{report.get('input_signature')}.json"
+                if len(keys) == 1 and (work / other / key).is_file():
+                    values[key] = strip(json.loads((work / other / key).read_text()))
+                    sides[other] = [key]
         pairs = []
         for folder, sides in sorted(folders.items()):
             if len(sides.get('full', [])) == len(sides.get('slim', [])) == 1:
@@ -742,7 +830,19 @@ def main():
             # The file names are the reports' input_signature: a digest of a report that quotes the stored hash.
             failures += summarize(f'  {len(pairs)} content-addressed files paired by folder', classify(
                 [(path.replace('.(file name)', '.input_signature'), u, v) for path, u, v in paired], hash_pairs))
+        # Each content-addressed revision is checked under its own name on each side.
+        revisions = [(x, y) for x, y in pairs]
+        stored_map = {y: x for x, y in hash_pairs}
+        changed = [k for k in per_file if k.startswith('daily-reviews/')] + [p for p in revisions]
+        checked, bad = verify_signatures(work, changed, stored_map,
+                                         (ran['full'].get('samples', []), ran['slim'].get('samples', [])))
+        print(f"  derived digests checked by recomputation and mapping (daily-review signatures, calibration samples "
+              f"{len(ran['full'].get('samples', []))}): {checked - len(bad)}/{checked} explained by the stored hash")
+        for key in bad:
+            print(f'    UNEXPLAINED digest: {key}')
+        failures += bool(bad)
         r = outputs(work / 'rollback', source)
+        r, b = complete(r, work / 'rollback', b), complete(b, work / 'slim', r)
         rollback_diff = [(key + path, x, y) for key in sorted(set(r) | set(b))
                          for path, x, y in (diff(r[key], b[key]) if key in r and key in b else [('', 'only one side', '')])]
         for part in ('errors', 'warnings'):
