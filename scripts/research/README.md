@@ -17,6 +17,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 | `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
+| `sqlite_tmpdir_probe.py` | Where this host's SQLite writes a spilled sort's temporary files under each way of choosing the directory | a scratch directory |
 
 ## Reproduced on 2026-10-26
 

@@ -5,11 +5,17 @@ from datetime import datetime, timezone, timedelta
 import hashlib
 import gzip
 import json
+import os
 from pathlib import Path
-import sqlite3
 import sys
 
 from .validation import validate_inputs
+
+# sqlite3 is imported inside main(), after sqlite_tmpdir(): SQLite reads SQLITE_TMPDIR
+# once, as the library loads. Nothing imported above may load it.
+
+# Commands whose --directory is not an operations directory holding a ledger.
+OTHER_DIRECTORIES = ('backfill', 'fetch-schedule')
 
 
 def _reject_constant(value):
@@ -41,6 +47,39 @@ def _tick_summary(report):
     line['waiting_jobs'] = len(report.get('waiting_jobs') or [])
     line['deferred_jobs'] = len(report.get('deferred_jobs') or [])
     return line
+
+
+def _ledger_home(args):
+    """The folder of the ledger a command opens: its operations directory, or its --db file's folder."""
+    if getattr(args, 'directory', None) and args.command not in OTHER_DIRECTORIES:
+        return Path(args.directory)
+    if getattr(args, 'db', None):
+        return Path(args.db).parent
+    return None
+
+
+def sqlite_tmpdir(home):
+    """Have SQLite put its temporary files (a sort that outgrows memory) in ``tmp`` beside the ledger.
+
+    Its default is /var/tmp on the root disk, which is small (55 GB, 7 GB free on
+    2026-11-09, when one spilled sort filled it); a service's ``PrivateTmp`` is a
+    private view of that same disk. SQLite reads ``SQLITE_TMPDIR`` once, as the
+    library loads, and ignores a later change (measured on SQLite 3.45.1), so
+    this sets it before the process first loads the library (``_sqlite3``,
+    which ``import sqlite3`` loads) and does nothing once it has. A value already in the environment is kept. SQLite unlinks a
+    temporary file as it opens it, so the folder looks empty.
+
+    Returns the directory set, or None.
+    """
+    if home is None or os.environ.get('SQLITE_TMPDIR') or '_sqlite3' in sys.modules:
+        return None
+    tmp = Path(home).resolve() / 'tmp'
+    try:
+        tmp.mkdir(exist_ok=True)
+    except OSError:
+        return None
+    os.environ['SQLITE_TMPDIR'] = str(tmp)
+    return str(tmp)
 
 
 def _rows(paths):
@@ -178,6 +217,8 @@ def _parser():
 def main(argv=None):
     parser = _parser()
     args = parser.parse_args(argv)
+    sqlite_tmpdir(_ledger_home(args))
+    import sqlite3
     exit_code = 0
     try:
         # Refuse overwrite before any ledger or network side effect.

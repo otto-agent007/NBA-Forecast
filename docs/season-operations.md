@@ -577,6 +577,13 @@ model key.
 final windows. Configure your host monitor to flag nonzero exit status and a
 stale heartbeat (no finished tick for 10 minutes; no finished derived run for
 an hour).
+SQLite's temporary files (a sort larger than its page cache) go to `tmp/`
+in the operations directory, on the ledger's disk: `python -m nba_forecast`
+sets `SQLITE_TMPDIR` there for every command that opens a ledger, unless the
+variable is already set. SQLite's default, `/var/tmp`, is on the root disk
+(`PrivateTmp` is a view of the same disk), where one spilled sort filled the
+remaining 7 GB on 2026-11-09. SQLite reads the variable once, when the
+library loads, so it cannot be changed from inside a running process.
 No email/Slack messages are sent. Back up the entire persistent operations
 directory, especially `forecast.sqlite` with its write-ahead log
 (`forecast.sqlite-wal` and `-shm`, present while a connection is open; a copy
