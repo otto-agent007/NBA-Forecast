@@ -1,6 +1,7 @@
 """The absence rules of absence_harness.py on the live games: a check of direction, not a fit.
 
-    python3 scripts/research/absence_live.py --copy <production COPY> [--games-from components.json] [--utc]
+    python3 scripts/research/absence_live.py --copy <production copy> [--games-from components.json] [--utc]
+        [--allow-production: --copy is production itself, read-only by run id; stops if a tick runs long]
 
 For every game of the copy's `market/report.json` (the final pregame forecast it selected, the
 DraftKings close and the final margin) whose margin forecast recorded an absence term, the run is
@@ -23,7 +24,6 @@ import argparse
 import glob
 import json
 import os
-import sqlite3
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -33,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent))
 sys.path.insert(0, str(HERE))
 import absence_harness as H  # noqa: E402
+from line_blend import RunCache, check_source  # noqa: E402
 from nba_forecast import backtest as B  # noqa: E402
 from nba_forecast.validation import parse_time  # noqa: E402
 
@@ -72,13 +73,16 @@ def clustered(values, days):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--copy', type=Path, required=True, help='a production COPY, never production itself')
+    parser.add_argument('--copy', type=Path, required=True, help='a production copy')
+    parser.add_argument('--allow-production', action='store_true', help='--copy may be production itself: files and the '
+                        'ledger are only read (by run id, one row at a time), and reading stops if a tick runs long')
     parser.add_argument('--games-from', type=Path, help="restrict to these games (a list of {'game_id', 'run_id'} records)")
     parser.add_argument('--utc', action='store_true', help='cluster by UTC date instead of Eastern')
     parser.add_argument('--json', type=Path, help='write the per-game records here')
+    parser.add_argument('--cache', type=Path, help="keep the fields read from each run here, and reuse them (line_blend.RunCache)")
+    parser.add_argument('--records', type=Path, help='report from records an earlier --json wrote instead of reading the ledger')
     args = parser.parse_args()
-    if 'operations/production' in str(args.copy.resolve()):
-        parser.error('--copy takes a copy; production is never read by research scripts')
+    check_source(parser, args.copy, args.allow_production)
     report = json.loads((args.copy / 'market' / 'report.json').read_text())
     rows = {r['game_id']: r for r in report['games'] if 'spread_edge' in r}
     if args.games_from:
@@ -89,25 +93,30 @@ def main():
         rows = {g: r for g, r in rows.items() if g in wanted}
     calendar = read_schedule(args.copy)
     sides = {g['game_id']: (g['home_team_id'], g['away_team_id']) for g in calendar['games']}
+    if args.records:
+        games = [g for g in json.loads(args.records.read_text()) if g['game_id'] in rows]
+        for g in games:
+            start = rows[g['game_id']]['start_time']
+            g['day'] = start[:10] if args.utc else B._day(start).isoformat()
+        print(f"{len(rows)} games in the report; {len(games)} with an absence term recorded, from {args.records}")
+        print_rules(games, 'UTC' if args.utc else 'Eastern')
+        return
     schedule, minutes = team_logs(args.copy, calendar)
-    conn = sqlite3.connect((args.copy / 'forecast.sqlite').resolve().as_uri() + '?mode=ro', uri=True)
-    query = ("SELECT as_of, json_extract(forecast_json, '$.margin_forecasts'), json_extract(forecast_json, '$.predictions'), "
-             "json_extract(snapshot_json, '$.model_enhancements.margin_inputs.team_ratings') FROM run_records WHERE run_id = ?")
+    cache = RunCache(args.copy, args.cache)
     games, checks = [], defaultdict(int)
     worst = defaultdict(float)
     for gid, r in sorted(rows.items(), key=lambda item: item[1]['start_time']):
-        as_of, margins, predictions, ratings = conn.execute(query, (r['run_id'],)).fetchone()
-        margin = next((m for m in json.loads(margins or '[]') if m.get('game_id') == gid), {})
+        got = cache.get(r['run_id'], gid)
+        as_of, margin, ratings = got['as_of'], got['margin'], got['ratings']
         if margin.get('absence_rating_adjustment') is None or margin.get('rating_weight') is None:
             checks['no absence term recorded (method before v3 or no rating)'] += 1
             continue
-        ratings = json.loads(ratings or '{}')
         cutoff = parse_time(as_of)
         home, away = sides[gid]
         out = []
-        for p in json.loads(predictions):
-            a = (p.get('components') or {}).get('absence')
-            if p.get('game_id') != gid or p['status'] != 'out' or not a:
+        for p in got['out']:
+            a = p['absence']
+            if not a:
                 continue
             team = p['team_id']
             log = [(t, g) for t, g in schedule.get(team, []) if t < cutoff]
@@ -144,13 +153,18 @@ def main():
         print(f'  largest absolute difference, {name}: {value:.3e}')
     if args.json:
         args.json.write_text(json.dumps(games, default=str))
+    print_rules(games, 'UTC' if args.utc else 'Eastern')
+
+
+def print_rules(games, dates='Eastern'):
+    """The per-rule table."""
     bare = {g['game_id']: g['model'] - g['weight'] * g['recorded'] for g in games}
 
     def published(g, variant):
         return bare[g['game_id']] + (g['weight'] * H.adjustment(g, variant) if g['rated'] else 0.)
 
     days = [g['day'] for g in games]
-    print(f"\nPer rule ({'UTC' if args.utc else 'Eastern'} dates; one clustered standard error). 'with - without': MAE of the "
+    print(f"\nPer rule ({dates} dates; one clustered standard error). 'with - without': MAE of the "
           f'published margin with the rule\'s term minus with no term, on the games where the term is 1+ rating points. '
           f"'past the close': (model - close) toward the side the term moves, with and without the term.")
     print(f"  {'rule':34s} {'games':>5s} {'with - without':>16s} {'past the close, with':>22s} {'without':>14s} {'result - close':>15s}"

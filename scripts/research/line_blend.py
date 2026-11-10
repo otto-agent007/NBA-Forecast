@@ -15,7 +15,8 @@ final pregame forecast and for the first forecast of the game:
 
     python3 scripts/research/line_blend.py --live <production copy>
 
-The copy's ledger is read by run id only (`state.json` names each game's runs). Margin error
+The ledger is read by run id only (`state.json` names each game's runs), one row per statement;
+production itself needs `--allow-production`, and reading stops if a tick runs longer than two minutes. Margin error
 is against the final margin; the winner Brier puts the model's own margin SD around the
 blended location (`backtest._home_win_probability`); the least-squares weight is the slope of
 (actual - model) on (line - model). Every +- is ONE standard error clustered by Eastern date;
@@ -176,6 +177,121 @@ def run_replay(args):
         splits(opened, 'Opener')
 
 
+PRODUCTION_MARKER = 'operations/production'
+TICK_LIMIT = 120.  # seconds: stop reading production if a tick ran longer than this
+TICK_STALE = 600.  # how long to wait for a fresh tick before giving up
+
+
+def is_production(folder):
+    return PRODUCTION_MARKER in str(Path(folder).resolve())
+
+
+def production_guard(folder):
+    """Before each batch of reads from production: wait until the last tick finished within two minutes; stop if it ran longer."""
+    if not is_production(folder):
+        return
+    import time
+    from datetime import datetime, timezone
+    waited = 0
+    while True:
+        tick = json.loads((Path(folder) / 'last-tick.json').read_text())
+        took = (parse_time(tick['finished_at']) - parse_time(tick['started_at'])).total_seconds()
+        age = (datetime.now(timezone.utc) - parse_time(tick['finished_at'])).total_seconds()
+        if took > TICK_LIMIT and _READ[0]:
+            sys.exit(f'stopping: a tick took {took:.0f} s while this script was reading')
+        if took <= TICK_LIMIT and age <= TICK_LIMIT:
+            _READ[0] = True
+            return
+        if waited >= TICK_STALE:
+            sys.exit(f'stopping: no tick under {TICK_LIMIT:.0f} s finished in the last {TICK_LIMIT:.0f} s for {waited} s')
+        time.sleep(5)
+        waited += 5
+
+
+_READ = [False]  # set once reading from production has begun
+
+
+def pause(folder):
+    """About a second after each multi-megabyte run read from production, so the disk stays free for the tick."""
+    if is_production(folder):
+        import time
+        time.sleep(1.)
+
+
+def open_ledger(folder):
+    """The ledger, read-only. Callers fetch one row per statement and consume it whole, so no read transaction stays open."""
+    return sqlite3.connect((Path(folder) / 'forecast.sqlite').resolve().as_uri() + '?mode=ro', uri=True, timeout=30)
+
+
+def one(conn, query, value):
+    """A single row by key, its statement finished before returning."""
+    rows = conn.execute(query, (value,)).fetchall()
+    return rows[0] if rows else None
+
+
+class RunCache:
+    """The few fields the live tables need from each run, read from the ledger once and kept in a small local file.
+
+    One row per statement (`one`), a tick guard before every ten reads and a pause after each when the
+    source is production; with ``path`` every fetched run is saved at once, so a stopped read resumes
+    where it left off. Kept per run: as_of, created_at, stage, and for the asked game its margin forecast
+    (without the probability tables), its reported-out players with `components.absence`, and the team
+    ratings the snapshot froze.
+    """
+    QUERY = ("SELECT as_of, created_at, json_extract(forecast_json, '$.forecast_stage'), json_extract(forecast_json, '$.margin_forecasts'), "
+             "json_extract(forecast_json, '$.predictions'), json_extract(snapshot_json, '$.model_enhancements.margin_inputs.team_ratings') "
+             'FROM run_records WHERE run_id = ?')
+
+    def __init__(self, folder, path=None):
+        self.folder, self.path, self.conn, self.reads = Path(folder), path, None, 0
+        self.runs = json.loads(Path(path).read_text()) if path and Path(path).exists() else {}
+
+    def _connection(self):
+        if self.conn is None:
+            self.conn = open_ledger(self.folder)
+        return self.conn
+
+    def times(self, run_id):
+        """as_of and created_at only (the row's first page, no JSON)."""
+        if run_id in self.runs:
+            return self.runs[run_id]['as_of'], self.runs[run_id]['created_at']
+        return one(self._connection(), 'SELECT as_of, created_at FROM run_records WHERE run_id = ?', run_id)
+
+    def rowid(self, run_id):
+        """Insertion order, from the primary-key index alone."""
+        found = one(self._connection(), 'SELECT rowid FROM run_records WHERE run_id = ?', run_id)
+        return found[0] if found else None
+
+    def get(self, run_id, game_id):
+        key = f'{run_id}:{game_id}'
+        if key not in self.runs:
+            if self.reads % 10 == 0:
+                production_guard(self.folder)
+            self.reads += 1
+            row = one(self._connection(), self.QUERY, run_id)
+            pause(self.folder)
+            if row is None:
+                return None
+            as_of, created, stage, margins, predictions, ratings = row
+            margin = next((m for m in json.loads(margins or '[]') if m.get('game_id') == game_id), {})
+            out = [dict(player_id=p['player_id'], team_id=p['team_id'], absence=(p.get('components') or {}).get('absence'))
+                   for p in json.loads(predictions or '[]') if p.get('game_id') == game_id and p.get('status') == 'out']
+            self.runs[key] = dict(as_of=as_of, created_at=created, stage=stage, out=out,
+                                  margin={k: v for k, v in margin.items() if not k.endswith('pmf')},
+                                  ratings={t: {'market_strength': v.get('market_strength')} for t, v in json.loads(ratings or '{}').items()})
+            self.runs[run_id] = dict(as_of=as_of, created_at=created)
+            if self.path:
+                temporary = Path(str(self.path) + '.tmp')
+                temporary.write_text(json.dumps(self.runs))
+                temporary.replace(self.path)
+        return self.runs[key]
+
+
+def check_source(parser, folder, allow_production):
+    if PRODUCTION_MARKER in str(Path(folder).resolve()) and not allow_production:
+        parser.error('this is production; pass --allow-production to read it (read-only, by run id) or use a copy')
+
+
 def _spread(record):
     value = (((record.get('lines') or {}).get('spread') or {}).get('home') or {}).get('current_line')
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
@@ -193,7 +309,7 @@ def line_at(captures, moment):
     return best
 
 
-def live_games(folder):
+def live_games(folder, cache_path=None):
     """Every finished game of the copy with a close: its first and its last pregame forecast with the line each could see."""
     from nba_forecast.market_lines import closing_lines, read_game_lines
     folder = Path(folder)
@@ -204,9 +320,7 @@ def live_games(folder):
     for key, run_id in jobs.items():
         if isinstance(run_id, str) and key.split(':', 1)[0] in finished:
             runs[key.split(':', 1)[0]].add(run_id)
-    conn = sqlite3.connect((folder / 'forecast.sqlite').resolve().as_uri() + '?mode=ro', uri=True)
-    read = ("SELECT as_of, created_at, json_extract(forecast_json, '$.margin_forecasts'), json_extract(forecast_json, '$.forecast_stage') "
-            'FROM run_records WHERE run_id = ?')
+    cache = RunCache(folder, cache_path)
     out, missing = [], defaultdict(int)
     for gid, row in sorted(finished.items()):
         tip = parse_time(row['start_time'])
@@ -216,21 +330,23 @@ def live_games(folder):
         if close is None:
             missing['no DraftKings close'] += 1
             continue
-        times = {}
-        for run_id in runs.get(gid, ()) | {row['run_id']}:
-            got = conn.execute('SELECT as_of, created_at FROM run_records WHERE run_id = ?', (run_id,)).fetchone()
-            if got and parse_time(got[1]) < tip and parse_time(got[0]) < tip:
-                times[run_id] = parse_time(got[0])
-        if row['run_id'] not in times:
+        final = cache.get(row['run_id'], gid)
+        if final is None or not (parse_time(final['as_of']) < tip and parse_time(final['created_at']) < tip):
             missing['selected run not pregame'] += 1
             continue
-        picks = dict(final=row['run_id'], first=min(times, key=lambda k: (times[k], k)))
+        # The game's runs oldest first by insertion order (primary-key index only); the first saved and made before tip.
+        order = sorted((i, r) for i, r in ((cache.rowid(r), r) for r in runs.get(gid, ()) | {row['run_id']}) if i is not None)
+        first = next((r for _, r in order if (lambda t: t and parse_time(t[0]) < tip and parse_time(t[1]) < tip)(cache.times(r))), None)
+        picks = dict(final=row['run_id'], first=first)
         entry = dict(game_id=gid, day=B._day(row['start_time']).isoformat(), actual=row['actual_margin'], close=close,
-                     runs=len(times), start_time=row['start_time'],
+                     runs=len(order), start_time=row['start_time'],
                      outlier=abs(row['model_margin'] - row['market_margin']) >= OUTLIER)
         for name, run_id in picks.items():
-            as_of, _, margins, stage = conn.execute(read, (run_id,)).fetchone()
-            margin = next((m for m in json.loads(margins or '[]') if m.get('game_id') == gid), {})
+            if run_id is None:
+                missing[f'{name}: no run saved before tip'] += 1
+                continue
+            got = cache.get(run_id, gid)
+            as_of, margin, stage = got['as_of'], got['margin'], got['stage']
             line = line_at(captures, parse_time(as_of))
             if margin.get('status') != 'estimated' or line is None:
                 missing[f"{name}: {'no margin forecast' if margin.get('status') != 'estimated' else 'no line captured by then'}"] += 1
@@ -248,7 +364,7 @@ def live_games(folder):
 
 
 def run_live(args):
-    entries, missing, finished = live_games(args.live)
+    entries, missing, finished = live_games(args.live, args.cache)
     print(f'Live, {args.live}: {finished} finished games with a DraftKings close in the market report; {len(entries)} usable; '
           f'left out: {missing or "none"}')
     if args.json:
@@ -282,16 +398,18 @@ def main():
     parser.add_argument('--datasets', type=Path, default=HERE.parent.parent / 'datasets')
     parser.add_argument('--market-history', type=Path, help="the archived ESPN odds responses (data/market-history, gitignored) "
                         "for the opener bracket of the replay")
-    parser.add_argument('--live', type=Path, help='a production COPY (never production itself) for the live tables')
+    parser.add_argument('--live', type=Path, help='a production copy for the live tables')
+    parser.add_argument('--allow-production', action='store_true', help='--live may be production itself: files and the '
+                        'ledger are only read (by run id, one row at a time), and reading stops if a tick runs long')
     parser.add_argument('--json', help='with --live: write the per-game records here')
+    parser.add_argument('--cache', type=Path, help='with --live: keep the fields read from each run here, and reuse them')
     args = parser.parse_args()
     if not args.reference and not args.live:
         parser.error('pass --reference, --live or both')
     if args.reference:
         run_replay(args)
     if args.live:
-        if 'operations/production' in str(args.live.resolve()):
-            parser.error('--live takes a copy; production is never read by research scripts')
+        check_source(parser, args.live, args.allow_production)
         run_live(args)
 
 
