@@ -316,6 +316,19 @@ read 12.15 against the published margin's 11.38.
 Leans on a small sample are not an edge. Player props are not captured; ESPN
 does not publish them.
 
+The all-time margin error mixes every margin method the service has run (v1
+to v4 between 2026-10-24 and 11-09) and several parameter sets. Since
+2026-11-10 each row names the margin method and calibration family (method,
+settlement, parameter digest; `margins.calibration_family`) of the run that
+published it (`margin_method`, `margin_family`), and the summary puts each
+method's and family's own record beside the all-time one: `by_margin_method`,
+`by_margin_family` and `current_margin_family` (the running code's
+`margins.CALIBRATION_FAMILY`), each with games, the model's and the close's
+margin MAE on the same rows, and their paired difference with one standard
+error clustered by Eastern game date. The family needs the parameter set the
+run's margin inputs saved, which the report's run selection reads with the
+rest of the run; the dashboard does not show these keys yet.
+
 Since 2026-10-27 each tick also captures Kalshi's game markets as a second
 source (`nba_forecast/kalshi_lines.py`, `market/kalshi/GAME_ID.jsonl`, raw
 responses under `market/kalshi/raw/`): the home winner market's bid-ask mid as

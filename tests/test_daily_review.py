@@ -73,6 +73,15 @@ class DailyReviewTests(NightFixture):
         self.assertEqual(stage['margin_evaluation']['status'],'pending')
         self.assertEqual(len(stage['players']),2)
 
+    def test_selection_carries_the_margin_parameter_set_the_run_saved(self):
+        from nba_forecast.daily_review import _selected
+        games={'G1':self.g}
+        self.assertIsNone(_selected(self.folder,games,ASOF,'2026-27')[('G1','final')]['margin_parameters'])
+        self.s['model_enhancements']=dict(margin_inputs=dict(parameters=dict(rating_weight=.65)))
+        self.save('with-parameters',created='2026-10-22T13:00:00Z')
+        chosen=_selected(self.folder,games,ASOF,'2026-27')[('G1','final')]
+        self.assertEqual((chosen['run_id'],chosen['margin_parameters']),('with-parameters',dict(rating_weight=.65)))
+
     def test_latest_stage_selection_excludes_replays_and_post_tipoff(self):
         self.save('prelim',stage='preliminary',points=18)
         self.save('replay',created='2026-10-22T13:00:00Z',mode='replay',points=24)
