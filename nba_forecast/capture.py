@@ -6,16 +6,23 @@ upcoming (``schedule.upcoming_games`` of the saved calendar: scheduled, tipping
 within 24 hours), ESPN's sportsbook lines, Kalshi's game markets and Kalshi's
 player prop ladders, each at its own cadence slot. The three providers run side
 by side, one lane per host (ESPN; Kalshi's game lines, then its props), until
-one deadline, so a slow ESPN cannot starve Kalshi or the reverse, and the run
-ends within ``RUN_SECONDS`` plus one request timeout.
+one deadline, so a slow ESPN cannot starve Kalshi or the reverse. Every request
+has a 12-second timeout and each lane checks the deadline before each request
+(``capture_game_lines`` between a game's scoreboard and summary too), so a run
+ends within ``RUN_SECONDS`` plus one request timeout, 52 seconds; name
+resolution is not covered by the timeouts, and the unit's start limit ends a run
+stuck there.
 
-Every writer of the capture files (``market/capture-state.json``,
-``market/index.json``, ``market/game-lines/``, ``market/kalshi/``,
-``market/kalshi-props/``) holds ``capture.lock``. The tick still captures the
-game lines itself when this service has not finished a run within
-``HEARTBEAT_SECONDS`` (``last-capture.json``): a host without the unit, or with
-it stopped, keeps its lines. Each run that did something appends one line to
-``capture.jsonl``.
+Every capture of upcoming games, the service's and the tick's, holds
+``capture.lock``, so no two processes write ``market/capture-state.json``,
+``market/index.json``, the line files or the Kalshi states at once. The derived
+service's ``recover_evidence.auto_recover`` and the ``recover-evidence`` command
+also append to ``market/game-lines/`` and ``market/kalshi/`` without it; they
+write only files of tipped games, which no capture writes after tipoff. The
+tick still captures the game lines itself when this service has not finished a
+run within ``HEARTBEAT_SECONDS`` (``last-capture.json``): a host without the
+unit, or with it stopped, keeps its lines. Each run that did something appends
+one line to ``capture.jsonl``.
 
 This module is light on purpose: it runs 1,440 times a day and imports neither
 the model nor the ledger. What it records is what the markets said; it is not a
@@ -34,8 +41,8 @@ from .validation import parse_time
 
 VERSION = 'capture-service-1'
 LOCK = 'capture.lock'
-# Each provider stops starting requests this long after the run starts; a request
-# already in flight can add its own timeout (12 s), so a run ends well inside a minute.
+# Each lane stops starting requests this long after the run starts; the request in
+# flight can add its own timeout (12 s), so a run ends within 52 s, inside the minute.
 RUN_SECONDS = 40
 # The tick captures the game lines itself when no capture run has finished this
 # recently. A healthy service finishes a run every minute (an idle run in about a
@@ -43,7 +50,10 @@ RUN_SECONDS = 40
 # two minutes old when a tick looks; three minutes allows timer jitter and one slow
 # run, and loses at most three one-minute Kalshi slots when the service is down.
 HEARTBEAT_SECONDS = 180
-ALIVE = ('complete', 'partial', 'waiting', 'busy')
+# A run that found the lock held (busy) captured nothing and does not count: when the
+# service fails and the tick's fallback spans :45, the next tick must capture again.
+# Whoever holds the lock is seen by the tick's own non-blocking lock attempt.
+ALIVE = ('complete', 'partial', 'waiting')
 PROVIDERS = ('market_lines', 'kalshi_lines', 'kalshi_props')
 
 
@@ -75,8 +85,8 @@ def capture_lock(folder):
 def heartbeat(folder, now):
     """Whether the capture service finished a run within ``HEARTBEAT_SECONDS``: ``(alive, detail)``.
 
-    A run that found the lock held (``busy``) counts: someone was capturing. A run
-    that failed as a whole (``error``) does not.
+    A run that failed as a whole (``error``) does not count, nor does a ``busy``
+    one (busy runs do not replace ``last-capture.json``; ``ALIVE``).
     """
     path = Path(folder) / 'last-capture.json'
     try:
@@ -177,8 +187,9 @@ def _idle(line):
 def run_capture(directory, *, fetch=None, now=None):
     """One run of the capture service; returns its report.
 
-    A run that finds ``capture.lock`` held reports ``busy`` and captures nothing.
-    The report is saved as ``last-capture.json``, and its counts appended to
+    A run that finds ``capture.lock`` held reports ``busy``, captures nothing and
+    leaves ``last-capture.json`` to the last run that captured. Otherwise the report
+    is saved as ``last-capture.json``, and its counts appended to
     ``capture.jsonl`` after every run that did something (an idle run, every slot
     already taken, updates ``last-capture.json`` alone).
     """
@@ -199,7 +210,8 @@ def run_capture(directory, *, fetch=None, now=None):
                 report['status'] = 'error'
         report['finished_at'] = _now()
         report['seconds'] = round(time.monotonic() - started, 3)
-        atomic_json(folder / 'last-capture.json', report)
+        if report['status'] != 'busy':
+            atomic_json(folder / 'last-capture.json', report)
         line = summary_line(report)
         if not _idle(line):
             with (folder / 'capture.jsonl').open('a') as stream:
@@ -219,19 +231,19 @@ def _capture(folder, report, fetch, now):
         return
     games = upcoming_games(schedule, now or report['started_at'])
     report.update(schedule_source=source, schedule_version=schedule.get('version'), games=[g['game_id'] for g in games])
-    if not games:
-        return
-    season = schedule['season']
-    results = run_providers([
-        [('market_lines', lambda deadline: capture_game_lines(folder, games, season, clock(), deadline=deadline, index=False))],
-        [('kalshi_lines', lambda deadline: capture_kalshi_lines(folder, games, clock(), fetch=fetch, deadline=deadline)),
-         ('kalshi_props', lambda deadline: capture_kalshi_props(folder, games, clock(), fetch=fetch, deadline=deadline))]], RUN_SECONDS)
-    for name, (value, error) in results.items():
-        if error is None:
-            report[name] = value
-        else:
-            report['errors'].append(dict(task=name, error=f'{type(error).__name__}: {error}'))
-    try:  # once per run, and only when a line file changed
+    if games:
+        season = schedule['season']
+        results = run_providers([
+            [('market_lines', lambda deadline: capture_game_lines(folder, games, season, clock(), deadline=deadline, index=False))],
+            [('kalshi_lines', lambda deadline: capture_kalshi_lines(folder, games, clock(), fetch=fetch, deadline=deadline)),
+             ('kalshi_props', lambda deadline: capture_kalshi_props(folder, games, clock(), fetch=fetch, deadline=deadline))]], RUN_SECONDS)
+        for name, (value, error) in results.items():
+            if error is None:
+                report[name] = value
+            else:
+                report['errors'].append(dict(task=name, error=f'{type(error).__name__}: {error}'))
+    # Once per run, games or not (a close recovered after an outage lands in a line file), and only when a line file changed.
+    try:
         report['index_rebuilt'] = refresh_index(folder)
     except Exception as exc:
         report['errors'].append(dict(task='market_index', error=f'{type(exc).__name__}: {exc}'))

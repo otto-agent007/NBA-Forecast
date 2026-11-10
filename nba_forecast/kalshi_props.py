@@ -221,8 +221,12 @@ def _signature(record):
                   for p in record['players'] for stat, item in p['stats'].items())
 
 
-def record_props(folder, record):
-    """Append the capture when a quote or a match changed; the file is rewritten through a rename like the line files."""
+def record_props(folder, record, before_append=None):
+    """Append the capture when a quote or a match changed; the file is rewritten through a rename like the line files.
+
+    ``before_append`` runs just before a record is appended (the capture archives
+    the record's responses there), so a record never names archives that do not exist.
+    """
     path = _lines_path(folder, record['game_id'])
     raw = path.read_bytes() if path.exists() else b''
     existing, clean, partial = _parse_lines(raw, path.name) if raw else ([], 0, False)
@@ -230,6 +234,8 @@ def record_props(folder, record):
         if partial:
             atomic_bytes(path, raw[:clean])
         return False
+    if before_append is not None:
+        before_append()
     prefix = raw[:clean]
     if prefix and not prefix.endswith(b'\n'):
         prefix += b'\n'
@@ -308,10 +314,7 @@ def capture_kalshi_props(folder, games, as_of, fetch=None, deadline=None):
             if not players:
                 report['errors'].append(dict(game_id=game['game_id'], error='no saved roster: markets recorded unmatched'))
             record = extract_props(game, markets, players, as_of, [source for _, source in pages])
-            appended = record_props(folder, record)
-            if appended:
-                for raw, source in pages:
-                    _archive(folder, raw, source)
+            appended = record_props(folder, record, before_append=lambda: [_archive(folder, raw, source) for raw, source in pages])
             captured[slot] = now.timestamp()
             (report['captured'] if appended else report['unchanged']).append(game['game_id'])
             report['unmatched'].extend(dict(game_id=game['game_id'], **u) for u in record['unmatched'])
@@ -367,29 +370,114 @@ def model_probability(prediction, threshold, method='interval'):
     return 1 - _cdf((threshold - mean) / (upper if threshold >= mean else lower))
 
 
-def paired(rows, a, b):
-    """Mean of ``a``, of ``b`` and of ``a - b`` over rows carrying both, with the difference's standard error clustered by date.
+def pooled(groups, a, b):
+    """Pooled means of ``a`` and ``b`` and of their difference from per-game sums, with the difference's standard error clustered by date.
 
-    The error is one standard error, cluster-robust over Pacific game dates with
-    the G/(G-1) factor (``diagnostic_stats``); None with fewer than two dates.
+    ``groups`` are ``dict(date, n, a, b)``: a game's count and sums. The error is one
+    standard error, cluster-robust over Pacific game dates with the G/(G-1) factor
+    (``diagnostic_stats``); None with fewer than two dates. Sums are all it needs:
+    each date contributes the sum of its differences less its count times the mean.
     """
-    use = [r for r in rows if r.get(a) is not None and r.get(b) is not None]
-    if not use:
+    dates = {}
+    for g in groups:
+        if g['n']:
+            item = dates.setdefault(g['date'], [0, 0., 0., 0.])
+            item[0] += g['n']
+            item[1] += g['a']
+            item[2] += g['b']
+            item[3] += g['a'] - g['b']
+    n = sum(item[0] for item in dates.values())
+    if not n:
         return dict(n=0)
-    diffs = [r[a] - r[b] for r in use]
-    mean = sum(diffs) / len(diffs)
-    sums = {}
-    for r, d in zip(use, diffs):
-        sums[r['date']] = sums.get(r['date'], 0.) + d - mean
-    groups = len(sums)
-    se = math.sqrt(groups / (groups - 1) * sum(s * s for s in sums.values())) / len(use) if groups > 1 else None
-    return {'n': len(use), 'dates': groups, a: sum(r[a] for r in use) / len(use), b: sum(r[b] for r in use) / len(use),
-            'difference': mean, 'difference_se': se}
+    mean = sum(item[3] for item in dates.values()) / n
+    groups_count = len(dates)
+    se = (math.sqrt(groups_count / (groups_count - 1) * sum((item[3] - item[0] * mean) ** 2 for item in dates.values())) / n
+          if groups_count > 1 else None)
+    return {'n': n, 'dates': groups_count, a: sum(item[1] for item in dates.values()) / n,
+            b: sum(item[2] for item in dates.values()) / n, 'difference': mean, 'difference_se': se}
+
+
+def paired(rows, a, b):
+    """``pooled`` over rows carrying both ``a`` and ``b``, each row one observation of its ``date``."""
+    return pooled([dict(date=r['date'], n=1, a=r[a], b=r[b]) for r in rows if r.get(a) is not None and r.get(b) is not None], a, b)
 
 
 def _log_loss(p, outcome):
     p = min(max(p, 1e-3), 1 - 1e-3)
     return -math.log(p if outcome else 1 - p)
+
+
+# A game's scored figures are kept (``report-cache.json``) until its props file, its final box
+# score, its tipoff or this version changes: a close never changes after tip, and a tipped game's
+# selected forecast cannot either (runs created at or after tipoff are not selected).
+SCORING = 'props-report-2'
+METRICS = {'brier/interval': ('model_brier', 'market_brier'), 'brier/sd': ('model_sd_brier', 'market_brier'),
+           'log_loss/interval': ('model_log_loss', 'market_log_loss'), 'log_loss/sd': ('model_sd_log_loss', 'market_log_loss'),
+           'median_abs_error': ('model_abs_error', 'market_abs_error')}
+EXCLUDED = ('unmatched_players', 'players_without_forecast', 'players_not_entered', 'rungs_without_mid', 'medians_not_bracketed')
+
+
+def _stamp(path):
+    stat = path.stat()
+    return [stat.st_size, stat.st_mtime_ns]
+
+
+def _score_game(folder, game, close, choice, stage):
+    """One game's entry (counts, exclusions and per-metric sums) and its scored rungs and medians."""
+    gid = game['game_id']
+    date = parse_time(game['start_time']).astimezone(PACIFIC).date().isoformat()
+    entry = dict(date=date, start_time=game['start_time'], close_captured_at=close['captured_at'], scored=False)
+    if not choice:
+        return dict(entry, reason='no saved pregame forecast'), [], []
+    finals = {r['player_id']: r for r in json.loads((folder / 'finals' / (gid + '.json')).read_text())}
+    predictions = {p['player_id']: p for p in choice.get('predictions', [])}
+    excluded = dict.fromkeys(EXCLUDED, 0)
+    rungs, medians, counted = [], [], 0
+    for player in close['players']:
+        ladder = (player['stats'].get('points') or {})
+        if not ladder:
+            continue
+        if player['player_id'] is None:
+            excluded['unmatched_players'] += 1
+            continue
+        prediction = predictions.get(player['player_id'])
+        if not prediction or model_probability(prediction, 0.) is None:
+            excluded['players_without_forecast'] += 1
+            continue
+        actual = finals.get(player['player_id'])
+        minutes = (actual or {}).get('minutes')
+        if not actual or not _finite(minutes) or minutes <= 0:
+            excluded['players_not_entered'] += 1
+            continue
+        counted += 1
+        points = actual['pts']
+        base = dict(game_id=gid, date=date, player_id=player['player_id'], name=player['name'])
+        for rung in ladder['ladder']:
+            threshold, market = rung[0], rung[3]
+            if market is None:
+                excluded['rungs_without_mid'] += 1
+                continue
+            outcome = points > threshold
+            row = dict(base, threshold=threshold, market=market, model=model_probability(prediction, threshold),
+                       model_sd=model_probability(prediction, threshold, 'sd'), outcome=outcome)
+            for name in ('market', 'model', 'model_sd'):
+                if row[name] is not None:
+                    row[name + '_brier'] = (row[name] - outcome) ** 2
+                    row[name + '_log_loss'] = _log_loss(row[name], outcome)
+            rungs.append(row)
+        if ladder.get('implied_median') is None:
+            excluded['medians_not_bracketed'] += 1
+        else:
+            medians.append(dict(base, market_line=ladder['implied_median'], model_points=prediction['points_mean'],
+                                actual_points=points, market_abs_error=abs(ladder['implied_median'] - points),
+                                model_abs_error=abs(prediction['points_mean'] - points)))
+    metrics = {}
+    for name, (a, b) in METRICS.items():
+        use = [r for r in (medians if name == 'median_abs_error' else rungs) if r.get(a) is not None and r.get(b) is not None]
+        metrics[name] = dict(n=len(use), a=sum(r[a] for r in use), b=sum(r[b] for r in use))
+    entry.update(scored=True, run_id=choice.get('run_id'), stage=stage, players_scored=counted, rungs=len(rungs),
+                 median_players=len(medians), excluded=excluded, metrics=metrics)
+    return entry, rungs, medians
 
 
 def props_report(folder, schedule, as_of=None, *, selected=None):
@@ -401,100 +489,83 @@ def props_report(folder, schedule, as_of=None, *, selected=None):
     against the model's points mean, by absolute error against his points. Both
     count players who entered the game only (the markets of a player who did not
     settle at a fair price); excluded rungs and players are counted by reason.
+
+    A game is scored once: its counts and sums are kept in
+    ``market/kalshi-props/report-cache.json`` (``SCORING``) and its scored rungs
+    and medians written to ``market/kalshi-props/scored/<game_id>.json``; the
+    forecast selection (``selected``, else ``daily_review._selected``) is read
+    only for games not yet scored. The report holds the pooled summary and one
+    line per game.
     """
     folder = Path(folder)
+    root = _root(folder)
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     cutoff = parse_time(as_of)
-    games = {}
-    closes = {}
-    errors = []
+    cache_path = root / 'report-cache.json'
+    try:
+        cache = json.loads(cache_path.read_text())
+        old = cache.get('games', {}) if cache.get('scoring') == SCORING else {}
+    except (OSError, ValueError, AttributeError):
+        cache, old = None, {}
+    entries, pending, errors = {}, {}, []
     for game in schedule.get('games', []):
         gid = game['game_id']
         if not game.get('start_time') or game.get('status') in ('postponed', 'cancelled', 'tbd') or parse_time(game['start_time']) > cutoff:
             continue
-        if not (folder / 'finals' / (gid + '.json')).exists() or not _lines_path(folder, gid).exists():
+        props, finals = _lines_path(folder, gid), folder / 'finals' / (gid + '.json')
+        if not finals.exists() or not props.exists():
+            continue
+        key = [game['start_time'], game['home_team_id'], game['away_team_id'], _stamp(props), _stamp(finals)]
+        if isinstance(old.get(gid), dict) and old[gid].get('key') == key:
+            entries[gid] = old[gid]
             continue
         try:
             close = closing_props(read_props(folder, gid), game['start_time'])
         except ValueError as exc:
             errors.append(dict(game_id=gid, error=str(exc)))
             continue
-        if close is not None:
-            games[gid], closes[gid] = game, close
-    if games and selected is None:
-        from .daily_review import _selected
-        selected = _selected(folder, games, as_of, schedule.get('season'))
-    selected = selected or {}
-    rungs, medians, games_out = [], [], []
-    excluded = dict(unmatched_players=0, players_without_forecast=0, players_not_entered=0,
-                    rungs_without_mid=0, medians_not_bracketed=0, games_without_forecast=0)
-    for gid, game in sorted(games.items(), key=lambda item: item[1]['start_time']):
-        choice = selected.get((gid, 'final')) or selected.get((gid, 'preliminary'))
-        if not choice:
-            excluded['games_without_forecast'] += 1
-            continue
-        close = closes[gid]
-        finals = {r['player_id']: r for r in json.loads((folder / 'finals' / (gid + '.json')).read_text())}
-        predictions = {p['player_id']: p for p in choice.get('predictions', [])}
-        date = parse_time(game['start_time']).astimezone(PACIFIC).date().isoformat()
-        counted = 0
-        for player in close['players']:
-            ladder = (player['stats'].get('points') or {})
-            if not ladder:
-                continue
-            if player['player_id'] is None:
-                excluded['unmatched_players'] += 1
-                continue
-            prediction = predictions.get(player['player_id'])
-            if not prediction or model_probability(prediction, 0.) is None:
-                excluded['players_without_forecast'] += 1
-                continue
-            actual = finals.get(player['player_id'])
-            minutes = (actual or {}).get('minutes')
-            if not actual or not _finite(minutes) or minutes <= 0:
-                excluded['players_not_entered'] += 1
-                continue
-            counted += 1
-            points = actual['pts']
-            base = dict(game_id=gid, date=date, player_id=player['player_id'], name=player['name'])
-            for rung in ladder['ladder']:
-                threshold, market = rung[0], rung[3]
-                if market is None:
-                    excluded['rungs_without_mid'] += 1
-                    continue
-                outcome = points > threshold
-                row = dict(base, threshold=threshold, market=market, model=model_probability(prediction, threshold),
-                           model_sd=model_probability(prediction, threshold, 'sd'), outcome=outcome)
-                for name in ('market', 'model', 'model_sd'):
-                    if row[name] is not None:
-                        row[name + '_brier'] = (row[name] - outcome) ** 2
-                        row[name + '_log_loss'] = _log_loss(row[name], outcome)
-                rungs.append(row)
-            if ladder.get('implied_median') is None:
-                excluded['medians_not_bracketed'] += 1
-            else:
-                medians.append(dict(base, market_line=ladder['implied_median'], model_points=prediction['points_mean'],
-                                    actual_points=points, market_abs_error=abs(ladder['implied_median'] - points),
-                                    model_abs_error=abs(prediction['points_mean'] - points)))
-        games_out.append(dict(game_id=gid, date=date, start_time=game['start_time'], run_id=choice.get('run_id'),
-                              stage='final' if (gid, 'final') in selected else 'preliminary',
-                              close_captured_at=close['captured_at'], players_scored=counted))
-    summary = dict(games=len(games_out), rungs=len(rungs), median_players=len(medians), excluded=excluded)
-    if not games_out:
+        if close is None:
+            entries[gid] = dict(key=key, scored=False, close_captured_at=None, reason='no capture before tipoff')
+        else:
+            pending[gid] = (game, close, key)
+    if pending:
+        if selected is None:
+            from .daily_review import _selected
+            selected = _selected(folder, {gid: item[0] for gid, item in pending.items()}, as_of, schedule.get('season'))
+        for gid, (game, close, key) in pending.items():
+            choice = selected.get((gid, 'final')) or selected.get((gid, 'preliminary'))
+            entry, rungs, medians = _score_game(folder, game, close, choice, 'final' if (gid, 'final') in selected else 'preliminary')
+            entries[gid] = dict(entry, key=key)
+            if entry['scored']:
+                atomic_json(root / 'scored' / (gid + '.json'), dict(version=VERSION, scoring=SCORING, game_id=gid, generated_at=as_of,
+                                                                    entry=entry, rungs=rungs, medians=medians))
+    saved = dict(scoring=SCORING, games=entries)
+    if saved != cache:
+        atomic_json(cache_path, saved)
+    scored = sorted(((gid, e) for gid, e in entries.items() if e.get('scored')), key=lambda item: item[1]['start_time'])
+    excluded = {name: sum(e['excluded'][name] for _, e in scored) for name in EXCLUDED}
+    excluded['games_without_forecast'] = sum(1 for e in entries.values() if not e.get('scored') and e.get('close_captured_at'))
+    summary = dict(games=len(scored), rungs=sum(e['rungs'] for _, e in scored),
+                   median_players=sum(e['median_players'] for _, e in scored), excluded=excluded)
+    if not scored:
         summary.update(status='no_data', reason='No finished game has a pre-tip prop capture, a saved pregame forecast '
                                                 'and a final box score yet.')
     else:
-        summary.update(status='scored',
-                       brier=dict(interval=paired(rungs, 'model_brier', 'market_brier'), sd=paired(rungs, 'model_sd_brier', 'market_brier')),
-                       log_loss=dict(interval=paired(rungs, 'model_log_loss', 'market_log_loss'),
-                                     sd=paired(rungs, 'model_sd_log_loss', 'market_log_loss')),
-                       median_abs_error=paired(medians, 'model_abs_error', 'market_abs_error'))
-    return dict(version=VERSION, generated_at=as_of, summary=summary, games=games_out, rungs=rungs, medians=medians, errors=errors,
+        totals = {name: pooled([dict(date=e['date'], **e['metrics'][name]) for _, e in scored], a, b) for name, (a, b) in METRICS.items()}
+        summary.update(status='scored', brier=dict(interval=totals['brier/interval'], sd=totals['brier/sd']),
+                       log_loss=dict(interval=totals['log_loss/interval'], sd=totals['log_loss/sd']),
+                       median_abs_error=totals['median_abs_error'])
+    games = [dict({k: e[k] for k in ('date', 'start_time', 'run_id', 'stage', 'close_captured_at', 'players_scored', 'rungs',
+                                     'median_players', 'metrics')}, game_id=gid, detail=f'market/kalshi-props/scored/{gid}.json')
+             for gid, e in scored]
+    return dict(version=VERSION, scoring=SCORING, generated_at=as_of, summary=summary, games=games, errors=errors,
                 conventions='difference = model minus market (negative favours the model); difference_se is one standard error '
                             'clustered by Pacific game date. Brier and log loss (probabilities clipped to [0.001, 0.999]) score each rung '
                             'on whether the player scored more than its threshold. The model probability is conditional on playing, as '
                             'the market is: "interval" puts the published 80% interval at the 10th and 90th percentiles, "sd" uses '
                             'points_sd. The market line is a median and the model points a mean, which favours the market on absolute error '
-                            'when scoring is skewed.',
+                            'when scoring is skewed. The model forecasts regulation (its minutes stop at 48) while settlement and the box '
+                            'score count overtime points. A game\'s metrics are sums (n, a = model, b = market); its scored rungs and '
+                            'medians are in its detail file.',
                 policy='Recorded public Kalshi prices, last capture before tipoff, against the final pregame forecast. Not a quote, '
                        'a recommendation or a bet; a small sample is not an edge.')

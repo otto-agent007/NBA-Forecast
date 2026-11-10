@@ -200,11 +200,13 @@ class ReportTests(unittest.TestCase):
                        projected('1642300', 9.0, 3.0, 5.0, 13.0), dict(player_id='1630530', status='out', points_mean=0.0)]
         report = P.props_report(self.folder, self.schedule, '2026-11-10T09:00:00Z', selected=selection(predictions))
         summary = report['summary']
+        detail = json.loads((self.folder / report['games'][0]['detail']).read_text())
+        self.assertNotIn('rungs', report, 'the report holds the summary and one line per game; rungs are in the game\'s file')
         self.assertEqual(summary['status'], 'scored')
         self.assertEqual(summary['excluded'], dict(unmatched_players=1, players_without_forecast=1, players_not_entered=1,
                                                    rungs_without_mid=1, medians_not_bracketed=1, games_without_forecast=0))
         self.assertEqual(summary['rungs'], 5, "Curry's four rungs and Green's one quoted rung")
-        curry = [r for r in report['rungs'] if r['player_id'] == '201939']
+        curry = [r for r in detail['rungs'] if r['player_id'] == '201939']
         self.assertEqual([r['outcome'] for r in curry], [True, True, True, False])
         self.assertAlmostEqual(curry[2]['market_brier'], (1 - .45) ** 2)
         # the 80% interval 18-37 around 27 puts 37 at the 90th percentile: P(more than 37) = 0.1
@@ -217,11 +219,37 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((brier['n'], brier['dates']), (5, 1))
         self.assertIsNone(brier['difference_se'], 'one date: no clustered error')
         self.assertAlmostEqual(brier['difference'], brier['model_brier'] - brier['market_brier'])
-        median = report['medians'][0]
+        median = detail['medians'][0]
         self.assertEqual((median['player_id'], median['actual_points']), ('201939', 31))
         self.assertAlmostEqual(median['market_abs_error'], abs(24.5 + .22 / .27 * 5 - 31))
         self.assertAlmostEqual(median['model_abs_error'], 4.0)
         self.assertEqual(report['games'][0]['close_captured_at'], '2026-11-10T02:55:00Z')
+        self.assertEqual(report['games'][0]['metrics']['brier/interval']['n'], 5)
+        # Scored once: the next rebuild reads neither the props history nor the forecast selection.
+        with patch('nba_forecast.kalshi_props.read_props', side_effect=AssertionError('read again')), \
+             patch('nba_forecast.daily_review._selected', side_effect=AssertionError('selected again')):
+            again = P.props_report(self.folder, self.schedule, '2026-11-10T10:00:00Z')
+        self.assertEqual(again['summary'], summary)
+        # A revised box score scores the game again.
+        finals[0]['pts'] = 24
+        (self.folder / 'finals' / (GAME['game_id'] + '.json')).write_text(json.dumps(finals) + ' ')
+        revised = P.props_report(self.folder, self.schedule, '2026-11-10T11:00:00Z', selected=selection(predictions))
+        self.assertEqual(revised['summary']['median_abs_error']['model_abs_error'], 3.0)
+
+    def test_a_record_never_names_archives_that_were_not_written(self):
+        with patch('nba_forecast.kalshi_props._archive', side_effect=OSError('disk full')):
+            failed = P.capture_kalshi_props(self.folder, [GAME], '2026-11-10T01:00:00Z', fetch=fetcher(dict(KXNBAPTS=points())))
+        self.assertEqual((failed['captured'], [e['error'] for e in failed['errors']]), ([], ['disk full']))
+        self.assertEqual(P.read_props(self.folder, GAME['game_id']), [], 'the archive failed first, so nothing was appended')
+        done = P.capture_kalshi_props(self.folder, [GAME], '2026-11-10T01:00:00Z', fetch=fetcher(dict(KXNBAPTS=points())))
+        self.assertEqual(done['captured'], [GAME['game_id']], 'the slot stayed open')
+
+    def test_pooled_sums_give_the_row_level_answer(self):
+        rows = [dict(date='d1', a=.1, b=.3), dict(date='d1', a=.4, b=.2), dict(date='d2', a=.5, b=.5), dict(date='d3', a=.0, b=.2)]
+        games = [dict(date='d1', n=2, a=.5, b=.5), dict(date='d2', n=1, a=.5, b=.5), dict(date='d3', n=1, a=0., b=.2)]
+        by_rows, by_games = P.paired(rows, 'a', 'b'), P.pooled(games, 'a', 'b')
+        for key in ('n', 'dates', 'a', 'b', 'difference', 'difference_se'):
+            self.assertAlmostEqual(by_rows[key], by_games[key])
 
     def test_a_capture_after_tipoff_is_not_the_close_and_the_error_is_clustered_by_date(self):
         P.record_props(self.folder, P.extract_props(GAME, dict(points=points()), ROSTER, '2026-11-10T02:55:00Z', []))

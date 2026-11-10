@@ -414,8 +414,8 @@ def _tick(folder,history,report):
         error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
     active_model,model_digest=load_active(folder,_now())
     # The ESPN game summary's injury lists are forecast evidence. The digests the last
-    # capture saved key the jobs; the capture itself runs after the forecasts, so a
-    # change ESPN makes rebuilds the forecast one tick later.
+    # capture saved key the jobs: the capture service's run at :45, about 15 s before
+    # this tick, or this tick's own fallback capture after its forecasts, a tick later.
     capture=dict(evidence=saved_capture_evidence(folder,upcoming))
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.

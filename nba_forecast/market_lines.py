@@ -193,6 +193,9 @@ def capture_game_lines(folder, games, season, as_of, deadline=None, index=True):
             event, _ = scoreboard_event(game, folder / 'references')
             if event is None:
                 raise ValueError('no unique ESPN event for this matchup')
+            if deadline is not None and time.monotonic() > deadline:
+                report['deferred'].append(game['game_id'])  # the scoreboard took the budget; the summary waits
+                continue
             payload, meta = fetch_reference(BASE + 'summary?event=' + str(event['provider_event_id']), folder / 'references')
             # The summary's injury lists are forecast evidence; their digest tells a tick whether they changed.
             evidence[game['game_id']] = hashlib.sha256(canonical(payload.get('injuries'))).hexdigest()

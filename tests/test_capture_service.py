@@ -183,11 +183,11 @@ class TickFallbackTests(unittest.TestCase):
         self.assertNotIn('market_lines', report)
         self.assertNotIn('kalshi_lines', report)
         self.assertIn('market_lines', report['timings'])
-        heartbeat(self.folder, 20, status='busy')
-        self.assertEqual(operations.run_tick(self.folder, [])['market_capture']['by'], 'nba-capture', 'a busy run means someone is capturing')
         heartbeat(self.folder, C.HEARTBEAT_SECONDS + 1)
         stale = operations.run_tick(self.folder, [])
         self.assertEqual((stale['market_capture']['by'], self.espn.call_count), ('tick', 1))
+        heartbeat(self.folder, 20, status='busy')
+        self.assertEqual(operations.run_tick(self.folder, [])['market_capture']['by'], 'tick', 'a busy run captured nothing')
         heartbeat(self.folder, 20, status='error')
         self.assertEqual(operations.run_tick(self.folder, [])['market_capture']['by'], 'tick')
 
@@ -211,6 +211,34 @@ class TickFallbackTests(unittest.TestCase):
         self.assertIn('capture.lock held', report['market_capture']['reason'])
 
 
+class BusyTests(unittest.TestCase):
+    def test_a_failing_service_and_a_long_tick_capture_never_leave_a_minute_without_a_capture(self):
+        """2026-11-10 review: a busy run used to count as alive, so the tick after it skipped its fallback."""
+        with tempfile.TemporaryDirectory() as d:
+            t0 = datetime(2026, 11, 10, 2, 0, 45, tzinfo=timezone.utc)
+            with patch('nba_forecast.capture._capture', side_effect=RuntimeError('service bug')):
+                self.assertEqual(C.run_capture(d, now=t0.isoformat())['status'], 'error')
+            inside, release, out = threading.Event(), threading.Event(), {}
+            def slow(deadline):
+                inside.set()
+                release.wait(5)
+                return dict(captured=['g'], errors=[])
+            tick = threading.Thread(target=lambda: out.update(first=C.tick_fallback(d, dict(market_lines=slow), 60, (t0 + timedelta(seconds=15)).isoformat())))
+            tick.start()
+            inside.wait(5)
+            with patch('nba_forecast.capture._now', return_value=(t0 + timedelta(seconds=60)).isoformat()):
+                self.assertEqual(C.run_capture(d, now=(t0 + timedelta(seconds=60)).isoformat())['status'], 'busy')
+            release.set()
+            tick.join()
+            self.assertEqual(out['first'][0]['by'], 'tick')
+            self.assertEqual(json.loads((Path(d) / 'last-capture.json').read_text())['status'], 'error', 'a busy run leaves the last real run on record')
+            summary_, results = C.tick_fallback(d, dict(market_lines=lambda deadline: dict(captured=[], errors=[])), 60,
+                                                (t0 + timedelta(seconds=75)).isoformat())
+            self.assertEqual((summary_['by'], list(results)), ('tick', ['market_lines']), 'the next tick captures again')
+            lines = [json.loads(line)['status'] for line in (Path(d) / 'capture.jsonl').read_text().splitlines()]
+            self.assertEqual(lines, ['error', 'busy'])
+
+
 class FileSafetyTests(unittest.TestCase):
     def test_the_ticks_read_of_the_saved_digests_never_sees_a_partial_file(self):
         with tempfile.TemporaryDirectory() as d:
@@ -231,6 +259,19 @@ class FileSafetyTests(unittest.TestCase):
                 stop.set()
                 thread.join()
             self.assertEqual(set(reads), {40})
+
+    def test_the_index_follows_the_line_files_even_with_no_game_upcoming(self):
+        from nba_forecast import market_lines as M
+        from tests.test_market_lines import GAME
+        with tempfile.TemporaryDirectory() as d:
+            schedule = normalize_season(payload([game('0022600001', '2026-10-30T00:00:00Z')]), NOW)  # nothing within 24 hours
+            atomic_json(Path(d) / 'schedule' / 'latest.json', schedule)
+            self.assertTrue(C.run_capture(d, now=NOW)['index_rebuilt'], 'the first run builds it')
+            M.record_game_lines(d, M.extract_game_lines(summary(), GAME, '2026-27', META), '2026-10-23T21:00:30Z')  # e.g. a recovered close
+            report = C.run_capture(d, now=NOW)
+            self.assertEqual((report['games'], report['index_rebuilt']), ([], True))
+            self.assertIn(GAME['game_id'], json.loads((Path(d) / 'market' / 'index.json').read_text())['games'])
+            self.assertFalse(C.run_capture(d, now=NOW)['index_rebuilt'])
 
     def test_the_index_is_rebuilt_only_when_a_line_file_changed(self):
         from nba_forecast import market_lines as M

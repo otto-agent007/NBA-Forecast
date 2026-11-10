@@ -307,14 +307,21 @@ Kalshi in another (its game lines first, then the player props, below), until
 one deadline 40 seconds after the run starts, so a slow ESPN cannot starve
 Kalshi or the reverse; a game a lane does not reach is listed as `deferred` and
 waits for the next run, where its slot is still open. Every request has a
-12-second timeout; the unit's two-minute start limit ends a run stuck on name
-resolution, which the timeouts do not cover. Kalshi's two series run one after
+12-second timeout and each lane checks the deadline before each request (ESPN
+also between a game's scoreboard and summary), so a run ends within 52 seconds;
+the unit's two-minute start limit ends a run stuck on name resolution, which
+the timeouts do not cover. Kalshi's two series run one after
 the other because side by side (42 requests in 6.6 seconds) they drew HTTP 429
 on 2026-11-10. A run writes `last-capture.json` and, when it did something,
 one line of counts to `capture.jsonl`; an idle run (every slot already taken)
-takes about 0.2 seconds and 28 MB and writes nothing else. `market/index.json`
-is rebuilt once per run, and only when a line file changed. Every writer of the
-capture files holds `capture.lock`.
+takes about 0.2 seconds and 28 MB and writes nothing else; a run that finds the
+capture lock held (`busy`) captures nothing and leaves `last-capture.json` to the
+last run that did. `market/index.json` is rebuilt once per run, games or not,
+and only when a line file changed. Every capture of upcoming games, the
+service's and the tick's, holds `capture.lock`; the derived service's evidence
+recovery and the `recover-evidence` command append to `market/game-lines/` and
+`market/kalshi/` without it, but only for tipped games, whose files no capture
+writes after tipoff.
 
 Before that the tick captured after its forecasts, so a long or blocked tick
 lost captures: on 2026-11-09 (Pacific, by 23:25) 67 of 1,320 ticks ran past a
@@ -325,8 +332,8 @@ last ESPN and Kalshi captures 9.7 minutes before tip, against 0.8 to 0.9 minutes
 
 The tick still captures the game lines (not the props), as before, when the
 service has not finished a run within three minutes
-(`capture.HEARTBEAT_SECONDS`, from `last-capture.json`; a failed run does not
-count) and the capture lock is free: a host without the unit, or with it
+(`capture.HEARTBEAT_SECONDS`, from `last-capture.json`; a failed or busy run
+does not count) and the capture lock is free: a host without the unit, or with it
 stopped, keeps its lines. It then gives ESPN and Kalshi half of its 120-second
 capture budget each, in turn, and reports `market_lines` and `kalshi_lines` as
 before; when the service is capturing, the tick reports
@@ -406,6 +413,9 @@ game, as the model's points and interval are conditional on playing. The derived
 service writes `market/props-report.json` (not shown on the dashboard yet): for
 each finished game, the last pre-tip capture against the final pregame forecast
 and the box score, for players who entered the game (positive minutes) only.
+The model forecasts regulation (its minutes stop at 48) while settlement and
+the box score count overtime points, so an overtime game counts against the
+model.
 Every quoted points rung of a matched, projected player is scored by Brier and
 log loss on whether he cleared it, the market mid against the model's
 probability (a two-piece normal that puts the published 80% interval at the
@@ -415,7 +425,15 @@ model minus market with one standard error clustered by Pacific game date;
 excluded players and rungs are counted by reason. A median scored on absolute
 error is favoured against a mean when scoring is skewed. Until a captured game
 is final the report says `no_data`. Rebounds, assists and threes are recorded
-but not yet scored.
+but not yet scored. A game is scored once: its counts and sums are kept in
+`market/kalshi-props/report-cache.json` until its props file, its final box score
+or its tipoff changes (a close cannot change after tip, nor can the selected
+forecast: runs made at or after tipoff are never selected), and its scored rungs
+and medians are written once to `market/kalshi-props/scored/GAME_ID.json`. The
+report holds the pooled summary and one line per game; the forecast selection
+is read only for games not yet scored. With ten 2 MB games the next rebuild took
+0.1 ms a game instead of 31 ms, and the report 0.9 KB a game instead of 53 KB
+(`scripts/research/props_report_cost.py`).
 
 These are recorded public prices from Kalshi's read-only API, with no account
 or authentication: what the market said, as a benchmark for the forecasts. They
@@ -657,6 +675,13 @@ and the units written or rewritten. Run it again and it changes nothing. The
 next tick re-forecasts every pregame game under the new artifact; the next
 derived run refits the prospective interval calibration, which is bound to the
 model key.
+
+Rolling back to a release from before 2026-11-10, whose tick captures market
+lines without `capture.lock`, deploy leaves `nba-capture.timer` enabled; run
+`systemctl --user disable --now nba-capture.timer` with the rollback, or two
+processes write the capture files unprotected. A later release re-enables it on
+deploy only if the unit files are absent, so enable it again by hand
+(`systemctl --user enable --now nba-capture.timer`) when rolling forward.
 
 `last-tick.json`, `last-derived.json` and `last-capture.json`, the append-only
 `ticks.jsonl`, `derived.jsonl` and `capture.jsonl`, service exit status and
