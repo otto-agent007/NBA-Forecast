@@ -13,16 +13,45 @@ args = [a for a in sys.argv[1:] if not a.startswith('--')]
 folder = Path(args[0]); snaps = args[1:]
 if '--clear-replay-cache' in sys.argv:
     shutil.rmtree(folder/'cache'/'replay', ignore_errors=True)
-pointer = json.loads((folder/'model-upgrade-active.json').read_text())
-artifact = json.loads((folder/'model-artifacts'/(pointer['artifact_sha256']+'.json')).read_text())
 import nba_forecast.runner_release as rr
-rr.package_digest = lambda package: artifact.get('runner_package_sha256')
+RUNNER = {}
+rr.package_digest = lambda package: RUNNER.get('sha256')
 from nba_forecast.operations import _merge_finals
-from nba_forecast.enhancements import load_active, prepare
+from nba_forecast.enhancements import _read, parse_time, prepare
+def pointers():
+    """Every model activation the folder records (the live pointer and the activation backups), newest first."""
+    found = [folder/'model-upgrade-active.json', *sorted((folder/'activation-backups').glob('*/*.json'))]
+    unique = {}
+    for path in found:
+        try:
+            p = json.loads(path.read_text())
+            unique[(p['activated_at'], p['artifact_sha256'])] = p
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return sorted(unique.values(), key=lambda p: parse_time(p['activated_at']), reverse=True)
+POINTERS = pointers()
+def active_at(as_of):
+    """The artifact production had active at ``as_of`` (the live pointer may have been re-activated since)."""
+    for p in POINTERS:
+        if parse_time(p['activated_at']) <= parse_time(as_of):
+            digest = p['artifact_sha256']
+            RUNNER['sha256'] = json.loads((folder/'model-artifacts'/(digest+'.json')).read_text()).get('runner_package_sha256')
+            return _read(folder, digest, as_of), digest
+    raise ValueError('no model activation at or before ' + as_of)
 from nba_forecast.shot_profiles import prepare_shot_profiles
 from nba_forecast.model_versions import uses_refinements
 from nba_forecast.profiles import eligible_history, build_profiles
 from nba_forecast.preflight import run_preflight
+import nba_forecast.preflight as preflight_module
+class SnapshotClock(preflight_module.datetime):
+    """Preflight stamps the wall clock into the snapshot and checks evidence against it; in production that is
+    seconds after the snapshot's as_of. Replaying an older snapshot, the clock is held at its as_of instead
+    (for main and the branch alike), or the prepared role context reads as stale."""
+    frozen = None
+    @classmethod
+    def now(cls, tz=None):
+        return cls.frozen.astimezone(tz) if tz else cls.frozen.replace(tzinfo=None)
+preflight_module.datetime = SnapshotClock
 from nba_forecast.model import forecast
 from nba_forecast.schedule import canonical
 D = lambda v: hashlib.sha256(canonical(v)).hexdigest()[:16]
@@ -49,7 +78,8 @@ for path in snaps:
         w = time.monotonic(); v = fn(); timings[name] = round(time.monotonic()-w, 2); return v
     game = snapshot['games'][0]
     usable = step('eligible_history', lambda: eligible_history(snapshot, history))
-    active, digest = load_active(folder, snapshot['as_of'])
+    SnapshotClock.frozen = parse_time(snapshot['as_of'])
+    active, digest = active_at(snapshot['as_of'])
     snapshot['model_enhancements'] = step('prepare', lambda: prepare(active, digest, game, snapshot['as_of'], directory=folder))
     rejected = []
     snapshot['shot_profiles'] = step('shot_profiles', lambda: prepare_shot_profiles(folder, snapshot, usable, rejected=rejected))
@@ -64,7 +94,7 @@ for path in snaps:
     profiles = step('build_profiles2', lambda: build_profiles(snapshot, usable))
     prediction = step('forecast', lambda: forecast(snapshot, usable))
     issues = [i.get("code") for i in verification.get("issues", [])]
-    out = dict(issues=issues[:6], game=game['game_id'], preflight=verification['status'], rejected=len(rejected),
+    out = dict(issues=issues[:6], game=game['game_id'], artifact=digest[:12], preflight=verification['status'], rejected=len(rejected),
                digests={k: D(snapshot.get(k)) for k in ('model_enhancements', 'shot_profiles', 'role_context', 'shot_quality', 'preflight')},
                preflight_stable=D(stable(verification)), profiles=D(profiles), forecast=D(prediction), timings=timings, total=round(sum(timings.values()), 2))
     import os

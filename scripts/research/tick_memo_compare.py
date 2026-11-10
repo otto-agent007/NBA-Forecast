@@ -16,7 +16,9 @@ for line in (out/'prepare_identity.log').read_text().splitlines():
         runs[label].append(json.loads(line))
 sig = lambda d: (d['game'], d['digests']['model_enhancements'], d['digests']['shot_profiles'], d['digests']['role_context'],
                  d['digests']['shot_quality'], d['preflight_stable'], d['preflight'], d['profiles'], d['forecast'])
-base = [sig(d) for d in runs['main']]
+base = [sig(d) for d in runs.get('main', [])]
+if not base or any(len(rows) != len(base) for rows in runs.values()):
+    sys.exit('(c) FAILED: a prepare run stopped early: ' + str({label: len(rows) for label, rows in runs.items()}))
 for label, rows in runs.items():
     print('(c) %-16s identical to main: %s; first game %.2f s, later games %s s' % (label, [sig(d) for d in rows] == base,
           rows[0]['total'], [d['total'] for d in rows[1:]]))
