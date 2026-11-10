@@ -984,6 +984,17 @@ def cmd_analyze(args):
     for x in examples4:
         print('  e.g. ' + x)
 
+    # ---- context: the market report's selected run (live_replay.select_run) and the player-sum fallback
+    fb = []
+    for r in rows:
+        allr = [x for x in runs.get(r['game']['game_id'], []) if parse_time(x['created_at']) < r['tip']]
+        chosen = max([x for x in allr if x['stage'] == 'final'] or allr, key=lambda x: (parse_time(x['created_at']), x['rowid']))
+        if chosen['margin']['basis'] != 'margin_forecast' and chosen['margin']['published'] is not None and r['pts']['close'] is not None:
+            fb.append((r, chosen))
+    print(f'\nGames whose market-report run (last final-stage pregame run) published the player-sum fallback: {len(fb)}' +
+          ''.join(f'\n  {r["game"]["game_id"]} {r["game"]["away_tricode"]}@{r["game"]["home_tricode"]}: published {c["margin"]["published"]:.1f}, '
+                  f'close {r["pts"]["close"]:.1f}, last estimated run {fmt(r["fpts"]["close"])}' for r, c in fb))
+
     # ---- context: lineups, cadence
     confirmed = sum(1 for r in rows for run in r['runs'] for lu in run['preflight']['lineups'].values() if lu.get('confirmed'))
     print(f'\nProjected lineups marked confirmed in any run: {confirmed} (of {sum(len(r["runs"]) * 2 for r in rows)} team-runs)')
