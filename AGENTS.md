@@ -56,12 +56,16 @@ A change must not be `worse` on either path, by the rules above. A change
 inside the production-only layers (`candidate.py`, `rotation_allocation.py`,
 `game_environment.py`, `context_effects.py`, the artifact's parameters or
 context model) leaves the baseline replay identical and is judged on the
-production path. The backtest refuses a reference replayed on the other path.
+production path. The backtest refuses a reference replayed on the other path
+and warns when a production-path reference was replayed with another artifact.
+CI runs only the baseline smoke replay, so the production-path run is the
+author's to do and report.
 
 When a change is merged, commit both scoreboards as the new references
 (`datasets/backtest-<date>/` and `datasets/backtest-<date>-production-path/`,
-both files each) and point this file at them. A live artifact with new
-parameters or a new context model is exported with
+both files each) and point this file at them; a production-only change whose
+baseline replay is byte-identical commits only the production-path one. A
+live artifact with new parameters or a new context model is exported with
 `scripts/research/export_production_artifact.py` and gets a new
 production-path reference. See `docs/backtest.md` for what each replay can and
 cannot measure.

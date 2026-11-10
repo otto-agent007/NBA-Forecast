@@ -186,6 +186,37 @@ def _calendar(records):
                             away_team_id=r['away_team_id'], venue=dict(timezone=r.get('venue_timezone'))) for r in records])
 
 
+def _artifact_identity(artifact):
+    """What a production-path replay reads from its artifact, without the model key, which changes every release."""
+    return dict(model_version=artifact['model_version'], parameters=artifact['parameters'],
+                context_model_sha256=hashlib.sha256(canonical(artifact.get('context_model'))).hexdigest(),
+                excluded_history_sha256=hashlib.sha256(canonical(sorted(artifact.get('excluded_history_game_ids', [])))).hexdigest())
+
+
+def _artifact_mismatch(artifact, reference, ref_board):
+    """How the production-path reference's artifact differs from this run's in what the replay reads, or None.
+
+    A reference saved before a field was recorded may carry it in a ``manifest.json``
+    beside its scoreboard (``production_artifact``); a field recorded nowhere counts
+    as a mismatch, because the verdict cannot tell an artifact change from the code change.
+    """
+    recorded = dict((ref_board.get('parameters') or {}).get('production_artifact') or {})
+    manifest = Path(reference) / 'manifest.json'
+    if manifest.exists():
+        for key, value in (json.loads(manifest.read_text()).get('production_artifact') or {}).items():
+            recorded.setdefault(key, value)
+    current = _artifact_identity(artifact)
+    differs = [k for k in current if k in recorded and canonical(recorded[k]) != canonical(current[k])]
+    unrecorded = [k for k in current if k not in recorded]
+    if not differs and not unrecorded:
+        return None
+    parts = (['different: ' + ', '.join(differs)] if differs else []) \
+        + (['not recorded for the reference: ' + ', '.join(unrecorded)] if unrecorded else [])
+    return dict(differs=differs, unrecorded=unrecorded,
+                message=f'the reference may have been replayed with another artifact ({"; ".join(parts)}): '
+                        'its differences are mixed into every paired change')
+
+
 def _production_forecast(snapshot, history, artifact, team_games, calendar):
     """Production's path (``candidate.forecast_candidate``) with the inputs ``enhancements.prepare`` would give it.
 
@@ -801,6 +832,9 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         raise ValueError(f'{reference} is a {reference_path}-path scoreboard and this replay is the {model_path} path: '
                          'a change is judged against the reference of its own path (AGENTS.md); '
                          '--cross-path compares the two paths instead')
+    mismatch = _artifact_mismatch(artifact, reference, ref_board) if artifact and reference_path == 'production' else None
+    if mismatch and progress:
+        progress(dict(warning=mismatch['message']))
     rows = dict(version=VERSION, player_fields=list(PLAYER_FIELDS), team_fields=list(TEAM_FIELDS), game_fields=list(GAME_FIELDS),
                 players=[], teams=[], games=[])
     parts, dates, totals, skipped = [], {}, dict(total=0, evaluated=0), defaultdict(int)
@@ -841,11 +875,8 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
                         interval_family=INTERVAL_FAMILY, heuristic_z80=HEURISTIC_Z80,
                         **({'previous_season_seeded': [bool(s.get('previous_records')) for s in seasons]}
                            if any(s.get('previous_records') for s in seasons) else {}),
-                        **(dict(production_artifact=dict(
-                            model_version=artifact['model_version'], model_key=artifact['model_key'],
-                            parameters=artifact['parameters'],
-                            context_model_sha256=hashlib.sha256(canonical(artifact.get('context_model'))).hexdigest(),
-                            **(artifact_source or {}))) if artifact else {})),
+                        **(dict(production_artifact=dict(model_key=artifact['model_key'], **_artifact_identity(artifact),
+                                                         **(artifact_source or {}))) if artifact else {})),
         games=dict(totals, skipped=dict(skipped)),
         metrics=summarize(rows['players'], rows['teams'], rows['games']),
         limitations=INJURY_LIMITATIONS if with_injuries else LIMITATIONS)
@@ -867,6 +898,7 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
                                         reference_model_version=ref_board.get('model_version'),
                                         reference_model_path=reference_path,
                                         **({'cross_path': True} if reference_path != model_path else {}),
+                                        **({'artifact_warning': mismatch} if mismatch else {}),
                                         **compare(rows, ref_rows, dates, ungated=ungated))
         if len(parts) > 1:
             for part in parts:
@@ -957,6 +989,8 @@ def format_scoreboard(board):
         if c.get('cross_path'):
             lines.append(f"  the {board.get('model_path', 'baseline')} path against a {c['reference_model_path']}-path reference: "
                          'the difference between the paths, not a gate verdict')
+        if c.get('artifact_warning'):
+            lines.append('  WARNING: ' + c['artifact_warning']['message'])
         for name in ('points', 'minutes', 'team_points', 'margin', 'participation', 'winner', 'interval_score'):
             item = c.get(name, {})
             if item.get('mean') is not None:

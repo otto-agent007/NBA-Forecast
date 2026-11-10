@@ -270,11 +270,19 @@ replay takes about eleven. Rerun against the reference it wrote byte-identical
 rows and reported every paired difference exactly zero, so a verdict on this
 path measures the change and nothing else. The scoreboard records the path
 (`model_path`) and, under `parameters.production_artifact`, the artifact file's
-path and SHA256, its model version and key, parameters and a hash of its
-context model. A reference replayed on the other path is refused before
+path and SHA256, its model version and key, parameters and hashes of its
+context model and excluded games. A reference replayed on the other path is refused before
 anything is replayed, because the difference between the paths would read as
 the change; `--cross-path` allows it when that difference is what is wanted,
-and then the exit code is never 3.
+and then the exit code is never 3. Against a production-path reference the
+run also compares what the replay reads from the two artifacts (model version,
+parameters, context-model and excluded-games hashes; not the model key, which
+changes every release) and prints a warning, also saved as the comparison's
+`artifact_warning`, when one differs or the reference does not record it: an
+artifact change would otherwise read as the code change. A reference saved
+before the hashes were recorded can carry them in a `manifest.json` beside its
+scoreboard. `datasets/backtest-2026-10-27-production-path` (the 0.5.0
+artifact, no hashes) draws the warning.
 
 CI does not replay this path yet. Its `--limit 400` smoke run took 870 CPU
 seconds here against 195 for the baseline one (4.47 times); at that ratio
@@ -340,9 +348,14 @@ data/operations/production --runs 70 --stride 9` on 2026-11-09):
 ### 2026-11-09: the production path against the baseline
 
 `datasets/backtest-2026-11-09-production-path/` replayed main 1385e80 (the
-release production ran) with the artifact above, paired with the baseline
-reference `datasets/backtest-2026-11-07-market-strength` (`--cross-path`
-today; the run predates the flag). Production path minus baseline, pooled over
+release production ran) with
+`datasets/production-artifact-2026-11-09/artifact.json.gz` (SHA256
+`648950cbaf9dba58…`), paired with the baseline reference
+`datasets/backtest-2026-11-07-market-strength`. Its scoreboard predates the
+artifact fields and `--cross-path`: its `comparison` block, `worse`, is that
+cross-path comparison, the difference between the paths and not a gate
+verdict, and its `manifest.json` records the artifact file, its hashes and
+this. Production path minus baseline, pooled over
 the three seasons, ± two clustered standard errors as the gate prints them
 (`python3 scripts/research/path_scoreboards.py --baseline
 datasets/backtest-2026-11-07-market-strength --production

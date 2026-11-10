@@ -429,6 +429,55 @@ class BacktestTests(unittest.TestCase):
         self.assertIn(', production path): WITHIN_NOISE', backtest.format_scoreboard(same))
         self.assertEqual((crossed['comparison']['reference_model_path'], crossed['comparison']['cross_path']), ('baseline', True))
         self.assertIn('the production path against a baseline-path reference', backtest.format_scoreboard(crossed))
+        self.assertNotIn('artifact_warning', same['comparison'])
+        self.assertNotIn('WARNING', backtest.format_scoreboard(same))
+
+    def test_a_production_reference_replayed_with_another_artifact_is_flagged(self):
+        history, records, artifact = self._production_inputs()
+        seasons = [dict(history=history, records=records)]
+        other = dict(artifact, parameters=dict(artifact['parameters'], pace_strength=.5), model_key='o' * 64)
+        warnings = []
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            backtest.run_seasons(seasons, d / 'p', warmup_fraction=.5, as_of=AS_OF, artifact=artifact)
+            board = backtest.run_seasons(seasons, d / 'q', warmup_fraction=.5, as_of=AS_OF, artifact=other, reference=d / 'p',
+                                         progress=lambda item: warnings.extend([item['warning']] if 'warning' in item else []))
+            # A new release changes the model key and nothing the replay reads: no warning.
+            rekeyed = backtest._artifact_mismatch(dict(artifact, model_key='r' * 64, known_at='2026-02-01T00:00:00Z'), d / 'p',
+                                                  json.loads((d / 'p' / 'scoreboard.json').read_text()))
+            # A reference saved before the hashes were recorded: flagged, unless a manifest beside it supplies them.
+            (d / 'old').mkdir()
+            (d / 'old' / 'rows.json.gz').write_bytes((d / 'p' / 'rows.json.gz').read_bytes())
+            old = json.loads((d / 'p' / 'scoreboard.json').read_text())
+            recorded = old['parameters']['production_artifact']
+            hashes = {k: recorded.pop(k) for k in ('context_model_sha256', 'excluded_history_sha256')}
+            (d / 'old' / 'scoreboard.json').write_text(json.dumps(old))
+            unrecorded = backtest._artifact_mismatch(artifact, d / 'old', old)
+            (d / 'old' / 'manifest.json').write_text(json.dumps(dict(production_artifact=hashes)))
+            completed = backtest._artifact_mismatch(artifact, d / 'old', old)
+            changed = backtest._artifact_mismatch(dict(artifact, context_model=dict(status='ready')), d / 'old', old)
+        warning = board['comparison']['artifact_warning']
+        self.assertEqual((warning['differs'], warning['unrecorded']), (['parameters'], []))
+        self.assertEqual(warnings, [warning['message']])
+        self.assertIn('WARNING: the reference may have been replayed with another artifact (different: parameters)', backtest.format_scoreboard(board))
+        self.assertIsNone(rekeyed)
+        self.assertEqual((unrecorded['differs'], unrecorded['unrecorded']), ([], ['context_model_sha256', 'excluded_history_sha256']))
+        self.assertIsNone(completed)
+        self.assertEqual(changed['differs'], ['context_model_sha256'])
+
+    def test_the_committed_production_reference_matches_the_committed_artifact(self):
+        root = Path(__file__).resolve().parents[1]
+        artifact = backtest.read_json(root / 'datasets/production-artifact-2026-11-09/artifact.json.gz')
+        reference = root / 'datasets/backtest-2026-11-09-production-path'
+        board = json.loads((reference / 'scoreboard.json').read_text())
+        manifest = json.loads((reference / 'manifest.json').read_text())
+        self.assertEqual(manifest['production_artifact']['sha256'],
+                         backtest.sha256_of(root / manifest['production_artifact']['path']))
+        self.assertIsNone(backtest._artifact_mismatch(artifact, reference, board))
+        # The October reference was replayed with the 0.5.0 artifact and records no hashes.
+        october = root / 'datasets/backtest-2026-10-27-production-path'
+        flagged = backtest._artifact_mismatch(artifact, october, json.loads((october / 'scoreboard.json').read_text()))
+        self.assertEqual(flagged['differs'], ['model_version'])
 
     def test_the_command_records_the_artifact_file_and_does_not_gate_a_comparison_of_the_paths(self):
         import contextlib
