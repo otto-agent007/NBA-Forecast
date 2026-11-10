@@ -104,3 +104,31 @@ half-life, ridge 0.1) blended into the rating: 0.5 share −0.075 ± 0.018,
 +0.186 at the 0.7 share. The 0.7 share is what `backtest-2026-11-07-market-strength`
 gated (margin −0.090 ± 0.050 at two standard errors, winner Brier −0.0023 ±
 0.0011, improved).
+
+## Run on 2026-11-09
+
+`absence_harness.py --reference datasets/backtest-2026-11-07-market-strength
+--components <replay_components.py run>/components.json.gz` (25 s): 0 of 2,604
+games differ from the replay in their out players; largest differences 5.3e-15
+in the absence term and 7.1e-15 in the location (the same on the seeded replay's
+3,676 games). Who counts as an absent regular, and for how much, against the
+current rule, one date-clustered standard error: share-of-season, share-of-last-ten
+and rating-weighted shares +0.003, +0.004 and −0.007 on margin MAE but +0.0010
+to +0.0012 on winner Brier; 0.075 a minute −0.035 ± 0.017; 0.075 plus 0.035 for
+regulars out for all of the last ten −0.051 ± 0.022 and −0.0009 ± 0.0004. All
+`within_noise` on the gate; the real gate run of the last agreed to 7.1e-15 per
+margin. Written up in `docs/backtest.md`, "Tried, not merged: 2026-11-09".
+`absence_live.py` on production (read-only, by run id): the same direction
+live, toward a smaller term, within two standard errors on 97 games.
+
+`line_blend.py --reference datasets/backtest-2026-11-07-market-strength
+--market-history data/market-history` and `--live <production or a copy>`:
+blending the published margin with the line, (1 − w) × model + w × line. Replay
+with the close (an upper bound): margin MAE 11.161 at w = 0, 10.898 at w = 0.85
+and 1 (−0.264 ± 0.057 and −0.263 ± 0.066); with the opener (a lower bound)
+best near w = 0.5–0.65 (−0.145 ± 0.054) and worse than that at w = 1 (−0.058 ±
+0.079). Live, the last DraftKings line captured by each forecast's `as_of`: the
+final forecast (median 11 minutes before tip, its line 0.10 points from the
+close) 12.118 at w = 0 against 10.850 at w = 1 (−1.268 ± 0.405, 120 games); the
+first forecast of the day (median 446 minutes before tip, its line 0.79 from
+the close) 11.871 against 10.882 (−0.989 ± 0.283, 110 games).

@@ -920,3 +920,106 @@ at this deploy. The absence adjustment (0.1 points per reported-out minute)
 was sized with the results-only rating; the strength already reflects recent
 absences through the closes of the games they affected, so the two may
 overlap. Not measured on its own.
+
+## Tried, not merged: 2026-11-09 (who counts as an absent regular)
+
+The reference is unchanged. The question came from live: on the games of
+2026-10-24 to 11-09 where the absence term (0.65 × the rating's 0.1 points per
+minute of reported-out regulars) was at least one rating point, the model's
+margin error was larger with the term than without it, and only a quarter of
+the counted minutes belonged to players who had played every team game. A
+regular who has missed most of the team's games still counts at full weight
+(`minutes_per_game` is per game he played; "one of the last ten" is the whole
+season until a team's tenth game), although his absence is partly in the
+results and in the recent closes behind the market strength.
+
+`scripts/research/absence_harness.py` re-scores a reference's margins under any
+absence rule without a replay: it rebuilds every replayed game's reported-out
+players and their game logs with the replay's own functions, and a rule moves
+the published margin by exactly 0.65 × the change in its term (team totals by
+half that, through `scoreline.reconcile`). It reproduces the replay to the
+digit: against `scripts/research/replay_components.py` output of an
+unchanged-code replay (whose rows are byte-identical to the references), 0 of
+2,604 gate and 3,676 seeded games differ in their out players, and the largest
+difference is 2.8e-14 minutes, 5.3e-15 in the absence term and 7.1e-15 in the
+location. A real gate run with the best rule below patched in agreed with the
+harness to 7.1e-15 on every margin and printed its verdict.
+
+Gate seasons, pooled (2,604 games), change against the current rule, ± one
+date-clustered standard error; "gate" is the gate's own verdict (two standard
+errors and the 0.5% floor); the last column is the slope of actual − model on
+home-minus-away counted minutes (per ten, today's eligibility), zero when the
+term is the right size:
+
+| Rule | Margin MAE | Gate | Winner Brier | Gate | Miss per 10 min |
+|---|---|---|---|---|---|
+| Current (0.1 a minute, 15+ minutes, one of the last ten) | 11.161 | | 0.2019 | | +0.17 ± 0.06 |
+| Term off | +0.153 ± 0.069 | worse | +0.0044 ± 0.0013 | worse | −0.48 ± 0.06 |
+| A1 × share of the season's team games he played | +0.003 ± 0.026 | within noise | +0.0011 ± 0.0005 | worse | −0.04 ± 0.06 |
+| A2 × share of the last ten | +0.004 ± 0.032 | within noise | +0.0012 ± 0.0006 | within noise | −0.08 ± 0.06 |
+| A3 × 0.3 season share + 0.7 share weighted with a 7-day half-life | −0.007 ± 0.031 | within noise | +0.0010 ± 0.0006 | within noise | −0.09 ± 0.06 |
+| A4 0.075 a minute | −0.035 ± 0.017 | within noise | +0.0001 ± 0.0003 | within noise | +0.01 ± 0.06 |
+| A4 0.05 a minute | −0.021 ± 0.035 | within noise | +0.0008 ± 0.0006 | within noise | −0.16 ± 0.06 |
+| A5 best share rule refitted (A3 at 0.125; 0.075, 0.125, 0.15 tried for A1–A3) | +0.009 ± 0.026 | within noise | +0.0010 ± 0.0005 | within noise | +0.01 ± 0.06 |
+| Own: 0.075, and 0.035 for 15+ minute regulars out for all of the last ten | −0.051 ± 0.022 | within noise | −0.0009 ± 0.0004 | within noise | +0.03 ± 0.06 |
+| Own: 0.1, and 0.035 for those regulars | −0.006 ± 0.017 | within noise | −0.0009 ± 0.0003 | within noise | +0.20 ± 0.06 |
+
+Team points and the three biases are within noise for every rule, pooled and
+in each season, except A1 refitted at 0.15 (team points worse in 2024-25). Of
+the nine A5 refits six are worse on winner Brier pooled, two of them also on
+margin, and none improves anything. By season, the term off is worse in
+2024-25 (winner Brier) and 2025-26 (margin and winner Brier), A4 at 0.075 is
+improved on margin in 2024-25, and both own rules are improved on winner Brier
+in 2025-26 alone. The real gate on the first own rule:
+margin −0.0506 ± 0.0440, winner Brier −0.0009 ± 0.0009, team points −0.0073 ±
+0.0149, points +0.0002, interval score −0.0003 (± two standard errors), every
+bias unchanged; `within_noise`. On the seeded early-season replay (3,676
+games) the same rule gives −0.043 ± 0.017 and −0.0007 ± 0.0003 (weeks 1–2
+−0.000 ± 0.033, weeks 3–4 −0.036 ± 0.045, weeks 5–8 −0.051 ± 0.040), and the
+share rules again cost winner Brier (+0.0010 each; A2 `worse`); on the midday
+replay −0.054 ± 0.019 and −0.0011 ± 0.0004 (Brier `improved`), A4 at 0.05
+−0.058 ± 0.026 (margin `improved`). The midday tables come from the same
+reconstruction with the midday reports, not separately proven against a
+replay. The gate is `within_noise` for every rule, so nothing changes.
+
+Why the share rules fail: what a counted minute is worth does not fall with
+the share of games the player has missed. Regressing the margin with the term
+removed, home minus away, on counted minutes by group (per ten, one
+standard error), players who played three quarters of the team's games or
+more (but not all) cost −0.35 ± 0.08 on the outcomes and −0.32 ± 0.02 on the
+close; half to three quarters −0.66 ± 0.11 and −0.30 ± 0.02; a quarter to a
+half −0.57 ± 0.18 and −0.34 ± 0.04; under a quarter −0.57 ± 0.17 and
+−0.34 ± 0.05.
+The close charges about the same for every group and the outcomes charge more,
+not less, for the players the share rules discount. In the gate window only
+2% of counted minutes belong to players who have played every team game (6%
+in the seeded replay), so the live quarter reflects how early in the season it
+is, not a different rule. Two things the tables do show: the term is a little
+too large overall (+0.17 ± 0.06 per ten counted minutes; 0.075 a minute takes
+it to zero), and regulars out for all of the last ten games, whom the rule
+leaves out, still cost −0.23 ± 0.08 per ten minutes on the outcomes and −0.14 ±
+0.02 on the close. Both together are the first own rule, chosen after seeing
+these tables on the same seasons; its gain is below the materiality floor.
+
+Live check (`scripts/research/absence_live.py`; the 97 finished games of
+2026-10-24 to 11-09 whose final pregame forecast recorded an absence term,
+read from the production ledger by run id; ± one standard error by Eastern
+date, never below the independent one, the gate's convention). Each out
+player's log was rebuilt from production's finals: 721 of 726 records match
+exactly and the other five differ only in minutes per game (at most 0.06), so
+every season share is exact; `recent_team_games` equals the team's games so
+far for 718 records, and the other eight belong to teams past their tenth game.
+The current rule recomputed from the records reproduces each run's recorded
+term to 1.8e-15. Margin MAE against the current rule over the 97 games: term
+off −0.303 ± 0.208; A1 and A2 −0.056 ± 0.084, A3 −0.059 ± 0.089; A4 0.075
+−0.087 ± 0.054 and 0.05 −0.173 ± 0.108; A5 (A3 at 0.125) +0.018 ± 0.090. The
+first own rule is identical to A4 at 0.075 live (no regular has yet missed ten
+straight team games). On the 78 games where the current term is one rating
+point or more it costs +0.37 ± 0.26, and the model sits +1.27 ± 0.37 past the
+close toward the adjusted side (−0.83 ± 0.31 without the term). The earlier
+figure on the first 71 such games, +0.41 ± 0.16, reproduces as +0.41 ± 0.25:
+its 0.16 was the clustered error over 11 dates, below the independent 0.25.
+Live points the same way as the replay's miss slope, toward a smaller term,
+but by less than two standard errors on 97 games of a season's first three
+weeks, and the replay finds the term off clearly worse; live gives the share
+rules no edge over a smaller coefficient either.
