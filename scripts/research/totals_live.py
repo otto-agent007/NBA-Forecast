@@ -97,7 +97,7 @@ def _replay(code, snapshot_json, history, forecast_json, game_id):
         return None, False, f'{type(exc).__name__}: {exc}'
 
 
-def collect(copy, output, reforecast=True, base=None, every=1):
+def collect(copy, output, reforecast=True, base=None, every=1, report=None):
     from nba_forecast.model import forecast
     from nba_forecast.profiles import eligible_history
     from nba_forecast.store import _canonical
@@ -107,17 +107,21 @@ def collect(copy, output, reforecast=True, base=None, every=1):
     copy = Path(copy).resolve()
     if copy == PRODUCTION.resolve():
         raise ValueError('refusing to read production directly; pass a copy')
-    report = json.loads((copy / 'market' / 'report.json').read_text())
-    games = sorted((g for g in report['games'] if g.get('run_id') and g.get('actual_total') is not None),
+    report_path = Path(report or copy / 'market' / 'report.json')
+    report = json.loads(report_path.read_text())
+    conn = sqlite3.connect(f'file:{copy / "forecast.sqlite"}?mode=ro', uri=True, timeout=60)
+    # A report newer than the copy names runs the copy's ledger does not hold yet: those are left out.
+    games = sorted((g for g in report['games'] if g.get('run_id') and g.get('actual_total') is not None
+                    and (copy / 'finals' / f"{g['game_id']}.json").exists()
+                    and conn.execute('SELECT 1 FROM run_records WHERE run_id=?', (g['run_id'],)).fetchone()),
                    key=lambda g: (g['start_time'], g['game_id']))
     replayed_ids = {g['game_id'] for g in games[::every]} if reforecast else set()
-    conn = sqlite3.connect(f'file:{copy / "forecast.sqlite"}?mode=ro', uri=True, timeout=60)
     digests = {}
     for g in games:
         row = conn.execute('SELECT history_sha256 FROM run_records WHERE run_id=?', (g['run_id'],)).fetchone()
         if row:
             digests[g['game_id']] = row[0]
-    out = dict(copy=str(copy), report_generated_at=report.get('generated_at'), reforecast=reforecast, every=every,
+    out = dict(copy=str(copy), report=str(report_path), report_generated_at=report.get('generated_at'), reforecast=reforecast, every=every,
                code=str(ROOT), base=str(Path(base).resolve()) if base else None, games=[])
     by_digest = defaultdict(list)
     for g in games:
@@ -306,6 +310,8 @@ def main():
     parser.add_argument('--base', help="A second checkout (holding nba_forecast/) whose code replays the same runs, e.g. main")
     parser.add_argument('--no-reforecast', action='store_true', help='Keep the saved forecasts only')
     parser.add_argument('--every', type=int, default=1, help='Re-forecast every Nth game in date order (the saved split covers all)')
+    parser.add_argument('--report', help="The market report naming the games, runs and closes (default: the copy's market/report.json); "
+                                         "runs missing from the copy's ledger are left out")
     parser.add_argument('--read', help='Print the tables of an output written earlier')
     args = parser.parse_args()
     if args.read:
@@ -314,7 +320,7 @@ def main():
         if not args.copy or not args.output:
             parser.error('--copy and --output, or --read')
         os.nice(19)
-        data = collect(args.copy, args.output, reforecast=not args.no_reforecast, base=args.base, every=args.every)
+        data = collect(args.copy, args.output, reforecast=not args.no_reforecast, base=args.base, every=args.every, report=args.report)
     games = data['games']
     print(f"{len(games)} finished games of the market report ({data.get('report_generated_at')})")
     for key, code in (('replayed_base', data.get('base')), ('replayed', data.get('code'))):
