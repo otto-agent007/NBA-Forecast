@@ -115,13 +115,24 @@ def _game_archives(raw):
     return names
 
 
+def _runs_table(conn):
+    """Where to list runs without opening their JSON: ``run_records``, or a ledger from before history deduplication's ``runs`` table.
+
+    The ``runs`` view joins each run to its history on ``history_sha256``, which is
+    stored after ``snapshot_json``: reading through it walks every run's whole
+    snapshot (about 0.9 MB of overflow pages each). The table holds the same rows
+    under the same rowids.
+    """
+    return 'run_records' if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_records'").fetchone() else 'runs'
+
+
 def _ledger_state(db):
     """Append-only tables: row counts and newest rowids identify their contents."""
     if not Path(db).exists():
         return None
     with closing(sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)) as conn:
         return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table}').fetchone())
-                for table in ('runs','evaluations')]
+                for table in (_runs_table(conn),'evaluations')]
 
 
 def _roster(folder,season,raw,jobs,report):
@@ -277,19 +288,11 @@ def ledger_runs(db):
 
 
 def _run_ids(db):
-    """(run_id, mode) in insertion order, without opening any JSON.
-
-    Read from ``run_records``, not the ``runs`` view: the view joins each run to its
-    history on ``history_sha256``, which is stored after ``snapshot_json``, so listing
-    runs through it reads every run's whole snapshot (about 0.9 MB of overflow pages
-    each). The table holds the same rows under the same rowids. A ledger from before
-    history deduplication has a ``runs`` table instead.
-    """
+    """(run_id, mode) in insertion order, without opening any JSON (``_runs_table``)."""
     if not Path(db).exists():
         return []
     with closing(sqlite3.connect(db)) as conn:
-        table='run_records' if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_records'").fetchone() else 'runs'
-        return conn.execute(f'SELECT run_id,mode FROM {table} ORDER BY rowid').fetchall()
+        return conn.execute(f'SELECT run_id,mode FROM {_runs_table(conn)} ORDER BY rowid').fetchall()
 
 
 def _run_row(db,run_id,columns):

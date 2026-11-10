@@ -128,4 +128,6 @@ except for what comes before the re-checks, chiefly listing the runs (the
 77.33 s call was not broken down). `run_ids_cold.py` on the same copy, cold:
 through the `runs` view 255.86 s and 415.7 MB read, from `run_records` 30.51 s
 and 1.1 MB, identical rows; warm, 0.096 s against under 0.001 s. `_run_ids`
-now reads `run_records`.
+and the derived service's `_ledger_state` (row counts through the same view,
+every minute) now read `run_records`. The dashboard's `_ledger_key` and other
+readers still count or list through the view.

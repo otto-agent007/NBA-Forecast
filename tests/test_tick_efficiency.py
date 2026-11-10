@@ -189,7 +189,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(self.evaluate(recheck_seconds=0)['evaluation_backlog']['stale'],1)
         self.assertEqual(self.evaluate()['evaluation_backlog'],dict(stale=0,rechecked=1,revised=0,deferred=0))
 
-    def test_runs_are_listed_from_the_table_in_insertion_order_in_either_layout(self):
+    def test_runs_are_listed_and_counted_from_the_table_in_either_layout(self):
         from tests.test_history_dedupe import history
         def listed(db):
             with sqlite3.connect(db) as conn:
@@ -207,6 +207,14 @@ class EvaluationTests(unittest.TestCase):
             store.save_run(legacy,snapshot,history(),forecast)
         self.assertEqual(operations._run_ids(legacy),listed(legacy))
         self.assertEqual(len(operations._run_ids(legacy)),1)
+        # The derived service's ledger state counts the same rows either way.
+        def counted(db):
+            with sqlite3.connect(db) as conn:
+                return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {t}').fetchone()) for t in ('runs','evaluations')]
+        store.evaluate_run(self.db,self.run_id,[actual(),actual('P2')])
+        for db in (self.db,legacy):
+            self.assertEqual(operations._ledger_state(db),counted(db))
+        self.assertEqual(operations._ledger_state(self.db),[[3,3],[1,1]])
 
     def test_a_recheck_that_fails_stays_stale_and_is_tried_again(self):
         self.finals([actual(),actual('P2')])
