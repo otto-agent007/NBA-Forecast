@@ -16,6 +16,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
 | `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
+| `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
 
 ## Reproduced on 2026-10-26
 

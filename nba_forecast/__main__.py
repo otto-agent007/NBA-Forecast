@@ -35,7 +35,7 @@ def _emit(value, output=None):
 def _tick_summary(report):
     """One line for journald: the timer runs a tick every minute, and the full
     report is already saved as last-tick.json and appended to ticks.jsonl."""
-    keys = ('started_at', 'finished_at', 'status', 'created_runs', 'evaluated_runs', 'recovered_runs',
+    keys = ('started_at', 'finished_at', 'status', 'created_runs', 'evaluated_runs', 'evaluation_backlog', 'recovered_runs',
             'missed_final_games', 'errors', 'warnings', 'timings')
     line = {key: report.get(key) for key in keys}
     line['waiting_jobs'] = len(report.get('waiting_jobs') or [])

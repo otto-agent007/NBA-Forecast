@@ -211,7 +211,15 @@ for the owner to delete. A conflicting history under one digest aborts it.
 
 An idle tick does little work. Live runs are rescored only when one of their
 `finals/` files or their latest evaluation revision changes
-(`evaluation-state.json`). Performance, benchmarks, calibration, postgame and
+(`evaluation-state.json`). The memory outlives a deploy: a run whose finals
+changed, or that has none remembered, is still scored at once, and the others
+are scored again under the new code newest first, for at most 20 seconds a
+tick (`EVALUATION_RECHECK_SECONDS`), until none remain; the tick's
+`evaluation_backlog` counts the entries left (`stale`), the ones re-checked
+and the revisions that wrote. Until 2026-11-09 a deploy discarded the memory,
+and the first tick after it re-scored 3800 runs in 379 s and wrote no
+revision. No run is scored after the tick's soft limit (420 s); those wait
+for the next tick (`evaluation_backlog.deferred`). Performance, benchmarks, calibration, postgame and
 daily reviews are the derived service's job, not the tick's: `python -m
 nba_forecast derived` runs from its own one-minute timer (`nba-derived.timer`,
 at :30, below the tick's CPU priority) and rebuilds them only when the ledger,
