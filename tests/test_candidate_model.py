@@ -96,6 +96,35 @@ class CandidateAttemptBudgetTests(unittest.TestCase):
         self.assertAlmostEqual(p['expected_fga'],before['expected_fga'])
         self.assertAlmostEqual(p['expected_fta'],before['expected_fta'])
 
+    def test_turnover_rate_additions_follow_the_shot_volume_budget(self):
+        # With no room for more shots, the absent player's turnovers stay unallocated as
+        # his shots do: otherwise the usage budget takes them out of the team's scoring.
+        from tests.test_model import player,current
+        s=snapshot([player(str(i)) for i in range(5)]+[player('out',status='out')])
+        history=[]
+        for pid in [str(i) for i in range(5)]+['out']:
+            for i,minutes in enumerate([20,20,40] if pid!='out' else [30,30,30]):
+                history.append(current(i,pid=pid,minutes=minutes,fga=minutes//2,fgm=minutes//4,
+                    fg3a=0,fg3m=0,fta=minutes//5,ftm=0,tov=minutes//10 if pid!='out' else 6))
+        before={p['player_id']:p for p in forecast(s,history)['predictions'] if p['status']=='projected'}
+        def run(rotation):
+            s['model_enhancements']=dict(model_version='regular-season-baseline-0.5.0',model_key='test',known_at=s['as_of'],
+                parameters=dict(rotation_enabled=rotation,pace_strength=0,defense_strength=0,context_strength=0),
+                environment={'teams':{'A':dict(pace_factor=1,defense_factor=1,audit={},
+                    expected_fga=sum(p['expected_fga'] for p in before.values()),
+                    expected_fta=sum(p['expected_fta'] for p in before.values()))},'audit':{'evidence_kind':'live'}},
+                context_model=None,calibration=None)
+            return forecast(s,history)
+        allocated,unallocated=run(True),run(False)
+        audit=allocated['allocation_audit']['A']
+        self.assertGreater(audit['initial_allocator_result']['rate_added_attempts']['tov'],0)
+        self.assertAlmostEqual(audit['rate_added_attempts']['tov'],0)
+        self.assertAlmostEqual(audit['unallocated_attempts']['tov'],audit['vacated_attempts']['tov'])
+        for p,q in zip(allocated['predictions'],unallocated['predictions']):
+            if p['status']=='projected':
+                self.assertAlmostEqual(p['expected_tov'],q['expected_tov'])
+                self.assertAlmostEqual(p['points_mean'],q['points_mean'])
+
     def test_manual_minute_and_rate_locks_survive_automatic_budget_constraints(self):
         from tests.test_model import player,current
         s=snapshot([player('p'),player('out',status='out')])

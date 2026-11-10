@@ -295,7 +295,8 @@ Rerun with team totals reconciled to the margin, against
 0.0018, improved; the rest as before. On this path the reconciliation itself
 cut team points by 0.074 ± 0.040 with everything else unchanged; it moves
 totals between the two teams, so the shortfall's bias is untouched. The
-layer table above predates it.
+layer table above predates it. The shortfall was the redistribution's turnovers,
+not its minutes: see 2026-11-09 below.
 
 `rotation_allocation.redistribute` inferred the season from `as_of`, which in a
 replay is the day it runs, so it found no history for 2023-24 and 2024-25 and
@@ -920,3 +921,117 @@ at this deploy. The absence adjustment (0.1 points per reported-out minute)
 was sized with the results-only rating; the strength already reflects recent
 absences through the closes of the games they affected, so the two may
 overlap. Not measured on its own.
+
+## 2026-11-09: where the production path's team points went (turnovers follow the shot budget)
+
+Branch `exp/totals-shortfall`; candidate scoreboards are outside the repository and the
+references are regenerated at integration. ± is one standard error clustered by Eastern
+date unless it says two (the gate's lines).
+
+The production path of main, replayed with the live 0.6.0 artifact, projected team points
+3.21 below the regulation-equivalent actual against 1.23 on the baseline path (team points
+MAE 9.70 against 9.28). `scripts/research/totals_decomposition.py` splits each team row's
+error exactly (to 1e-6 on every row): projected players who played, mean when playing minus
+actual, as minutes (expected minus actual minutes times the projected rate) and rate (actual
+minutes times projected minus actual points per minute); participation, (probability minus
+played) times the mean; the actual points of players without a projection; the replacement
+credit for unallocated minutes. Overtime is outside the gate's error but inside every live
+comparison with a final score. Per team-game, 5,208 rows:
+
+| Path | Error | Played: minutes | Played: rate | Participation | Unprojected | Replacement | Overtime |
+|---|---|---|---|---|---|---|---|
+| Baseline (`backtest-2026-11-07-market-strength`) | −1.23 ± 0.21 | +0.55 | −0.89 | −0.88 | −0.23 | +0.22 | +0.58 |
+| Production, main | −3.21 ± 0.20 | +0.53 | −2.83 | −0.88 | −0.23 | +0.21 | +0.58 |
+| Production minus baseline, paired | −1.98 ± 0.06 | −0.02 ± 0.01 | −1.94 ± 0.06 | −0.00 | 0 | −0.01 | |
+| Production, this change | −0.01 ± 0.20 | +0.56 | +0.36 | −0.91 | −0.23 | +0.21 | +0.58 |
+
+The two paths project the same minutes, the same participation and the same unprojected
+players; the whole difference is the points per minute of the players who played. By
+reported-out regulars (players listed out who average 15+ minutes for the team and played one
+of its last ten games; the count agrees with the model's own on 1,737 of 1,738 checked
+team-games), production minus baseline is −0.95, −1.88, −2.64 and −2.53 for 0, 1, 2 and 3+.
+
+`scripts/research/totals_layers.py` replays every third evaluation game on the production
+path and rebuilds each team total layer by layer from the players' baseline numbers and the
+minutes, rates and factors the production layers gave them (exact to 1e-6 against the
+forecast; the usage budget is reapplied after every layer as production applies it once at
+the end). 1,738 team-games, main's code:
+
+| Layer | Change to the team total |
+|---|---|
+| Baseline stage (level) | 112.59 |
+| Usage budget applied a second time | +0.32 ± 0.04 |
+| Vacancy minutes granted | +0.03 ± 0.02 |
+| Vacancy shot rates (FGA, 3PA, FTA) | +0.21 ± 0.03 |
+| Vacancy turnover rates | −3.14 ± 0.06 |
+| Pace | +0.03 ± 0.00 |
+| Defense and rest/travel context | +0.71 ± 0.04 |
+| `scoreline.reconcile` | +0.000 ± 0.000 |
+| Published / actual regulation | 110.74 / 114.13 |
+
+The cause is in `candidate.py`. `rotation_allocation.redistribute` hands teammates the absent
+players' FGA, 3PA, FTA and turnover rates within each recipient's observed caps; the caller
+then scales the FGA and FTA additions (3PA follows FGA) back to the team's observed volume
+budget, which in 1,592 of 1,686 team-games with a vacancy (94.4%) left no room at all, but it never
+scaled the turnovers. Teammates kept 3.37 of the 4.26 turnovers a team-game the absent
+players had vacated, against 0.12 of their 26.8 shots. Turnovers count in usage (FGA + 0.44
+FTA + TOV), so the enhanced-stage usage budget read them as surplus possessions and scaled
+every player's rates down by 2.9% (factor change −0.0289 ± 0.0005): the team "used" its
+possessions on turnovers, which score nothing. Projected against actual player-credited
+volume per team-game: turnovers 15.87 against 12.99 (+2.88 ± 0.11), FGA 85.99 against 88.63
+(−2.64 ± 0.18). The 2026-10-27 finding that the minutes redistribution "takes about three
+points off each team's projected total" was this: the redistribution moves almost no minutes
+(0.12 expected minutes of 71.9 vacated) and its turnovers did the damage.
+
+The change: the turnover rates the allocator adds keep the share of its shot additions that the
+FGA volume budget lets through, as 3PA already does (`candidate.py`, one statement). The
+allocator, its caps and the budgets are unchanged; the turnovers it can no longer place are
+disclosed in `allocation_audit.unallocated_attempts.tov`.
+
+Production path, against main's production-path replay (two clustered standard errors, the
+gate's convention): **improved** (pooled; each season improved). Team points −0.446 ± 0.226
+(9.70 → 9.26, floor 0.049), improved; team-points bias −3.21 → −0.01 (se 0.36), improved;
+margin −0.058 ± 0.041 (11.21 → 11.15, floor 0.056), improved; points bias −0.27 → +0.03 (se
+0.03), improved; minutes and participation unchanged (+0.0000); winner Brier +0.0002 ±
+0.0008, interval score +0.004 ± 0.009, margin bias +0.13 → +0.13, within noise. Player points
+MAE +0.0176 ± 0.0034 (4.469 → 4.487) is within noise only through the materiality floor
+(0.0223): it is ten standard errors and present in each season (+0.021, +0.019, +0.013). It
+sits in the players projected for 30+ minutes, points MAE 5.734 → 5.778 and bias +0.00 →
++0.54: the uniform 2.9% cut had been offsetting the over-projection of high-minute players
+that the baseline path also has (+0.34 there). By season, team points −0.19 ± 0.22 (2023-24,
+within noise), −0.48 ± 0.28 and −0.67 ± 0.34 (improved); margin −0.078 ± 0.068, −0.093 ±
+0.070 (improved) and −0.003 ± 0.073.
+
+Baseline gate against `backtest-2026-11-07-market-strength`: `rows.json.gz` byte-identical
+(sha256 `6e52e7defe2d8797…`), every metric +0.0000 ± 0.0000; `candidate.py` is production-only
+code. The preliminary replay was not run: the change does not touch availability or
+participation.
+
+The same layer replay with the change: the turnover layer −0.060 ± 0.012 (teammates now keep
+0.07 of the 4.26 vacated turnovers), the usage-budget factor change from it −0.0006, and the
+projected volume matches the actual: FGA 88.43 against 88.63 (−0.20 ± 0.18), FTA 22.18 against
+21.83 (+0.36 ± 0.18), turnovers 13.17 against 12.99 (+0.18 ± 0.10). The other layers are
+unchanged to the reported precision.
+
+
+Considered and not tried: a constant or a scale-up of team totals (the decomposition shows a
+specific cause, not a uniform one); removing the enhanced-stage usage budget (it is what keeps
+week-one rosters with rates learned elsewhere at their usage, the reason it shipped); dropping
+turnovers from the allocator itself (identical wherever the FGA budget leaves no room, 94.4% of
+team-games, but a change to `rotation_allocation`'s contract and audit); turnovers following
+the FTA scale instead (the FTA budget keeps 0.40 of 7.16 vacated free throws, so it would cap
+them almost as hard; not measured).
+
+What is left, on this change's replay: the pooled error is −0.01, but teams with no
+reported-out regular are +0.71 ± 0.33 high and teams with three or more −0.88 ± 0.39 low,
+where the rate part is −1.45 ± 0.37: when regulars are out, the remaining players score more
+per minute than projected. The allocator's shot additions would address that, but the FGA
+budget compares the baseline's attempts conditional on playing (94.4 a team-game) with a
+team-level target (88.6), so it binds in 94.4% of team-games; weighted by participation
+(88.2) it would leave room in 788 of 1,686. That is the next thing to measure, not part of
+this change. In minutes, the participation term (−1.87 a team-game) is matched by the
+minutes of the players who played (+1.84): the 240-minute budget fills what low probabilities
+leave, so the two largely cancel in points (−0.91 and +0.56). The usage budget applied a
+second time acts only in the 124 of 1,738 team-games where the first application was clipped
+at its bounds, and there it compounds past them (+4.47 ± 0.33 on those totals, +0.32 over all,
+exactly zero elsewhere).
