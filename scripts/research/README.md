@@ -154,4 +154,9 @@ about 4.0 GB of off-game rows in the ledger and as much again in their
 00:37 to 02:52 UTC, final and preliminary): main's and the branch's validators
 accept all 30 stored forecasts, the branch accepts all 30 in the stored shape,
 which is exactly the stored forecast without the other teams' rows, as many as
-`coverage.by_status.no_game`: 30/30.
+`coverage.by_status.no_game`: 30/30. After `stored_forecast` began validating the
+whole forecast before leaving rows out (review finding B2-1), the same 30/30, and
+per run (median over the 30, `nice -n 19` on the busy host): the added
+`_validate_forecast` of the whole forecast 24 ms, all of `stored_forecast` (JSON
+round trip of snapshot and forecast plus that validation) 132 ms, `save_run`'s own
+validation of the stored shape 17 ms.

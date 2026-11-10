@@ -87,6 +87,18 @@ def read_only(path):
 
 # ---------------------------------------------------------------- child steps (run under one code tree)
 
+def without_off_slate(snapshot, forecast):
+    """The forecast less the rows of teams outside the snapshot's games, unvalidated.
+
+    ``store.stored_forecast`` validates the whole forecast first and raises on one
+    today's validator rejects; a run saved by an older release can be rejected for
+    reasons of its own (its margins), and its slim shape is then made here, after
+    the script has shown that both trees reject its full forecast the same way.
+    """
+    teams = {t for g in snapshot['games'] for t in (g['home_team_id'], g['away_team_id'])}
+    return dict(forecast, predictions=[r for r in forecast['predictions'] if r['team_id'] in teams])
+
+
 def _block_network():
     import socket
     import urllib.request
@@ -164,7 +176,8 @@ def child_build(args):
                 if slim_shape:
                     # The rule applied to the recomputation keeps exactly what it keeps of the stored forecast
                     # (equal when the run reproduces; when it does not, the same keys differ as above).
-                    record['slim_recomputed_equals_slim_stored'] = canonical(slim_shape(snapshot, value)) == canonical(slim_shape(snapshot, stored))
+                    record['slim_recomputed_equals_slim_stored'] = \
+                        canonical(without_off_slate(snapshot, value)) == canonical(without_off_slate(snapshot, stored))
                 if args.dev_recompute:
                     base = value
             except Exception as exc:  # An older snapshot today's code cannot forecast at all.
@@ -172,7 +185,12 @@ def child_build(args):
             record['forecast_seconds'] = round(time.monotonic() - started, 2)
         wanted = None
         if args.shape == 'slim' and item['slim']:
-            wanted = slim_shape(snapshot, base)
+            try:
+                wanted = slim_shape(snapshot, base)
+            except ValueError as exc:
+                # Rejected as a whole; the save below inserts it only after the same rejection of the full forecast.
+                record['stored_forecast_rejected'] = str(exc)[:200]
+                wanted = without_off_slate(snapshot, base)
         elif base is not stored:
             wanted = base
         if wanted is not None:
@@ -266,17 +284,38 @@ def child_validate(args):
         snapshot, stored = json.loads(snapshot_text), json.loads(forecast_text)
         record = dict(run_id=folder.name, as_of=snapshot['as_of'], stage=snapshot.get('forecast_stage', 'preliminary'),
                       rows=len(stored['predictions']), model_key=stored.get('model_key'))
-        for label, value in (('full', stored), ('slim', slim_shape(snapshot, stored) if slim_shape else None)):
+        started = time.perf_counter()
+        try:
+            store._validate_forecast(snapshot, stored)
+            record['full'] = 'accepted'
+        except ValueError as exc:
+            record['full'] = str(exc)[:160]
+        record['validate_full_seconds'] = time.perf_counter() - started
+        values = []
+        if slim_shape:
+            started = time.perf_counter()
+            try:
+                values.append(('slim', slim_shape(snapshot, stored)))
+            except ValueError as exc:
+                values.append(('slim', None))
+                record['slim'] = 'stored_forecast: ' + str(exc)[:140]
+            # stored_forecast: canonical round trip of snapshot and forecast plus one validation of the whole forecast.
+            record['stored_forecast_seconds'] = time.perf_counter() - started
+        for label, value in values:
             if value is None:
                 continue
+            started = time.perf_counter()
             try:
                 store._validate_forecast(snapshot, value)
                 record[label] = 'accepted'
             except ValueError as exc:
                 record[label] = str(exc)[:160]
+            record['validate_slim_seconds'] = time.perf_counter() - started
             if label == 'slim':
                 teams = {t for g in snapshot['games'] for t in (g['home_team_id'], g['away_team_id'])}
                 record['slim_rows'] = len(value['predictions'])
+                record['dropped_rows_valid_no_game'] = all(
+                    r['status'] == 'no_game' and r['game_id'] is None for r in stored['predictions'] if r['team_id'] not in teams)
                 record['slim_is_stored_without_off_slate'] = canonical(value) == canonical(
                     dict(stored, predictions=[r for r in stored['predictions'] if r['team_id'] in teams]))
                 record['no_game_count_matches'] = stored['coverage']['by_status'].get('no_game') == len(stored['predictions']) - len(value['predictions'])
@@ -570,8 +609,16 @@ def main():
         for m, b in zip(verdicts['main'], verdicts['branch']):
             print('%-36s %-11s %5d %5d %-10s %-10s %-10s %s, %s' % (m['run_id'], m['stage'], m['rows'], b['slim_rows'], m['full'][:10], b['full'][:10],
                                                            b['slim'][:10], b['slim_is_stored_without_off_slate'], b['no_game_count_matches']))
-            failures += not (m['full'] == b['full'] == b['slim'] == 'accepted' and b['slim_is_stored_without_off_slate'] and b['no_game_count_matches'])
+            failures += not (m['full'] == b['full'] == b['slim'] == 'accepted' and b['slim_is_stored_without_off_slate']
+                             and b['no_game_count_matches'] and b['dropped_rows_valid_no_game'])
         print(f'accepted in both shapes by both validators, slim shape exact: {len(folders) - failures}/{len(folders)}')
+        from statistics import fmean, median
+        b = verdicts['branch']
+        for key, label in (('validate_full_seconds', '_validate_forecast on the full forecast (the extra call)'),
+                           ('stored_forecast_seconds', 'stored_forecast (JSON round trip + that validation)'),
+                           ('validate_slim_seconds', "_validate_forecast on the stored shape (save_run's own)")):
+            values = [r[key] * 1000 for r in b if key in r]
+            print(f'  {label}: median {median(values):.0f} ms, mean {fmean(values):.0f} ms, max {max(values):.0f} ms over {len(values)} runs')
         raise SystemExit(1 if failures else 0)
 
     source, work = args.source.resolve(), args.work.resolve()

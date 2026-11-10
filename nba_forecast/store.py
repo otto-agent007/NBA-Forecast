@@ -205,13 +205,16 @@ def stored_forecast(snapshot, forecast):
     counts all of them, and its ``no_game`` is the number of rows left out.
     Every other key and row is the model's own.
 
-    Only a row that is ``no_game`` with no game identity is dropped; any other
-    off-slate row stays, for ``_validate_forecast`` to reject.
+    The whole forecast, as JSON, is validated first (``_validate_forecast``), so a
+    row left out was a valid ``no_game`` row: a known roster player listed once,
+    under his roster name and team, with no game and no numbers. A forecast that
+    fails raises ``ValueError`` and nothing is left out. The result is the
+    validated forecast less exactly those rows.
     """
+    snapshot, forecast = (json.loads(_canonical(value)) for value in (snapshot, forecast))
+    _validate_forecast(snapshot, forecast)
     slate = {team for game in snapshot['games'] for team in (game['home_team_id'], game['away_team_id'])}
-    return dict(forecast, predictions=[
-        row for row in forecast['predictions']
-        if row['team_id'] in slate or row['status'] != 'no_game' or row['game_id'] is not None])
+    return dict(forecast, predictions=[row for row in forecast['predictions'] if row['team_id'] in slate])
 
 
 def _validate_forecast(snapshot, forecast):

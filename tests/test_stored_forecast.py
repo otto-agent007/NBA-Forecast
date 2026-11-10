@@ -101,15 +101,42 @@ class StoredForecastTests(unittest.TestCase):
         self.forecast['coverage'] = {}
         self.save(self.forecast)
 
-    def test_an_off_slate_row_that_is_not_no_game_is_kept_and_rejected(self):
-        for change in (dict(status='needs_review'), dict(game_id='G1', start_time='2026-10-22T18:00:00Z')):
-            with self.subTest(change):
+    def test_a_malformed_off_slate_row_is_rejected_not_left_out(self):
+        """Every off-slate row is validated before any is left out: what the full shape rejects, so does the slim one."""
+        def numbers(f):
+            f['predictions'][2].update(points_mean=10.0, expected_minutes=20.0)
+        changes = dict(
+            no_game_row_with_numbers=numbers,
+            unknown_player=lambda f: f['predictions'][2].update(player_id='P999'),
+            duplicated_with_another_player_missing=lambda f: f['predictions'].__setitem__(3, deepcopy(f['predictions'][2])),
+            wrong_name=lambda f: f['predictions'][2].update(name='Someone Else'),
+            not_no_game=lambda f: f['predictions'][2].update(status='needs_review'),
+            with_a_game=lambda f: f['predictions'][2].update(game_id='G1', start_time='2026-10-22T18:00:00Z'),
+        )
+        for name, change in changes.items():
+            with self.subTest(name):
                 forecast = deepcopy(self.forecast)
-                forecast['predictions'][2].update(change)
-                kept = store.stored_forecast(self.snapshot, forecast)
-                self.assertEqual([p['player_id'] for p in kept['predictions']], ['P1', 'P2', 'P3'])
+                change(forecast)
                 with self.assertRaises(ValueError):
-                    self.save(kept)
+                    self.save(forecast)
+                with self.assertRaises(ValueError):
+                    store.stored_forecast(self.snapshot, forecast)
+        self.assertFalse(self.db.exists() and store._connect(self.db).execute('SELECT COUNT(*) FROM runs').fetchone()[0])
+
+    def test_the_stored_shape_is_the_validated_forecast_less_its_no_game_rows(self):
+        slim = store.stored_forecast(self.snapshot, self.forecast)
+        teams = {'T1', 'T2'}
+        full = json.loads(store._canonical(self.forecast))
+        self.assertEqual(store._canonical(slim), store._canonical(
+            dict(full, predictions=[p for p in full['predictions'] if p['team_id'] in teams])))
+        gone = [p for p in full['predictions'] if p['team_id'] not in teams]
+        self.assertEqual(len(gone), 28)
+        self.assertTrue(all(p['status'] == 'no_game' and p['game_id'] is None and p['points_mean'] is None for p in gone))
+        # A forecast that is not finite JSON is rejected before anything is left out.
+        broken = deepcopy(self.forecast)
+        broken['predictions'][2]['history_games'] = float('nan')
+        with self.assertRaises(ValueError):
+            store.stored_forecast(self.snapshot, broken)
 
     def test_the_evaluation_scores_the_same_players(self):
         reports = []

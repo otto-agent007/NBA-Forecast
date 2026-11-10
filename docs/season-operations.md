@@ -484,7 +484,9 @@ other teams' players are `no_game` rows with no numbers (487 of 522 rows, 45%
 of the stored forecast, on runs of 2026-10-28 and 10-29) and are left out. They stay
 on record as counts: `coverage.roster_players` and `coverage.pool_rows` are the
 roster players the model considered, `coverage.by_status` counts all of them,
-and its `no_game` is the number of rows left out. `store.save_run` accepts a
+and its `no_game` is the number of rows left out. `stored_forecast` validates
+the whole forecast first, so only valid `no_game` rows are left out and a
+malformed one rejects the run as it would have before. `store.save_run` accepts a
 forecast of every roster player once or of every roster player of the slate's
 teams once with those counts, nothing in between. Runs saved before keep every
 row; every reader takes both shapes and returns the same for the same run except
