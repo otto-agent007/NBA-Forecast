@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from .data import _NextDataParser
 from .full_boxscore_sources import validate_complete_official_final
-from .margins import METHOD as BASE_METHOD, SETTLEMENT, SUPPORT, _pmf, _sha
+from .margins import METHOD as BASE_METHOD, SETTLEMENT, SUPPORT, _pmf, _sha, calibration_family
 from .schedule import atomic_json
 from .validation import parse_time,validate_history
 
@@ -143,7 +143,9 @@ def collect_margin_samples(directory,family,as_of):
                     raise ValueError('Immutable run hash differs')
                 forecast=json.loads(row['forecast_json'])
                 if not isinstance(forecast.get('model_key'),str) or not forecast['model_key']:
-                    excluded['unkeyed_run']+=1  # runs before model keys existed carry no margin distribution either
+                    if forecast.get('margin_forecasts'):
+                        raise ValueError('Run with margin distributions lacks a model key')
+                    excluded['unkeyed_run']+=1  # runs before model keys existed carry no margin distribution
                     continue
                 if forecast.get('margin_forecasts'):
                     counts['model_runs']+=1
@@ -171,7 +173,8 @@ def collect_margin_samples(directory,family,as_of):
                         raise ValueError('Duplicate saved margin distribution')
                     item=dict(game=game,distribution=candidates[0] if candidates else None,
                         season=snapshot['season'],run_id=row['run_id'],created_at=row['created_at'],
-                        forecast_sha256=row['forecast_sha256'],model_key=forecast['model_key'])
+                        forecast_sha256=row['forecast_sha256'],model_key=forecast['model_key'],
+                        parameters=((snapshot.get('model_enhancements') or {}).get('margin_inputs') or {}).get('parameters'))
                     rank=(created,row['insertion_order'])
                     if gid not in chosen or rank>chosen[gid][0]:
                         chosen[gid]=(rank,item)
@@ -184,8 +187,8 @@ def collect_margin_samples(directory,family,as_of):
         if not isinstance(d,dict) or d.get('status')!='estimated':
             excluded['latest_margin_unavailable']+=1
             continue
-        if f"{d.get('method')}|{d.get('settlement')}"!=family:
-            excluded['other_family']+=1
+        if calibration_family(d.get('method'),d.get('settlement'),item['parameters'])!=family:
+            excluded['other_family']+=1  # another margin method, settlement or parameter set
             continue
         try:
             if (d.get('model_key')!=item['model_key'] or any(d.get(k)!=game[k] for k in ('game_id','home_team_id','away_team_id'))

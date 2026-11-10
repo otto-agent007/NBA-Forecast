@@ -159,7 +159,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-06-rating-weight-midday
+  --reference datasets/backtest-2026-11-07-market-strength-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -190,7 +190,7 @@ python -m nba_forecast backtest \
   --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
   --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
   --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-06-early-season
+  --reference datasets/backtest-2026-11-07-market-strength-early-season
 python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 ```
 
@@ -873,11 +873,50 @@ gap narrows from 0.35 to 0.26; the encompassing slope rises from +0.12 to
 +0.19 ± 0.17. The close-as-teacher back-to-back coefficients are unchanged
 (home −1.25 ± 0.16, away +0.87 ± 0.16): the rest term is still missing.
 
+Preliminary (midday reports, `datasets/backtest-2026-11-07-market-strength-midday/`,
+against `backtest-2026-11-06-rating-weight-midday`): **improved**. Margin
+−0.109 ± 0.051 (11.44 → 11.33), winner Brier −0.0027 ± 0.0011, team points
+−0.033 ± 0.022 and everything else within noise; biases unchanged; each season
+improved. Regenerated on the merged code (the first version of this section
+left the midday and early-season references on pre-change code, which would
+have credited the next availability change with this gain).
+
+Early season (seeded from opening night,
+`datasets/backtest-2026-11-07-market-strength-early-season/`, 3,676 games,
+against `backtest-2026-11-06-early-season`): **improved**, margin −0.079 ±
+0.050, winner Brier −0.0023 ± 0.0010, each season improved; that reference
+was built with the 0.5 rating weight, so the comparison bundles PR #30. The
+strength alone, taken out of the same seeded rows exactly (the rating-harness
+identity with and without the closes): −0.070 ± 0.042 over all 3,676 games;
+0 before a season's 60th priced game (196 games, the results average alone);
+−0.055 ± 0.094 with the strength on but before the gate window (876 games);
+−0.081 ± 0.050 inside the gate window. By week since opening night: weeks 1–2
+−0.080 ± 0.102, weeks 3–4 −0.117 ± 0.169, weeks 5–8 −0.020 ± 0.113. The
+regime production entered on 2026-11-07 (strength on, before the gate window)
+is therefore measured neutral to mildly favourable, not proven: an independent
+review on 2026-11-07 found the first version of this section claimed the
+early weeks score like the previous reference, which is true only before the
+60th priced game.
+
 Caveats. The 0.7 share, 7-day half-life and 0.1 ridge are one grid chosen on
-these seasons; a 0.75 rating weight with this strength scored −0.152 ± 0.032
-offline but was left for its own gate. The forecast now depends on a market
-input for its strength layer: without saved captures (the first days of a
-season, or a capture outage) it falls back to the results average, so the
-first weeks of a season score like the previous reference. The margin
-calibration family changes with the method string, so the prospective margin
-correction (PR #33) starts collecting again at this deploy.
+these seasons; a 0.75 rating weight with this strength scored −0.152 (one
+standard error 0.032) offline but was left for its own gate. The ± in this
+section is two clustered standard errors, the gate's convention; the harness
+figures above quote one. Each season's gate verdict is carried by the winner
+Brier: the margin error alone is improved in 2024-25 (−0.102 ± 0.087) and
+within noise in 2023-24 (−0.083 ± 0.087) and 2025-26 (−0.085 ± 0.088). The
+strength switches on once a season has 60 priced games, around the end of
+October, while the gate scores from 30% of the season's dates, mid-December;
+the roughly 290 games a season between the two are scored only by the seeded
+early-season replay above. The forecast depends on a market input for its
+strength layer: with fewer than 60 priced games it uses the results average
+alone, and a capture outage mid-season leaves older closes in the fit with
+decayed weights rather than switching it off. The replay reads ESPN's recorded
+close for every game; production reads the last pregame DraftKings capture,
+which 84 of the first 188 games of 2026-27 lack, so the live input is thinner
+than the replay's. The margin calibration family changes with the method
+string, so the prospective margin correction (PR #33) starts collecting again
+at this deploy. The absence adjustment (0.1 points per reported-out minute)
+was sized with the results-only rating; the strength already reflects recent
+absences through the closes of the games they affected, so the two may
+overlap. Not measured on its own.
