@@ -552,8 +552,9 @@ python3 -m nba_forecast.deploy --directory data/operations/production
 
 It pins the release, builds the refined model artifact bound to that package
 digest from the active model's parent, backs up and repoints the activation
-while holding the tick's and the derived service's locks (a running tick or
-rebuild finishes first; `--wait` sets how long to wait, 900 s by default),
+while holding the derived service's and the tick's locks (a running rebuild
+finishes first, with the ticks still running, and then the running tick;
+`--wait` sets how long to wait for each, 900 s by default),
 writes the derived service and its timer for a host that does not have them
 yet and enables the timer, rewrites `WorkingDirectory` in every service unit,
 reloads systemd and restarts the dashboard, and writes

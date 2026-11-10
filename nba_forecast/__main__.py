@@ -308,10 +308,10 @@ def main(argv=None):
             from .store import dedupe_histories
             folder=Path(args.directory)
             from .deploy import LOCKS
-            with (folder/LOCKS[0]).open('a') as lock,(folder/LOCKS[1]).open('a') as derived_lock:
+            with (folder/LOCKS[0]).open('a') as first,(folder/LOCKS[1]).open('a') as second:
                 try:
-                    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                    fcntl.flock(derived_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    fcntl.flock(first,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    fcntl.flock(second,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 except BlockingIOError as exc:
                     raise ValueError('a tick or derived rebuild is running; retry when it finishes') from exc
                 value=dedupe_histories(folder/'forecast.sqlite')

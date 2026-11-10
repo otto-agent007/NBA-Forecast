@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from nba_forecast import deploy as D
 from nba_forecast.enhancements import install_artifact, load_active
@@ -29,6 +32,18 @@ def production(root):
     for name in ('nba-forecast.service', 'nba-dashboard.service'):  # a host installed before the derived service existed
         (units / name).write_text('[Unit]\nDescription=x\n[Service]\nType=oneshot\nWorkingDirectory=/old/release\nUMask=0077\nExecStart=/usr/bin/python3 -m nba_forecast tick\n')
     return active, units
+
+
+def free(root, name):
+    """Whether a tick (``tick.lock``) or a derived run (``derived.lock``) starting now would get its lock."""
+    import fcntl
+    with (root / name).open('a') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return True
 
 
 class DeployTests(unittest.TestCase):
@@ -110,17 +125,80 @@ class DeployTests(unittest.TestCase):
 
     def test_deploy_waits_for_a_running_tick_or_rebuild_and_gives_up_after_the_wait(self):
         import fcntl
+        self.assertEqual(D.LOCKS, ('derived.lock', 'tick.lock'), 'the slow holder is waited for first')
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); old_active, units = production(root)
-            for name in D.LOCKS:
+            for name, holder in (('derived.lock', 'a derived rebuild'), ('tick.lock', 'a tick')):
                 with (root / name).open('a') as held:
                     fcntl.flock(held, fcntl.LOCK_EX)  # a tick, or a derived rebuild, is running
-                    with self.assertRaisesRegex(ValueError, f'held the lock {name}'):
+                    with self.assertRaisesRegex(ValueError, f'{holder} has held the lock {name} for more than 1 seconds; retry later'):
                         D.deploy(root, units, systemd=False, wait=1)
                     self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active)
+                    self.assertFalse((root / 'deployed.json').exists(), 'a deploy that gave up wrote nothing')
                     fcntl.flock(held, fcntl.LOCK_UN)
+                for other in D.LOCKS:  # giving up releases what it had taken
+                    self.assertTrue(free(root, other))
             result = D.deploy(root, units, systemd=False, wait=1)
             self.assertNotEqual(result['artifact_sha256'], old_active)
+
+    def test_ticks_keep_running_while_the_deploy_waits_for_a_rebuild(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            rebuild = (root / 'derived.lock').open('a')
+            fcntl.flock(rebuild, fcntl.LOCK_EX)  # a derived rebuild is part-way through its minutes
+            seen = []
+
+            def waiting(seconds):
+                # The deploy is waiting for the rebuild. Ticks must still start and finish.
+                seen.append(dict(tick_lock_free=free(root, 'tick.lock'),
+                                 pointer=json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256']))
+                if len(seen) == 3:
+                    fcntl.flock(rebuild, fcntl.LOCK_UN)  # the rebuild finishes
+
+            with patch.object(D, 'time', SimpleNamespace(monotonic=time.monotonic, sleep=waiting)):
+                result = D.deploy(root, units, systemd=False, wait=60)
+            rebuild.close()
+            self.assertEqual(seen, [dict(tick_lock_free=True, pointer=old_active)] * 3)
+            self.assertNotEqual(result['artifact_sha256'], old_active)
+
+    def test_the_deploy_holds_the_derived_lock_while_it_waits_for_the_tick(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            tick = (root / 'tick.lock').open('a')
+            fcntl.flock(tick, fcntl.LOCK_EX)  # a tick is running
+            seen = []
+
+            def waiting(seconds):
+                seen.append(free(root, 'derived.lock'))  # no rebuild may start now: it could outlast the tick
+                fcntl.flock(tick, fcntl.LOCK_UN)  # the tick finishes
+
+            with patch.object(D, 'time', SimpleNamespace(monotonic=time.monotonic, sleep=waiting)):
+                D.deploy(root, units, systemd=False, wait=60)
+            tick.close()
+            self.assertEqual(seen, [False])
+
+    def test_both_locks_are_held_while_the_activation_is_read_and_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            held = {}
+
+            def planning(*args, **kwargs):
+                held['read'] = [free(root, name) for name in D.LOCKS]
+                return plan(*args, **kwargs)
+
+            def writing(path, value):
+                if Path(path) == root / 'model-upgrade-active.json':
+                    held['written'] = [free(root, name) for name in D.LOCKS]
+                return write(path, value)
+
+            plan, write = D._plan, D.atomic_json
+            with patch.object(D, '_plan', side_effect=planning), patch.object(D, 'atomic_json', side_effect=writing):
+                result = D.deploy(root, units, systemd=False, wait=1)
+            self.assertEqual(held, dict(read=[False, False], written=[False, False]))
+            self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], result['artifact_sha256'])
+            self.assertEqual([free(root, name) for name in D.LOCKS], [True, True], 'both are released afterwards')
 
     def test_deploy_waits_for_a_ledger_reader_and_gives_up_after_the_wait(self):
         import sqlite3
