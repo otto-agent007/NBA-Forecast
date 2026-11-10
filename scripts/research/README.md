@@ -131,4 +131,8 @@ best near w = 0.5–0.65 (−0.145 ± 0.054) and worse than that at w = 1 (−0.
 final forecast (median 11 minutes before tip, its line 0.10 points from the
 close) 12.118 at w = 0 against 10.850 at w = 1 (−1.268 ± 0.405, 120 games); the
 first forecast of the day (median 446 minutes before tip, its line 0.79 from
-the close) 11.871 against 10.882 (−0.989 ± 0.283, 110 games).
+the close) 11.871 against 10.882 (−0.989 ± 0.283, 110 games). Not adopted (owner,
+2026-11-10): the model is to beat the line without using it as an input. The
+figures stay as a measure of the gap the model has to close on its own; that
+the line-weighted error falls all the way to w = 1 live says the model's
+disagreements with the line carry no information yet.

@@ -1,4 +1,5 @@
 """How much would leaning the published margin on the market line help? A measurement, not a model.
+Not adopted (owner, 2026-11-10): the model is to beat the line without using it as an input.
 
 blend = (1 - w) * model margin + w * line, for w in 0, 0.25, 0.5, 0.65, 0.75, 0.85, 1.
 
