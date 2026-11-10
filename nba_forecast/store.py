@@ -194,8 +194,34 @@ def _connect(db_path):
     return conn
 
 
+def stored_forecast(snapshot, forecast):
+    """The forecast as a tick stores it: without the rows of roster players whose team is in none of the snapshot's games.
+
+    The model returns one row per roster player. A tick forecasts one game on a
+    league roster, so more than nine rows in ten are ``no_game`` abstentions: no
+    numbers, only an audit block. They are left out and stay on record as
+    counts in ``coverage``, which is unchanged: ``roster_players`` and
+    ``pool_rows`` are the roster players the model considered, ``by_status``
+    counts all of them, and its ``no_game`` is the number of rows left out.
+    Every other key and row is the model's own.
+
+    Only a row that is ``no_game`` with no game identity is dropped; any other
+    off-slate row stays, for ``_validate_forecast`` to reject.
+    """
+    slate = {team for game in snapshot['games'] for team in (game['home_team_id'], game['away_team_id'])}
+    return dict(forecast, predictions=[
+        row for row in forecast['predictions']
+        if row['team_id'] in slate or row['status'] != 'no_game' or row['game_id'] is not None])
+
+
 def _validate_forecast(snapshot, forecast):
-    """A caller cannot label unrelated or unsupported projections as this run."""
+    """A caller cannot label unrelated or unsupported projections as this run.
+
+    The predictions are every roster player exactly once or, as
+    ``stored_forecast`` leaves them, every roster player of the teams in the
+    snapshot's games exactly once, with the players left out counted in
+    ``coverage``.
+    """
     try:
         if forecast.get('forecast_stage', 'preliminary') != snapshot.get('forecast_stage', 'preliminary'):
             raise ValueError('forecast stage does not match snapshot evidence')
@@ -208,8 +234,19 @@ def _validate_forecast(snapshot, forecast):
         slate = {team: game for game in snapshot['games']
                  for team in (game['home_team_id'], game['away_team_id'])}
         rows = forecast['predictions']
-        if not isinstance(rows, list) or len(rows) != len(roster):
-            raise ValueError('forecast must contain every roster player exactly once')
+        on_slate = sum(player['team_id'] in slate for player in roster.values())
+        if not isinstance(rows, list) or len(rows) not in (len(roster), on_slate):
+            raise ValueError('forecast must contain every roster player exactly once, '
+                             'or every roster player of the slate\'s teams exactly once')
+        # Fewer rows than roster players: the off-slate rows were left out, all of them.
+        omitted = len(roster) - len(rows)
+        if omitted:
+            counted = forecast['coverage']
+            statuses = counted.get('by_status')
+            if (any(type(counted.get(key)) is not int or counted[key] != len(roster) for key in ('roster_players', 'pool_rows'))
+                    or not isinstance(statuses, dict) or type(statuses.get('no_game')) is not int
+                    or statuses['no_game'] != omitted):
+                raise ValueError('off-slate players left out of a forecast must be counted in its coverage')
         seen = set()
         for row in rows:
             player_id = row['player_id']
@@ -224,6 +261,8 @@ def _validate_forecast(snapshot, forecast):
             if any(row[key] != player[key] for key in ('name', 'team_id')):
                 raise ValueError('forecast player identity does not match roster')
             game = slate.get(player['team_id'])
+            if omitted and game is None:
+                raise ValueError('a forecast without its off-slate rows cannot contain one')
             if (row['game_id'] != (game['game_id'] if game else None) or
                     row['start_time'] != (game['start_time'] if game else None)):
                 raise ValueError('forecast game identity does not match schedule')

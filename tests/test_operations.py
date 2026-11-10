@@ -188,6 +188,35 @@ class OperationsTests(unittest.TestCase):
             self.assertEqual(second['created_runs'],0)
             self.assertEqual(second['recovered_runs'],1)
             self.assertEqual(len(list((Path(d)/'runs').glob('*/profiles.json'))),1)
+    def test_a_tick_stores_the_games_players_and_counts_the_rest_of_the_roster(self):
+        schedule=normalize_season(payload([game()]),NOW)
+        schedule['version']='v1'
+        roster=inputs()[0]['roster']
+        roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
+        for p,t in zip(roster['players'],roster['team_ids']):
+            p['team_id']=t
+            p['status']='unknown'
+        roster['observed_at']=NOW
+        with tempfile.TemporaryDirectory() as d, patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster',return_value=roster),patch('nba_forecast.operations._now',return_value=NOW),patch('nba_forecast.store._now',return_value=datetime.fromisoformat(NOW.replace('Z','+00:00'))),patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
+            self.assertEqual(run_tick(d,[])['created_runs'],1)
+            with sqlite3.connect(Path(d)/'forecast.sqlite') as conn:
+                run_id,saved=conn.execute('SELECT run_id,forecast_json FROM runs').fetchone()
+            forecast=json.loads(saved)
+            # One player a team: the game's two are stored, the other 28 are counted.
+            self.assertEqual(sorted(p['team_id'] for p in forecast['predictions']),['1610612738','1610612752'])
+            self.assertTrue(all(p['game_id']=='0022600001' and p['status']=='needs_review' for p in forecast['predictions']))
+            self.assertEqual({k:forecast['coverage'][k] for k in ('roster_players','pool_rows','by_status')},
+                             dict(roster_players=30,pool_rows=30,by_status=dict(needs_review=2,no_game=28)))
+            output=Path(d)/'runs'/run_id
+            self.assertEqual(json.loads((output/'forecast.json').read_text()),forecast)
+            # The saved inputs and the role profiles still cover the league roster.
+            self.assertEqual(len(json.loads((output/'snapshot.json').read_text())['roster']['players']),30)
+            self.assertEqual(len(json.loads((output/'profiles.json').read_text())['players']),30)
+            # A lost forecast.json is written again from the ledger, in the stored shape.
+            (output/'forecast.json').unlink()
+            second=run_tick(d,[])
+            self.assertEqual((second['created_runs'],second['recovered_artifacts']),(0,1))
+            self.assertEqual(json.loads((output/'forecast.json').read_text()),forecast)
     def test_lock_refuses_overlapping_tick(self):
         with tempfile.TemporaryDirectory() as d:
             import fcntl
