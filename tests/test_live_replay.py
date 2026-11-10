@@ -129,6 +129,16 @@ class ThrottleTests(unittest.TestCase):
         self.assertAlmostEqual(throttle.slept, 5.4)
 
 
+class StoredFormTests(unittest.TestCase):
+    def test_a_run_stored_without_off_slate_rows_is_compared_in_that_form(self):
+        snapshot = dict(games=[GAME])
+        rows = [dict(player_id='P1', team_id='H', game_id=GAME['game_id'], status='projected'),
+                dict(player_id='P2', team_id='X', game_id=None, status='no_game'),
+                dict(player_id='P3', team_id='A', game_id=GAME['game_id'], status='out')]
+        kept = L.as_stored(snapshot, dict(predictions=rows, coverage={}))['predictions']
+        self.assertEqual([r['player_id'] for r in kept], ['P1', 'P3'])
+
+
 class StatisticsTests(unittest.TestCase):
     def test_the_clustered_error_is_the_backtests_one_way_date_cluster(self):
         values, dates = [1., 3., -2., 4., 0., 5.], ['d1', 'd1', 'd2', 'd2', 'd3', 'd3']

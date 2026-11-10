@@ -656,6 +656,11 @@ def replay_game(copy, ledger, artifacts, season, game, chosen, modes, code, *, f
             replayed = run_forecast(used, history)
             text = store._canonical(replayed)
             row['identical'] = text == run['forecast_json']
+            if not row['identical'] and len(stored['predictions']) < len(replayed['predictions']):
+                # A run saved without its off-slate rows (perf/slim-stored-forecast) is compared as it was stored.
+                text = store._canonical(as_stored(used, replayed))
+                row['identical'] = text == run['forecast_json']
+                row['compared_as'] = 'stored without off-slate rows'
             row['replayed_forecast_sha256'] = hashlib.sha256(text.encode()).hexdigest()
             if not row['identical']:
                 row['differences'] = differences(stored, json.loads(text))
@@ -670,6 +675,15 @@ def replay_game(copy, ledger, artifacts, season, game, chosen, modes, code, *, f
     for row in rows.values():  # reading the run and its history, scoring and every mode's forecast
         row['game_seconds'] = round(time.monotonic() - began, 2)
     return rows
+
+
+def as_stored(snapshot, forecast):
+    """The forecast as a tick that leaves out off-slate rows stores it: ``store.stored_forecast`` where the code has it."""
+    if hasattr(store, 'stored_forecast'):
+        return store.stored_forecast(snapshot, forecast)
+    slate = {team for game in snapshot['games'] for team in (game['home_team_id'], game['away_team_id'])}
+    return dict(forecast, predictions=[r for r in forecast['predictions']
+                                       if r['team_id'] in slate or r['status'] != 'no_game' or r['game_id'] is not None])
 
 
 def pair_players(published, replayed):
