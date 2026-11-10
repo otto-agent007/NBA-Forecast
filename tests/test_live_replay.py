@@ -92,6 +92,43 @@ class AsOfTests(unittest.TestCase):
             self.assertEqual(len(L.load_finals(copy)), 3)
 
 
+class ThrottleTests(unittest.TestCase):
+    def test_a_tick_that_started_over_two_minutes_ago_counts_as_stalled(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 11, 10, 8, 40, tzinfo=timezone.utc)
+        self.assertFalse(L.tick_stalled(dict(started_at='2026-11-10T08:38:30+00:00'), now))
+        self.assertTrue(L.tick_stalled(dict(started_at='2026-11-10T08:37:59+00:00'), now))
+        self.assertFalse(L.tick_stalled({}, now), 'an unreadable record never blocks')
+
+    def test_the_guard_waits_for_a_newer_finish(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'last-tick.json'
+            path.write_text(json.dumps(dict(started_at='2026-11-10T08:00:00+00:00', finished_at='2026-11-10T08:01:00+00:00')))
+            sleeps = []
+            def tick_completes(seconds):
+                sleeps.append(seconds)
+                if len(sleeps) == 2:
+                    path.write_text(json.dumps(dict(started_at='2026-11-10T08:02:00+00:00', finished_at='2026-11-10T08:12:00+00:00')))
+            with patch.object(L.time, 'sleep', side_effect=tick_completes):
+                waited = L.wait_for_tick(path, poll=15., log=lambda *a, **k: None)
+            self.assertEqual((waited, sleeps), (30., [15., 15.]))
+            fresh = dict(started_at=L.datetime.now(L.timezone.utc).isoformat(), finished_at='x')
+            path.write_text(json.dumps(fresh))
+            self.assertEqual(L.wait_for_tick(path, log=lambda *a, **k: None), 0.)
+
+    def test_reading_is_kept_to_a_share_of_the_time(self):
+        from unittest.mock import patch
+        throttle = L.Throttle(share=1 / 3, after_history=1.)
+        with patch.object(L.time, 'sleep') as sleep:
+            throttle.rest(.2)
+            throttle.rest(.1, history_read=True)
+            throttle.rest(2., history_read=True)
+            throttle.rest(0.)
+        self.assertEqual([round(c.args[0], 9) for c in sleep.call_args_list], [.4, 1., 4.])
+        self.assertAlmostEqual(throttle.slept, 5.4)
+
+
 class StatisticsTests(unittest.TestCase):
     def test_the_clustered_error_is_the_backtests_one_way_date_cluster(self):
         values, dates = [1., 3., -2., 4., 0., 5.], ['d1', 'd1', 'd2', 'd2', 'd3', 'd3']

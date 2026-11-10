@@ -7,7 +7,7 @@ saved snapshot and history to ``forecast`` of the package beside this script, an
 scores the result against the final and the closing line next to what was
 published. Copy the script into another worktree and it scores that code.
 
-    nice -n 19 ionice -c3 python3 scripts/research/live_replay.py --copy COPY \
+    nice -n 19 python3 scripts/research/live_replay.py --copy COPY \
         --output-frozen OUT/frozen.json --output-rebuilt OUT/rebuilt.json
     python3 scripts/research/live_replay.py --compare MAIN/rebuilt.json BRANCH/rebuilt.json
 
@@ -35,7 +35,10 @@ rebuilt  additionally recomputes ``snapshot['model_enhancements']`` with
          and every run reports which records that would have added.
 
 ``COPY`` is a copy of the production directory, never production itself; it is
-opened read-only and nothing is written into it. Runs are found from
+opened read-only and nothing is written into it. ``--ledger`` may name another
+ledger (production's, read-only, rows by key only). The disks ignore I/O
+priority classes, so the tool throttles itself (``Throttle``: at most a third of
+the time reading by default) and pauses while production's tick looks stuck. Runs are found from
 ``state.json`` (job key -> run), ranked by the ledger's ``created_at`` and row
 order read by ``run_id``; no JSON column is scanned. The ± printed is ONE standard
 error, clustered by Eastern game date (``backtest._mean_se``, never below the
@@ -252,29 +255,45 @@ def differences(stored, replayed, limit=30):
 # ---------------------------------------------------------------- the copy
 
 class Ledger:
-    """Read-only access to a copy's ledger by run_id and history digest; one history is kept at a time."""
+    """Read-only access to a ledger by run_id and history digest; one history is kept at a time.
 
-    def __init__(self, path):
+    Rows are read only by key from ``run_records`` and ``histories`` (never the
+    ``runs`` view, never a scan of the JSON columns). ``immutable`` skips SQLite's
+    locking and shared-memory file, which is right only for a copy nobody writes;
+    a live ledger is opened read-only in its own journal mode. ``io_seconds``
+    adds up the time spent reading, for the caller's throttle.
+    """
+
+    def __init__(self, path, *, immutable=False):
         path = Path(path)
         wal = Path(str(path) + '-wal')
-        # immutable: no lock or -shm file is created beside a copy. A copy with an unmerged log needs the log.
-        self.immutable = not (wal.exists() and wal.stat().st_size)
+        # A copy with an unmerged log needs the log, so it is not opened immutable either.
+        self.immutable = immutable and not (wal.exists() and wal.stat().st_size)
         self.conn = sqlite3.connect(path.resolve().as_uri() + '?mode=ro' + ('&immutable=1' if self.immutable else ''), uri=True, timeout=60)
+        self.conn.execute('PRAGMA query_only=ON')
         if not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_records'").fetchone():
             raise SystemExit('This ledger keeps histories inside each run (before dedupe-histories); it is not supported.')
         self._history = (None, None)
         self.history_reads = 0
+        self.io_seconds = 0.
+
+    def _one(self, query, args):
+        began = time.monotonic()
+        try:
+            return self.conn.execute(query, args).fetchone()
+        finally:
+            self.io_seconds += time.monotonic() - began
 
     def meta(self, run_id):
-        row = self.conn.execute('SELECT rowid,created_at,as_of,mode,scope FROM run_records WHERE run_id=?', (run_id,)).fetchone()
+        row = self._one('SELECT rowid,created_at,as_of,mode,scope FROM run_records WHERE run_id=?', (run_id,))
         return None if row is None else dict(insertion_order=row[0], created_at=row[1], as_of=row[2], mode=row[3], scope=row[4])
 
     def history_digest(self, run_id):
-        return self.conn.execute('SELECT history_sha256 FROM run_records WHERE run_id=?', (run_id,)).fetchone()[0]
+        return self._one('SELECT history_sha256 FROM run_records WHERE run_id=?', (run_id,))[0]
 
     def run(self, run_id):
-        row = self.conn.execute('SELECT rowid,created_at,as_of,mode,scope,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256,history_sha256 '
-                                'FROM run_records WHERE run_id=?', (run_id,)).fetchone()
+        row = self._one('SELECT rowid,created_at,as_of,mode,scope,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256,history_sha256 '
+                        'FROM run_records WHERE run_id=?', (run_id,))
         for text, digest, name in ((row[5], row[7], 'snapshot'), (row[6], row[8], 'forecast')):
             if hashlib.sha256(text.encode()).hexdigest() != digest:
                 raise ValueError(f'Saved {name} hash mismatch: {run_id}')
@@ -284,7 +303,7 @@ class Ledger:
     def history(self, digest):
         if self._history[0] != digest:
             self._history = (None, None)  # release the previous one before reading the next
-            text = self.conn.execute('SELECT history_json FROM histories WHERE history_sha256=?', (digest,)).fetchone()[0]
+            text = self._one('SELECT history_json FROM histories WHERE history_sha256=?', (digest,))[0]
             if hashlib.sha256(text.encode()).hexdigest() != digest:
                 raise ValueError('Saved history hash mismatch: ' + digest)
             self._history = (digest, json.loads(text))
@@ -293,10 +312,10 @@ class Ledger:
 
 
 class Artifacts:
-    """Model artifacts by digest, verified; the last few are kept."""
+    """Model artifacts by digest, verified against their name; the last few are kept."""
 
-    def __init__(self, copy):
-        self.folder, self.cache = Path(copy) / 'model-artifacts', {}
+    def __init__(self, folder):
+        self.folder, self.cache = Path(folder), {}
 
     def get(self, digest):
         if digest not in self.cache:
@@ -307,6 +326,65 @@ class Artifacts:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[digest] = json.loads(raw)
         return self.cache[digest]
+
+
+class Throttle:
+    """Keep this process's disk use to about ``share`` of the time.
+
+    The host's disks use mq-deadline, which ignores I/O classes, so ``ionice -c3``
+    does not make reads yield to production: on 2026-11-10 a copy and a reader
+    together held the disk until systemd killed a tick at its ten-minute limit.
+    After each step that read, sleep ``(1 - share) / share`` times the reading
+    time, at least ``after_history`` seconds after a history; and before each
+    step, ``guard`` waits while production's tick looks stuck (``wait_for_tick``).
+    """
+
+    def __init__(self, share=1 / 3, after_history=1., guard=None, log=print):
+        self.factor, self.after_history, self.guard, self.log = (1 - share) / share, after_history, guard, log
+        self.slept = self.waited = 0.
+
+    def rest(self, io_seconds, history_read=False):
+        pause = max(io_seconds * self.factor, self.after_history if history_read else 0.)
+        if pause > 0:
+            time.sleep(pause)
+            self.slept += pause
+
+    def check(self):
+        if self.guard:
+            self.waited += wait_for_tick(self.guard, log=self.log)
+
+
+def tick_stalled(tick, now, limit=120.):
+    """Whether production's last completed tick (``last-tick.json``) started more than ``limit`` seconds ago.
+
+    The file is written when a tick ends, and ticks start every minute, so a
+    start older than two minutes means the running tick is slow or failing.
+    """
+    try:
+        return (now - parse_time(tick['started_at'])).total_seconds() > limit
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def wait_for_tick(path, limit=120., poll=15., log=print):
+    """While the tick looks stalled, wait until a tick completes (a newer ``finished_at``); returns the seconds waited."""
+    def read():
+        try:
+            return json.loads(Path(path).read_text())
+        except (OSError, ValueError):
+            return {}
+    tick, waited = read(), 0.
+    if not tick_stalled(tick, datetime.now(timezone.utc), limit):
+        return 0.
+    seen = tick.get('finished_at')
+    log(f"production tick: the last completed tick started at {tick.get('started_at')}; pausing until a tick completes", flush=True)
+    while True:
+        time.sleep(poll)
+        waited += poll
+        tick = read()
+        if tick.get('finished_at') != seen or not tick_stalled(tick, datetime.now(timezone.utc), limit):
+            log(f"production tick: completed at {tick.get('finished_at')}; continuing after {waited:.0f} s", flush=True)
+            return waited
 
 
 def code_identity():
@@ -572,7 +650,9 @@ def replay_game(copy, ledger, artifacts, season, game, chosen, modes, code, *, f
             if mode == 'rebuilt':
                 if artifact is None or 'margin_inputs' not in enhancement:
                     raise ValueError('the run has no refined model artifact to prepare from')
+                prepared = time.monotonic()
                 used['model_enhancements'], row['rebuild'] = rebuild_enhancements(copy, used, artifact, code, finals=finals, view=view)
+                row['rebuild_seconds'] = round(time.monotonic() - prepared, 2)
             replayed = run_forecast(used, history)
             text = store._canonical(replayed)
             row['identical'] = text == run['forecast_json']
@@ -946,7 +1026,7 @@ def print_comparison(result):
 # ---------------------------------------------------------------- driver
 
 def _idle():
-    """Lowest CPU and disk priority for this process; a host without ionice just keeps going."""
+    """Lowest CPU priority, and the idle I/O class, which only a BFQ disk scheduler honours (this host's do not; see Throttle)."""
     try:
         os.nice(19)
     except OSError:
@@ -962,7 +1042,7 @@ def _read_json(path, default=None):
     return json.loads(path.read_text()) if path.exists() else default
 
 
-def choose_runs(copy, ledger, schedule, which, since=None, until=None, only=None):
+def choose_runs(copy, ledger, schedule, which, since=None, until=None, only=None, throttle=None):
     """The run to replay for every finished game, and how the choice was reached."""
     jobs, unreadable = index_jobs((_read_json(Path(copy) / 'state.json', {}) or {}).get('jobs', {}))
     report = dict(job_keys_unreadable=unreadable, finished_games=0, selected=0, without_a_pregame_run=[], metadata_reads=0)
@@ -974,6 +1054,9 @@ def choose_runs(copy, ledger, schedule, which, since=None, until=None, only=None
         report['finished_games'] += 1
         tip = parse_time(game['start_time'])
         mine = [c for c in jobs.get(gid, []) if parse_time(c['start']) == tip]
+        if throttle:
+            throttle.check()
+            before = ledger.io_seconds
         # Ledger columns are read only for the candidates the rule can pick: final-stage runs first.
         order = [mine] if which == 'first' else [[c for c in mine if c['stage'] == 'final'], [c for c in mine if c['stage'] != 'final']]
         pick = None
@@ -986,6 +1069,8 @@ def choose_runs(copy, ledger, schedule, which, since=None, until=None, only=None
             pick = select_run(game, [c for c in batch if 'created_at' in c], which)
             if pick:
                 break
+        if throttle:
+            throttle.rest(ledger.io_seconds - before)
         if pick is None:
             report['without_a_pregame_run'].append(gid)
             continue
@@ -1029,7 +1114,9 @@ def _save(path, output):
 def run(args):
     copy = Path(args.copy).resolve()
     if 'data/operations/production' in str(copy) and 'scratch' not in str(copy):
-        raise SystemExit('Refusing to run on production; point --copy at a copy.')
+        raise SystemExit('Refusing to run on production; point --copy at a copy (--ledger may name a live ledger, read by key only).')
+    if not 0 < args.io_share <= 1:
+        raise SystemExit('--io-share must be in (0, 1].')
     if not args.no_idle:
         _idle()
     try:
@@ -1045,7 +1132,17 @@ def run(args):
     schedule, source = saved_calendar(copy)
     if schedule is None:
         raise SystemExit('The copy has no saved calendar.')
-    ledger, artifacts = Ledger(copy / 'forecast.sqlite'), Artifacts(copy)
+    ledger_path = Path(args.ledger).resolve() if args.ledger else copy / 'forecast.sqlite'
+    inside_copy = ledger_path.parent == copy
+    if not inside_copy:
+        print(f'reading runs by run_id from {ledger_path}, read-only (not immutable)', flush=True)
+    ledger = Ledger(ledger_path, immutable=inside_copy and not args.live_ledger)
+    artifacts = Artifacts(Path(args.artifacts) if args.artifacts else copy / 'model-artifacts')
+    guard = None if args.no_guard else Path(args.guard_tick)
+    if guard is not None and not guard.exists():
+        print(f'no production tick file at {guard}; the tick guard is off', flush=True)
+        guard = None
+    throttle = Throttle(share=args.io_share, guard=guard)
     finals, view = (), None
     if 'rebuilt' in targets:
         finals = load_finals(copy)
@@ -1054,7 +1151,8 @@ def run(args):
             view = FinalsView(copy, tempfile.mkdtemp(prefix='live-replay-view-', dir=args.work or targets['rebuilt'].parent))
     copied = copy / '.copied_at'
     started = time.monotonic()
-    chosen, selection = choose_runs(copy, ledger, schedule, args.which, args.since, args.until, set(args.games) if args.games else None)
+    chosen, selection = choose_runs(copy, ledger, schedule, args.which, args.since, args.until, set(args.games) if args.games else None,
+                                    throttle=throttle)
     selection['market_report'] = check_against_market_report(copy, chosen) if args.which == 'final' else None
     selection['seconds'] = round(time.monotonic() - started, 1)
     audit = capture_audit(copy) if 'rebuilt' in targets else None
@@ -1079,30 +1177,40 @@ def run(args):
     if args.limit is not None:
         pending = sorted(pending, key=lambda g: chosen[g]['created_at'])[:args.limit]
     # One history at a time, each read once: games are taken history by history.
+    before = ledger.io_seconds
     digests = {gid: ledger.history_digest(chosen[gid]['run_id']) for gid in pending}
+    throttle.rest(ledger.io_seconds - before)
     first_seen = {}
     for gid in sorted(pending, key=lambda g: chosen[g]['created_at']):
         first_seen.setdefault(digests[gid], len(first_seen))
     pending.sort(key=lambda g: (first_seen[digests[g]], chosen[g]['created_at']))
     games = {g['game_id']: g for g in schedule['games']}
     try:
-        _replay_all(copy, ledger, artifacts, schedule, games, chosen, pending, targets, outputs, done, code, finals, view)
+        _replay_all(copy, ledger, artifacts, schedule, games, chosen, pending, targets, outputs, done, code, finals, view, throttle)
     finally:
         if view is not None:
             import shutil
             shutil.rmtree(view.root)  # symbolic links only; their targets in the copy are untouched
     for mode, path in targets.items():
         outputs[mode]['history_reads'] = ledger.history_reads
+        outputs[mode]['throttle'] = dict(io_share=args.io_share, slept_seconds=round(throttle.slept, 1),
+                                         waited_for_tick_seconds=round(throttle.waited, 1), guard=str(guard) if guard else None,
+                                         ledger=str(ledger_path), ledger_immutable=ledger.immutable, artifacts=str(artifacts.folder))
         _save(path, outputs[mode])
         print_summary(outputs[mode])
         print(f'\nwrote {path}')
 
 
-def _replay_all(copy, ledger, artifacts, schedule, games, chosen, pending, targets, outputs, done, code, finals, view):
+def _replay_all(copy, ledger, artifacts, schedule, games, chosen, pending, targets, outputs, done, code, finals, view, throttle):
     began = time.monotonic()
     for index, gid in enumerate(pending, 1):
         modes = [mode for mode in targets if gid not in done[mode]]
+        throttle.check()
+        before, histories = ledger.io_seconds, ledger.history_reads
         rows = replay_game(copy, ledger, artifacts, schedule.get('season'), games[gid], chosen[gid], modes, code, finals=finals, view=view)
+        # Reading the run and its history, and the small files prepare and the scoring read, count as disk time.
+        io = ledger.io_seconds - before + sum(r.get('rebuild_seconds', 0.) for r in rows.values())
+        throttle.rest(io, history_read=ledger.history_reads > histories)
         for mode, row in rows.items():
             outputs[mode]['games'].append(row)
             _save(targets[mode], outputs[mode])
@@ -1133,6 +1241,13 @@ def main():
                         help='rebuilt mode: environment finals prepare may read: the records the run itself read (default), '
                              'or every record in the copy whose known_at is by the run\'s prepared_at')
     parser.add_argument('--work', help='Folder for the rebuilt mode\'s symbolic-link view (default: beside the output)')
+    parser.add_argument('--ledger', help='Read runs by run_id from this ledger instead of COPY/forecast.sqlite (opened read-only, never immutable)')
+    parser.add_argument('--artifacts', help='Folder of model artifacts (content-addressed, checked on read) instead of COPY/model-artifacts')
+    parser.add_argument('--live-ledger', action='store_true', help='Never open the ledger immutable, even inside COPY (a copy still being written)')
+    parser.add_argument('--io-share', type=float, default=1 / 3, help='Largest share of the time spent reading; the rest is slept (default 1/3)')
+    parser.add_argument('--guard-tick', default='/mnt/2TBHDD/NBA-Forecast/repo/data/operations/production/last-tick.json',
+                        help='Production\'s last-tick.json: pause while the last completed tick started over 120 s ago')
+    parser.add_argument('--no-guard', action='store_true', help='Do not watch production\'s tick')
     parser.add_argument('--no-idle', action='store_true', help='Do not lower this process to idle CPU and disk priority')
     parser.add_argument('--summary', metavar='OUTPUT', help='Print the summary of an existing output and exit')
     parser.add_argument('--compare', nargs=2, metavar=('BASE', 'CANDIDATE'), help='Pair two outputs game by game and print candidate minus base')
