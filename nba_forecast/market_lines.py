@@ -347,13 +347,13 @@ def method_breakdown(rows):
     current = [r for r in rows if r.get('margin_family') == CALIBRATION_FAMILY]
     return dict(
         by_margin_method={m: dict(_paired_errors(v), current=m == METHOD) for m, v in sorted(methods.items())},
-        by_margin_family={f: dict(_paired_errors(v), method=f.split('|')[0], parameter_digest=f.split('|')[-1],
-                                  current=f == CALIBRATION_FAMILY) for f, v in sorted(families.items())},
+        by_margin_family={f: dict(_paired_errors(v), parameter_digest=f.split('|')[-1], current=f == CALIBRATION_FAMILY)
+                          for f, v in sorted(families.items())},
         current_margin_family=dict(family=CALIBRATION_FAMILY, **(_paired_errors(current) if current else dict(games=0, rows=0))),
-        margin_breakdown_policy=('Absolute margin errors of the model (the published margin) and the closing line on the same rows, '
-                                 'by the margin method and calibration family (method, settlement, parameter digest) of the run '
-                                 'the report selected; difference is model minus market with ONE standard error clustered by '
-                                 'Eastern game date (backtest._mean_se). A small sample; not an edge.'))
+        policy=('Absolute margin errors of the model (the published margin) and the closing line on the same rows, '
+                'by the margin method and calibration family (method|settlement|parameter digest) of the run '
+                'the report selected; difference is model minus market with ONE standard error clustered by '
+                'Eastern game date (backtest._mean_se). A small sample; not an edge.'))
 
 
 def market_report(folder, schedule, as_of=None, *, selected=None):
@@ -462,10 +462,13 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                    close_teacher=live_diagnostics(rows, schedule.get('season')))
     spread_rows = [r for r in rows if 'spread_edge' in r]
     total_rows = [r for r in rows if 'total_edge' in r]
+    breakdown = None
     if spread_rows:
         summary['margin_abs_error'] = dict(model=sum(r['margin_abs_error']['model'] for r in spread_rows) / len(spread_rows),
                                            market=sum(r['margin_abs_error']['market'] for r in spread_rows) / len(spread_rows), n=len(spread_rows))
-        summary.update(method_breakdown(spread_rows))
+        # The whole breakdown is the report's; the summary, which every tick report carries, keeps the current family's line.
+        breakdown = method_breakdown(spread_rows)
+        summary['current_margin_family'] = breakdown['current_margin_family']
         summary['spread_leans'] = {}
         for threshold in EDGE_THRESHOLDS:
             picks = []
@@ -507,5 +510,6 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                                  model_pick_accuracy=sum((r['model_margin'] > 0) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows),
                                  market_pick_accuracy=sum((r['market_home_win'] > .5) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows))
     return dict(version=VERSION, generated_at=as_of, summary=summary, games=rows, errors=errors,
+                margin_breakdown=breakdown,
                 policy='Closing line is the last capture before tipoff, or the provider\'s recorded close recovered after an outage (close_recovered). Leans are descriptive; a win rate on a small sample is not an edge. '
                        'Absolute errors compare the model and the market against the same final scores.')

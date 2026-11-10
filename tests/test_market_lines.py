@@ -124,6 +124,7 @@ class ArchiveTests(unittest.TestCase):
         report = M.market_report(self.folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z',
                                  selected={(GAME['game_id'], 'final'): dict(run_id='r1')})
         self.assertEqual([e['game_id'] for e in report['errors']], [GAME['game_id']])
+        self.assertIsNone(report['margin_breakdown'])
 
     def test_capture_index_counts_each_game_on_its_own(self):
         first = M.extract_game_lines(summary(), GAME, '2026-27', META)
@@ -228,26 +229,28 @@ class ReportTests(unittest.TestCase):
                     margin_forecast=dict(status='estimated', mean_margin=published, method=method, settlement=margins.SETTLEMENT,
                                          home_win_probability=.6))
             report = M.market_report(folder, dict(season='2026-27', games=games), '2026-10-26T05:00:00Z', selected=selected)
-        s = report['summary']
+        s, b = report['summary'], report['margin_breakdown']
         rows = {r['game_id']: r for r in report['games']}
         self.assertEqual(rows['0022600010']['margin_family'], margins.calibration_family(old_method, margins.SETTLEMENT, old_parameters))
         self.assertEqual(rows['0022600011']['margin_family'], margins.CALIBRATION_FAMILY)
         self.assertIsNone(rows['0022600013']['margin_family'], 'no parameter set saved, no family')
         # Model errors 1, 3, 9, 6 and the close's 4.5, 5.5, 1.5, 7.5: the all-time figures are unchanged.
         self.assertEqual(s['margin_abs_error'], dict(model=19 / 4, market=19 / 4, n=4))
-        current = s['by_margin_method'][margins.METHOD]
+        current = b['by_margin_method'][margins.METHOD]
         self.assertEqual({k: current[k] for k in ('games', 'rows', 'dates', 'model', 'market', 'difference', 'current')},
                          dict(games=3, rows=3, dates=2, model=6., market=29 / 6, difference=7 / 6, current=True))
-        old = s['by_margin_method'][old_method]
+        old = b['by_margin_method'][old_method]
         self.assertEqual((old['games'], old['difference'], old['difference_se'], old['current']), (1, -3.5, None, False))
-        family = s['current_margin_family']
+        family = b['current_margin_family']
+        self.assertEqual(s['current_margin_family'], family, 'the summary carries the current family\'s line only')
+        self.assertNotIn('by_margin_method', s)
         self.assertEqual((family['family'], family['games'], family['model'], family['market'], family['difference']),
                          (margins.CALIBRATION_FAMILY, 2, 6., 3.5, 2.5))
         # Differences -2.5 and +7.5 on two dates: one-way date clusters give (2/1)(5² + 5²)/2² = 25, above independence (12.5).
         self.assertAlmostEqual(family['difference_se'], 5.)
-        self.assertEqual(sorted(s['by_margin_family']), sorted([margins.CALIBRATION_FAMILY, rows['0022600010']['margin_family']]))
-        self.assertTrue(s['by_margin_family'][margins.CALIBRATION_FAMILY]['current'])
-        self.assertEqual(s['by_margin_family'][margins.CALIBRATION_FAMILY]['parameter_digest'], margins.parameter_digest(margins.PARAMETERS))
+        self.assertEqual(sorted(b['by_margin_family']), sorted([margins.CALIBRATION_FAMILY, rows['0022600010']['margin_family']]))
+        self.assertTrue(b['by_margin_family'][margins.CALIBRATION_FAMILY]['current'])
+        self.assertEqual(b['by_margin_family'][margins.CALIBRATION_FAMILY]['parameter_digest'], margins.parameter_digest(margins.PARAMETERS))
         for key in ('spread_leans', 'total_leans', 'winner', 'close_teacher', 'total_abs_error'):
             self.assertIn(key, s)
 
@@ -258,7 +261,7 @@ class ReportTests(unittest.TestCase):
         out = M.method_breakdown(rows)
         self.assertEqual(out['current_margin_family'], dict(family=margins.CALIBRATION_FAMILY, games=0, rows=0))
         self.assertFalse(out['by_margin_method']['old']['current'])
-        self.assertEqual(out['by_margin_family']['old|s|0123']['method'], 'old')
+        self.assertEqual(out['by_margin_family']['old|s|0123']['parameter_digest'], '0123')
 
 
 class CaptureBudgetTests(unittest.TestCase):
