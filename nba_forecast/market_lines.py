@@ -335,13 +335,16 @@ def method_breakdown(rows):
 
     The all-time figures mix every margin method and parameter set the service has
     run; this puts the current method's and family's own live record beside them
-    (``margins.METHOD``, ``margins.CALIBRATION_FAMILY``). A run whose saved margin
-    inputs carry no parameter set has no family.
+    (``margins.METHOD``, ``margins.CALIBRATION_FAMILY``). A row that published the
+    player sum (no estimated margin forecast) is counted under ``player_sum`` and
+    in no family; a run whose saved margin inputs carry no parameter set has no
+    family.
     """
     from .margins import CALIBRATION_FAMILY, METHOD
     methods, families = {}, {}
     for r in rows:
-        methods.setdefault(r.get('margin_method') or 'none', []).append(r)
+        # A row without a margin method published the player sum (model_margin_basis).
+        methods.setdefault(r.get('margin_method') or 'player_sum', []).append(r)
         if r.get('margin_family'):
             families.setdefault(r['margin_family'], []).append(r)
     current = [r for r in rows if r.get('margin_family') == CALIBRATION_FAMILY]
@@ -404,8 +407,10 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
         published = margin_forecast.get('mean_margin') if margin_forecast.get('status') == 'estimated' else None
         basis = 'margin_forecast' if isinstance(published, (int, float)) and math.isfinite(published) else 'player_sum'
         model_margin = published if basis == 'margin_forecast' else player_sum_margin
-        # The margin method and calibration family of the run that published this margin (method_breakdown).
-        margin_method = margin_forecast.get('method')
+        # The margin method and calibration family of the margin forecast this row published
+        # (method_breakdown). A run whose margin forecast was unavailable published the player sum
+        # and is counted as that, as the prospective margin calibration leaves it out of every family.
+        margin_method = margin_forecast.get('method') if basis == 'margin_forecast' else None
         margin_family = None
         if margin_method and isinstance(selection.get('margin_parameters'), dict):
             from .margins import calibration_family
