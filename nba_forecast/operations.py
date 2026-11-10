@@ -18,7 +18,7 @@ from .injuries import fetch_injury_check
 from .injury_parser import pdf_text,parse_report,apply_report,PARSER_VERSION
 from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
-from .store import save_run,evaluate_run,performance_report
+from .store import save_run,evaluate_run,performance_report,_is_legacy
 from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check,reported_unavailable
 from .preflight import run_preflight,PREFLIGHT_VERSION
@@ -121,9 +121,9 @@ def _runs_table(conn):
     The ``runs`` view joins each run to its history on ``history_sha256``, which is
     stored after ``snapshot_json``: reading through it walks every run's whole
     snapshot (about 0.9 MB of overflow pages each). The table holds the same rows
-    under the same rowids.
+    under the same rowids. The layout test is the store's own (``store._is_legacy``).
     """
-    return 'run_records' if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_records'").fetchone() else 'runs'
+    return 'runs' if _is_legacy(conn) else 'run_records'
 
 
 def _ledger_state(db):

@@ -570,7 +570,11 @@ reloads systemd and restarts the dashboard, and writes
 and the units written or rewritten. Run it again and it changes nothing. The
 next tick re-forecasts every pregame game under the new artifact; the next
 derived run refits the prospective interval calibration, which is bound to the
-model key.
+model key. Rolling back to a release whose tick report has no
+`evaluation_backlog` also drops the evaluation memory: that release re-scores
+every live run in its first tick, as the deploy of 2026-11-09 did (3800 runs,
+379 s); on a cold page cache, at the 0.78 s a run a copy took on a saturated
+disk, some 4,100 runs would run past the tick's 10-minute timeout.
 
 `last-tick.json` and `last-derived.json`, the append-only `ticks.jsonl` and
 `derived.jsonl`, service exit status and journald surface failures and missed

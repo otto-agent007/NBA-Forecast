@@ -74,7 +74,9 @@ a tick. To roll back, stop the runner timer, restore the baseline service's
 WorkingDirectory from `production/verified-units`, remove the active upgrade
 pointer (retain an archived copy), reload systemd and restart the timer. Do not
 delete source archives or rewrite the ledger. Existing saved forecasts retain
-their original model version, parameters and timestamps.
+their original model version, parameters and timestamps. A release whose tick
+report has no `evaluation_backlog` re-scores every live run in its first tick
+(`docs/season-operations.md`, the deploy paragraph): expect that tick to take minutes.
 
 Reproduce the research with `python3 -m nba_forecast.research_evaluation --history
 datasets/regular-season-expanded-2026-10-22/history.json.gz --team-games FILE
