@@ -382,6 +382,38 @@ def load_finals(copy):
     return out
 
 
+def capture_audit(copy):
+    """What the ``retrieved_at`` bound on line captures rests on, counted in the copy.
+
+    ``market_lines.closing_margins`` reads, for games tipped before a forecast,
+    the captures retrieved by its ``as_of``. That reproduces what the forecast
+    could read if every capture was appended before its game tipped (the tick
+    captures only games not yet started) and a recovered close was appended no
+    earlier than its recorded retrieval.
+    """
+    from nba_forecast.market_lines import read_game_lines
+    out = Counter()
+    late = []
+    for path in sorted((Path(copy) / 'market' / 'game-lines').glob('*.jsonl')):
+        try:
+            records = read_game_lines(copy, path.stem)
+        except ValueError:
+            out['damaged_files'] += 1
+            continue
+        for r in records:
+            out['captures'] += 1
+            if r.get('recovered_close'):
+                out['recovered_closes'] += 1
+                if parse_time(r['captured_at']) > parse_time(r['retrieved_at']):
+                    out['recovered_captured_after_retrieval'] += 1
+            elif parse_time(r['captured_at']) >= parse_time(r['start_time']):
+                out['captured_at_or_after_tip'] += 1
+                late.append(path.stem)
+            elif parse_time(r['retrieved_at']) >= parse_time(r['start_time']):
+                out['retrieved_at_or_after_tip'] += 1
+    return dict(out, games_with_a_capture_after_tip=sorted(set(late)))
+
+
 def rebuild_enhancements(copy, snapshot, artifact, code, *, finals, view=None):
     """``snapshot['model_enhancements']`` as this code prepares it as of the run's ``prepared_at``, with the as-of evidence.
 
@@ -833,6 +865,10 @@ def print_summary(output):
         print(f"  all {p['runs']} runs: environment {p['environment']['identical']}, live_team_game_sources {p['live_team_game_sources']['identical']}, "
               f"margin finals {p['margin_sources']['identical']}, margin dispersion {p['margin_dispersion']['identical']}, artifact fields {p['artifact_fields']['identical']}")
         print(f"  closes read (runs that recorded them): identical {p['closing_lines']['identical']} of {p['closing_lines']['runs']}")
+        a = output.get('capture_audit') or {}
+        print(f"  line captures in the copy: {a.get('captures', 0)}; appended at or after their game's tip (recovered closes aside): "
+              f"{a.get('captured_at_or_after_tip', 0)}; recovered closes {a.get('recovered_closes', 0)}, of them retrieved before their recovery "
+              f"began (the bound would admit them early) {a.get('recovered_captured_after_retrieval', 0)}; damaged files {a.get('damaged_files', 0)}")
         print(f"  environment finals read: {p['finals_source']}; the known_at bound alone would add a record the run did not read in "
               f"{p['known_at_bound_adds']['runs']} runs, choose another version in {p['known_at_bound_other_version']['runs']}, drop one in {p['known_at_bound_drops']['runs']}")
         print(f"  runs where preparing again reads a final the run did not: {p['finals_only_in_rebuilt']}; misses one it read: {p['finals_only_in_frozen']}; "
@@ -1021,11 +1057,12 @@ def run(args):
     chosen, selection = choose_runs(copy, ledger, schedule, args.which, args.since, args.until, set(args.games) if args.games else None)
     selection['market_report'] = check_against_market_report(copy, chosen) if args.which == 'final' else None
     selection['seconds'] = round(time.monotonic() - started, 1)
+    audit = capture_audit(copy) if 'rebuilt' in targets else None
     outputs = {}
     for mode, path in targets.items():
         header = dict(tool=TOOL, mode=mode, which=args.which, copy=str(copy), copied_at=copied.read_text().strip() if copied.exists() else None,
                       schedule_source=source, season=schedule.get('season'), code=code, selection=selection, se=SE_LABEL,
-                      finals=args.finals if mode == 'rebuilt' else None,
+                      finals=args.finals if mode == 'rebuilt' else None, capture_audit=audit if mode == 'rebuilt' else None,
                       inputs=dict(rebuilt=['model_enhancements.' + k for k in REBUILT_INPUTS] if mode == 'rebuilt' else [],
                                   frozen=dict(FROZEN_INPUTS, **({} if mode == 'rebuilt' else {'model_enhancements': 'everything enhancements.prepare '
                                               'returned at the time: environment, margin inputs (team ratings, dispersion, method and parameters), artifact fields'}))),
