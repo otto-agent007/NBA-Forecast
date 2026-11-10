@@ -357,9 +357,19 @@ def ols_line(x, y, dates, names):
 
 
 def best_weight(rows, ps_key='ps', rating_key='rating'):
-    def loss(w):
+    """The grid weight with the least absolute error (the first of equals). The loss is convex in w (a sum of
+    |affine|), so a ternary search over the grid indices finds the same point as a full scan."""
+    def loss(i):
+        w = W_GRID[i]
         return sum(abs((1 - w) * r[ps_key] + w * r[rating_key] - r['actual']) for r in rows)
-    return min(W_GRID, key=loss)
+    lo, hi = 0, len(W_GRID) - 1
+    while hi - lo > 4:
+        m1, m2 = lo + (hi - lo) // 3, hi - (hi - lo) // 3
+        if loss(m1) <= loss(m2):
+            hi = m2
+        else:
+            lo = m1
+    return W_GRID[min(range(lo, hi + 1), key=loss)]
 
 
 def bootstrap_weight(rows, seed=20261110, **kw):
@@ -462,6 +472,29 @@ def margin_halves(samples):
             print(f'  {name:40s} gp {lo:>2d}-{hi - 1:<2d} n {len(b):4d}  w* {w:.2f} ± {se:.2f} ({lo90:.2f}-{hi90:.2f})  '
                   f'MAE@0.65 {mae([r["blend"] - r["actual"] for r in b]):5.2f}  MAE@w* {mae([(1 - w) * r["ps"] + w * r["rating"] - r["actual"] for r in b]):5.2f}')
     return fitted
+
+
+def live_vs_backtest(samples):
+    """Each half's error beyond the bar (|half − actual| − |close − actual|, paired within a sample), live against the
+    seeded backtest's same phase of the season; the two samples are independent, so the SEs add in quadrature."""
+    import math
+    print('\n  Each half against the bar, live vs the seeded backtest\'s early games (|forecast − actual| − |close − actual|;'
+          ' difference of independent samples, SEs in quadrature):')
+    named = dict(samples)
+    pairs = [('live, all 122', 'seeded backtest, early (gp < 15)'), ('live, no availability surprise', 'seeded backtest, early (gp < 15)')]
+    for live_name, bt_name in pairs:
+        if live_name not in named or bt_name not in named:
+            continue
+        a = [r for r in named[live_name] if r['close'] is not None]
+        b = [r for r in named[bt_name] if r['close'] is not None]
+        parts = []
+        for label, key in (('blend', 'blend'), ('p-sum', 'ps'), ('rating', 'rating'), ('rating no absence', 'rating_noabs'),
+                           ('blend no absence', 'blend_noabs')):
+            ma, sa = mse([abs(r[key] - r['actual']) - abs(r['close'] - r['actual']) for r in a], [r['date'] for r in a])
+            mb, sb = mse([abs(r[key] - r['actual']) - abs(r['close'] - r['actual']) for r in b], [r['date'] for r in b])
+            parts.append(f'    {label:18s} live {pm(ma, sa, 2):>13s}   backtest {pm(mb, sb, 2):>13s}   live − backtest {pm(ma - mb, math.hypot(sa, sb), 2)}')
+        print(f'  {live_name} vs {bt_name}:')
+        print('\n'.join(parts))
 
 
 def calibration(samples):
@@ -866,6 +899,7 @@ def tables(args):
                     ('seeded backtest, gate window', subset(sh, ids=ref_ids)),
                     ('seeded backtest, all', sh)]
     margin_halves(samples)
+    live_vs_backtest(samples)
     short = [x for x in samples if not x[0].endswith(('window', 'all'))]
     calibration(short + [('production-path reference (blend only)', [dict(r, ps=None, rating=None) for r in ref['games']])])
     early_and_turnover([samples[0]] + [x for x in samples if x[0] == 'seeded backtest, all'])
