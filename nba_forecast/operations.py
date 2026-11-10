@@ -277,11 +277,19 @@ def ledger_runs(db):
 
 
 def _run_ids(db):
-    """(run_id, mode) in insertion order, without opening any JSON."""
+    """(run_id, mode) in insertion order, without opening any JSON.
+
+    Read from ``run_records``, not the ``runs`` view: the view joins each run to its
+    history on ``history_sha256``, which is stored after ``snapshot_json``, so listing
+    runs through it reads every run's whole snapshot (about 0.9 MB of overflow pages
+    each). The table holds the same rows under the same rowids. A ledger from before
+    history deduplication has a ``runs`` table instead.
+    """
     if not Path(db).exists():
         return []
     with closing(sqlite3.connect(db)) as conn:
-        return conn.execute('SELECT run_id,mode FROM runs ORDER BY rowid').fetchall()
+        table='run_records' if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_records'").fetchone() else 'runs'
+        return conn.execute(f'SELECT run_id,mode FROM {table} ORDER BY rowid').fetchall()
 
 
 def _run_row(db,run_id,columns):

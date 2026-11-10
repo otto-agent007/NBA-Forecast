@@ -189,6 +189,25 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(self.evaluate(recheck_seconds=0)['evaluation_backlog']['stale'],1)
         self.assertEqual(self.evaluate()['evaluation_backlog'],dict(stale=0,rechecked=1,revised=0,deferred=0))
 
+    def test_runs_are_listed_from_the_table_in_insertion_order_in_either_layout(self):
+        from tests.test_history_dedupe import history
+        def listed(db):
+            with sqlite3.connect(db) as conn:
+                return conn.execute('SELECT run_id,mode FROM runs ORDER BY rowid').fetchall()
+        snapshot,_,forecast=inputs()
+        with patch('nba_forecast.store._now',return_value=SAVED):
+            store.save_run(self.db,snapshot,history('Other'),forecast,mode='demo',scope='subset')
+        self.save()
+        self.assertEqual(operations._run_ids(self.db),listed(self.db))
+        self.assertEqual([m for _,m in operations._run_ids(self.db)],['live','demo','live'])
+        legacy=self.folder/'legacy.sqlite'
+        with sqlite3.connect(legacy) as conn:
+            conn.executescript(store._LEGACY_SCHEMA)
+        with patch('nba_forecast.store._now',return_value=SAVED):
+            store.save_run(legacy,snapshot,history(),forecast)
+        self.assertEqual(operations._run_ids(legacy),listed(legacy))
+        self.assertEqual(len(operations._run_ids(legacy)),1)
+
     def test_a_recheck_that_fails_stays_stale_and_is_tried_again(self):
         self.finals([actual(),actual('P2')])
         self.evaluate()
