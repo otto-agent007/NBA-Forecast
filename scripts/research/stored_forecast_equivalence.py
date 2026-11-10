@@ -43,6 +43,11 @@ listed as UNEXPLAINED and fails the run.
 
 ``--dev-recompute`` is for trying the script on a copy whose runs today's code
 cannot validate: the forecast MAIN recomputes stands in for the stored one.
+
+``--folders N --files-from DIR`` checks only the validator, on the N newest
+``runs/<run_id>/`` folders of DIR (read-only; their forecast.json and snapshot.json
+are the ledger row's bytes): each tree's ``_validate_forecast`` on the stored
+forecast, and BRANCH's on its ``stored_forecast`` shape. No history is needed.
 """
 import argparse
 from datetime import datetime, timezone
@@ -249,6 +254,34 @@ def child_derived(args):
             samples = collect_samples(folder, active['model_key'], args.now, interval_family=INTERVAL_FAMILY)['samples']
     Path(args.out).write_text(json.dumps(dict(seconds=seconds, errors=report['errors'], warnings=report['warnings'],
                                               samples=samples), default=str))
+
+
+def child_validate(args):
+    from nba_forecast import store
+    slim_shape = getattr(store, 'stored_forecast', None)
+    out = []
+    for name in json.loads(args.players):
+        folder = Path(name)
+        snapshot_text, forecast_text = ((folder / f).read_text() for f in ('snapshot.json', 'forecast.json'))
+        snapshot, stored = json.loads(snapshot_text), json.loads(forecast_text)
+        record = dict(run_id=folder.name, as_of=snapshot['as_of'], stage=snapshot.get('forecast_stage', 'preliminary'),
+                      rows=len(stored['predictions']), model_key=stored.get('model_key'))
+        for label, value in (('full', stored), ('slim', slim_shape(snapshot, stored) if slim_shape else None)):
+            if value is None:
+                continue
+            try:
+                store._validate_forecast(snapshot, value)
+                record[label] = 'accepted'
+            except ValueError as exc:
+                record[label] = str(exc)[:160]
+            if label == 'slim':
+                teams = {t for g in snapshot['games'] for t in (g['home_team_id'], g['away_team_id'])}
+                record['slim_rows'] = len(value['predictions'])
+                record['slim_is_stored_without_off_slate'] = canonical(value) == canonical(
+                    dict(stored, predictions=[r for r in stored['predictions'] if r['team_id'] in teams]))
+                record['no_game_count_matches'] = stored['coverage']['by_status'].get('no_game') == len(stored['predictions']) - len(value['predictions'])
+        out.append(record)
+    Path(args.out).write_text(json.dumps(out))
 
 
 def child_dashboard(args):
@@ -504,6 +537,8 @@ def main():
     parser.add_argument('--now')
     parser.add_argument('--steps', default='build,stored,evaluate,derived,dashboard')
     parser.add_argument('--dev-recompute', action='store_true')
+    parser.add_argument('--folders', type=int, help='validator check on the N newest run folders of --files-from')
+    parser.add_argument('--files-from', type=Path)
     parser.add_argument('--json', type=Path, help='write the full results here')
     # child
     parser.add_argument('--child')
@@ -517,7 +552,27 @@ def main():
     if args.child:
         _block_network()
         _expect_tree(args.tree)
-        return dict(build=child_build, evaluate=child_evaluate, derived=child_derived, dashboard=child_dashboard)[args.child](args)
+        return dict(build=child_build, evaluate=child_evaluate, derived=child_derived, dashboard=child_dashboard,
+                    validate=child_validate)[args.child](args)
+    if args.folders:
+        files = args.files_from.resolve()
+        folders = sorted((p for p in (files / 'runs').iterdir() if (p / 'forecast.json').is_file()),
+                         key=lambda p: (p / 'forecast.json').stat().st_mtime, reverse=True)[:args.folders]
+        args.work.mkdir(parents=True, exist_ok=True)
+        verdicts = {}
+        for shape, tree in (('main', args.main), ('branch', args.branch)):
+            run_child(tree.resolve(), 'validate', args.work, players=json.dumps([str(p) for p in folders]),
+                      out=args.work / f'validate-{shape}.json')
+            verdicts[shape] = json.loads((args.work / f'validate-{shape}.json').read_text())
+        print(f'{len(folders)} newest run folders of {files} (saved {verdicts["main"][-1]["as_of"][:19]} .. {verdicts["main"][0]["as_of"][:19]} UTC)')
+        print('%-36s %-11s %5s %5s %-10s %-10s %-10s %s' % ('run', 'stage', 'rows', 'slim', 'main full', 'br. full', 'br. slim', 'slim = stored without off-slate rows, no_game count'))
+        failures = 0
+        for m, b in zip(verdicts['main'], verdicts['branch']):
+            print('%-36s %-11s %5d %5d %-10s %-10s %-10s %s, %s' % (m['run_id'], m['stage'], m['rows'], b['slim_rows'], m['full'][:10], b['full'][:10],
+                                                           b['slim'][:10], b['slim_is_stored_without_off_slate'], b['no_game_count_matches']))
+            failures += not (m['full'] == b['full'] == b['slim'] == 'accepted' and b['slim_is_stored_without_off_slate'] and b['no_game_count_matches'])
+        print(f'accepted in both shapes by both validators, slim shape exact: {len(folders) - failures}/{len(folders)}')
+        raise SystemExit(1 if failures else 0)
 
     source, work = args.source.resolve(), args.work.resolve()
     trees = dict(full=args.main.resolve(), slim=args.branch.resolve())

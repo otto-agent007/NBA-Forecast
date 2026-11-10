@@ -34,9 +34,11 @@ def split_rows(rows, teams):
     return on, off
 
 
-def measure_run(conn, rowid, files):
-    row = conn.execute('SELECT run_id,created_at,mode,scope,snapshot_json,forecast_json FROM run_records WHERE rowid=?',
-                       (rowid,)).fetchone()
+def measure_run(conn, rowid, files, row=None):
+    """One run's measurements: from the ledger row ``rowid``, or from ``row`` (run_id, created_at, mode, scope, snapshot, forecast text)."""
+    if row is None:
+        row = conn.execute('SELECT run_id,created_at,mode,scope,snapshot_json,forecast_json FROM run_records WHERE rowid=?',
+                           (rowid,)).fetchone()
     if row is None:
         return None
     run_id, created, mode, scope, snapshot_json, forecast_json = row
@@ -121,6 +123,8 @@ def main():
     parser.add_argument('--step', type=int, default=40, help='rowid distance between sampled runs')
     parser.add_argument('--rowids', help='comma-separated rowids instead of the sample')
     parser.add_argument('--files-from', type=Path, help='directory whose runs/<run_id>/ files are measured (read-only)')
+    parser.add_argument('--newest-folders', type=int, help='instead of ledger rows: the N newest runs/<run_id>/ folders under '
+                        '--files-from, measured from their forecast.json and snapshot.json (the ledger row\'s bytes)')
     parser.add_argument('--runs-per-day', type=float, default=240.)
     parser.add_argument('--json', type=Path, help='also write the measurements here')
     args = parser.parse_args()
@@ -130,7 +134,17 @@ def main():
     rowids = ([int(v) for v in args.rowids.split(',')] if args.rowids
               else [newest - i * args.step for i in range(args.runs) if newest - i * args.step > 0])
     files = args.files_from or args.directory
-    measured = [m for m in (measure_run(conn, rowid, files) for rowid in rowids) if m]
+    if args.newest_folders:
+        # atomic_json writes the same canonical bytes the ledger stores, so the files stand in for the rows.
+        folders = sorted((p for p in (files / 'runs').iterdir() if (p / 'forecast.json').is_file()),
+                         key=lambda p: (p / 'forecast.json').stat().st_mtime, reverse=True)[:args.newest_folders]
+        measured = []
+        for index, folder in enumerate(folders):
+            snapshot_text, forecast_text = ((folder / name).read_text() for name in ('snapshot.json', 'forecast.json'))
+            snapshot = json.loads(snapshot_text)
+            measured.append(measure_run(conn, -index, files, row=(folder.name, snapshot['as_of'], 'live', 'league', snapshot_text, forecast_text)))
+    else:
+        measured = [m for m in (measure_run(conn, rowid, files) for rowid in rowids) if m]
     print(f'ledger {ledger} ({ledger.stat().st_size / 1e9:.2f} GB), newest rowid {newest}; {len(measured)} runs measured\n')
 
     print('forecast_json (kB)')
@@ -223,9 +237,14 @@ def main():
     folders = len([p for p in (files / 'runs').iterdir() if p.is_dir()]) if (files / 'runs').is_dir() else 0
     no_game_per_revision = fmean(e['excluded_no_game_bytes'] for _, e in revisions) if revisions else 0.
     print(f'\noffline compaction of what is already stored (estimate: sample mean x count)')
-    print(f'  runs in the ledger {runs_total} ({live_total} live): off-game rows ~{runs_total * f_off / 1e9:.2f} GB of forecast_json')
-    print(f'  evaluation revisions {revisions_total}: no_game exclusions ~{revisions_total * no_game_per_revision / 1e9:.2f} GB of report_json')
-    print(f'  runs/<run_id>/ folders {folders}: off-game rows in forecast.json ~{folders * f_off / 1e9:.2f} GB')
+    if args.newest_folders:
+        # The rows were read from run folders, not from this ledger: every run has one folder and one ledger row.
+        print(f'  runs/<run_id>/ folders {folders}, one ledger row each: off-game rows ~{folders * f_off / 1e9:.2f} GB of the '
+              f'ledger\'s forecast_json and as much again in the folders\' forecast.json (evaluations: measure from a ledger)')
+    else:
+        print(f'  runs in the ledger {runs_total} ({live_total} live): off-game rows ~{runs_total * f_off / 1e9:.2f} GB of forecast_json')
+        print(f'  evaluation revisions {revisions_total}: no_game exclusions ~{revisions_total * no_game_per_revision / 1e9:.2f} GB of report_json')
+        print(f'  runs/<run_id>/ folders {folders}: off-game rows in forecast.json ~{folders * f_off / 1e9:.2f} GB')
     if args.json:
         args.json.write_text(json.dumps(measured, indent=1, sort_keys=True))
 

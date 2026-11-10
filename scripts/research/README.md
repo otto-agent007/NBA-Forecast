@@ -138,3 +138,20 @@ same 75 files; dashboard game payloads equal 1206/1206 (12 showing a slim
 run). With `--dev-recompute` (today's forecasts from the same snapshots, so
 both ledgers save through `save_run`): 15/15 slim runs through the branch's
 `save_run`, the same results.
+
+The newest runs, on 2026-11-10 (the fresh production copy was not ready; files
+read, read-only, from production's `runs/<run_id>/`):
+`stored_run_bytes.py --files-from production --newest-folders 6` (runs of
+02:16 to 02:52 UTC): `forecast_json` 2.186 MB, the other teams' 486 rows 0.977
+MB (44.7%), the game's 36 rows 0.916, the rest 0.293 (`allocation_audit`
+0.261); `snapshot_json` 1.196 MB (`model_enhancements` 0.415, `shot_quality`
+0.366, `role_context` 0.126, other teams' roster 0.095, 8.0%); `profiles.json`
+0.914 MB, 0.840 of it other teams' players. At 240 runs a day: ledger rows 812
+→ 577 MB a day (−235 MB), run files 1031 → 796 MB. The 4106 run folders hold
+about 4.0 GB of off-game rows in the ledger and as much again in their
+`forecast.json` (estimate: sample mean times count).
+`stored_forecast_equivalence.py --folders 30 --files-from production` (runs of
+00:37 to 02:52 UTC, final and preliminary): main's and the branch's validators
+accept all 30 stored forecasts, the branch accepts all 30 in the stored shape,
+which is exactly the stored forecast without the other teams' rows, as many as
+`coverage.by_status.no_game`: 30/30.
