@@ -945,8 +945,10 @@ comparison with a final score. Per team-game, 5,208 rows:
 | Production minus baseline, paired | −1.98 ± 0.06 | −0.02 ± 0.01 | −1.94 ± 0.06 | −0.00 | 0 | −0.01 | |
 | Production, this change | −0.01 ± 0.20 | +0.56 | +0.36 | −0.91 | −0.23 | +0.21 | +0.58 |
 
-The two paths project the same minutes, the same participation and the same unprojected
-players; the whole difference is the points per minute of the players who played. By
+The two paths project nearly the same minutes (players who played: +1.84 minutes a team-game
+over the actual on the production path, +1.76 on the baseline), the same participation and
+the same unprojected players; the difference is the points per minute of the players who
+played. By
 reported-out regulars (players listed out who average 15+ minutes for the team and played one
 of its last ten games; the count agrees with the model's own on 1,737 of 1,738 checked
 team-games), production minus baseline is −0.95, −1.88, −2.64 and −2.53 for 0, 1, 2 and 3+.
@@ -1013,6 +1015,22 @@ projected volume matches the actual: FGA 88.43 against 88.63 (−0.20 ± 0.18), 
 21.83 (+0.36 ± 0.18), turnovers 13.17 against 12.99 (+0.18 ± 0.10). The other layers are
 unchanged to the reported precision.
 
+
+Live, `scripts/research/totals_live.py` re-forecast the saved snapshot and history of each
+scored pregame run the 2026-10-29 production copy holds (40 games of 2026-10-24..28; the
+copy of 2026-11-09 was not finished) with main's code and with this change. Neither
+reproduces the saved forecasts, which were made by the code of those days, and the snapshots
+carry no margin inputs of the current method, so margins are not compared. Game totals,
+this change minus main, paired, one date-clustered standard error: +4.13 ± 0.29 points a
+game; against the closing total the bias goes from −4.83 ± 0.39 to −0.69 ± 0.32 and the mean
+distance from 5.16 to 2.96 (−2.20 ± 0.51); against the final the bias goes from −4.00 to
++0.13 (± 4.4, the games' own spread) and the MAE from 15.63 to 15.55 (−0.08 ± 0.86); played
+players' points bias −0.04 → +0.15 (871 player-games), absolute error +0.01 ± 0.01. On these
+games main's replay splits its −0.80 a team-game into played +0.71, participation −0.85,
+unprojected −0.65 (all of them players the forecast withheld; none listed out and none
+missing from the forecast roster) and no replacement credit; overtime added 1.20 a team-game
+to the finals. The saved forecasts of those days, before the 2026-11-06 participation change,
+had played +6.89 against participation −7.01.
 
 Considered and not tried: a constant or a scale-up of team totals (the decomposition shows a
 specific cause, not a uniform one); removing the enhanced-stage usage budget (it is what keeps

@@ -231,6 +231,14 @@ def print_parts(games, key, label):
           f"± one date-clustered standard error")
     print(f"  {'error':>13s} {'overtime':>8s} " + ' '.join(f'{p:>15s}' for p in PARTS))
     print(f"  {_cell([r['error'] for r in rows], dates)} {overtime:+8.2f} " + ' '.join(f"{_cell([r['parts'][p] for r in rows], dates):>15s}" for p in PARTS))
+    statuses = defaultdict(int)
+    for g in games:
+        if g.get(key):
+            forecast_status = {p['player_id']: p['status'] for p in g[key]['players']}
+            for r in g['final']:
+                if r['status'] == 'played' and r['minutes'] > 0:
+                    statuses[forecast_status.get(r['player_id'], 'not on forecast')] += 1
+    print('  players who played, by forecast status: ' + ', '.join(f'{k} {v}' for k, v in sorted(statuses.items())))
 
 
 def game_errors(games, key):
