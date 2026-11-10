@@ -924,9 +924,11 @@ def _evaluate_runs(folder,db,report,*,recheck_seconds=EVALUATION_RECHECK_SECONDS
         return deadline is not None and time.monotonic()>=deadline
     unchanged=deferred=0
     waiting=[]
+    live=set()
     for run_id,mode in _run_ids(db):
         if mode!='live':
             continue
+        live.add(run_id)
         entry=known.get(run_id)
         if entry and entry['signature']==signature(entry['games'],latest.get(run_id)):
             if run_id in stale:
@@ -940,6 +942,7 @@ def _evaluate_runs(folder,db,report,*,recheck_seconds=EVALUATION_RECHECK_SECONDS
         result=score(run_id)
         if result and result['evaluated']:
             report['evaluated_runs']+=1
+    stale&=live  # an entry for a run this ledger does not hold has nothing to re-check
     rechecked=revised=0
     stop=time.monotonic()+recheck_seconds
     for run_id in reversed(waiting):

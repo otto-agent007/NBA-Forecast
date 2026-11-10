@@ -179,6 +179,16 @@ class EvaluationTests(unittest.TestCase):
                   for revision,text in conn.execute('SELECT revision,report_json FROM evaluations ORDER BY revision')]
         self.assertEqual(rows,[(1,['P1']),(2,['P1','P2'])])
 
+    def test_an_entry_for_a_run_the_ledger_does_not_hold_is_not_counted_as_stale(self):
+        self.finals([actual(),actual('P2')])
+        self.evaluate()
+        state=self.state()
+        state['runs']['not-in-this-ledger']=dict(games=['G1'],signature='x')
+        (self.folder/'evaluation-state.json').write_text(json.dumps(state))
+        self.deploy()
+        self.assertEqual(self.evaluate(recheck_seconds=0)['evaluation_backlog']['stale'],1)
+        self.assertEqual(self.evaluate()['evaluation_backlog'],dict(stale=0,rechecked=1,revised=0,deferred=0))
+
     def test_a_recheck_that_fails_stays_stale_and_is_tried_again(self):
         self.finals([actual(),actual('P2')])
         self.evaluate()
