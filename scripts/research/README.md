@@ -29,6 +29,10 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `path_scoreboards.py` | The baseline and production paths side by side: levels pooled and per season, the close on the same games, the gate's paired production-minus-baseline differences, and the winner Brier under the published distribution's home-win probability | two references' `scoreboard.json` and `rows.json.gz` |
 | `export_production_artifact.py` | Whether a dataset artifact still matches what production runs (every field `backtest --production-path` reads), and the export of the live one for it | an operations directory (read only) |
 | `live_inputs.py` | What live forecasts carry that the production-path replay does not build: historical priors, shot quality, role context, lineups, calibration, margin status | an operations directory's saved runs (read only) |
+| `replay_components.py` | Runs the gate unchanged and also saves each replayed game's margin components (player sum, edge, ratings, absence term, every reported-out player's `components.absence`) | the backtest's own arguments |
+| `absence_harness.py` | Re-scores a reference's margins under a different absence rule without a replay (who counts as an absent regular, and for how much); proves itself against `replay_components.py` output to the digit; what a reported-out minute is worth by group, on the close and the outcomes | a reference's `rows.json.gz`, the gate's histories, team games, injury reports and closing lines |
+| `absence_live.py` | The same rules on the live games of a production copy: each out player's log rebuilt from the copy's finals and checked against the saved record | a production copy (`market/report.json`, ledger by run id, finals, schedule) |
+| `line_blend.py` | How much leaning the published margin on the market line would change accuracy: the replay with the close (an upper bound), and live with the last line captured by each forecast's `as_of` | a reference's `rows.json.gz` and closing lines; a production copy |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 | `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
 | `run_ids_cold.py` | What listing a ledger's run IDs costs from a cold page cache through the `runs` view against `run_records` | a copy of a ledger |
@@ -245,3 +249,35 @@ calibration artifact differs only in `off_slate` and
 `residual_evidence_sha256`, hence its file name and `artifact_sha256`); main on
 the mixed ledger writes the same 165 files; dashboard game payloads equal
 1206/1206 (12 showing a slim run). RESULT OK.
+
+## Run on 2026-11-09
+
+`absence_harness.py --reference datasets/backtest-2026-11-07-market-strength
+--components <replay_components.py run>/components.json.gz` (25 s): 0 of 2,604
+games differ from the replay in their out players; largest differences 5.3e-15
+in the absence term and 7.1e-15 in the location (the same on the seeded replay's
+3,676 games). Who counts as an absent regular, and for how much, against the
+current rule, one date-clustered standard error: share-of-season, share-of-last-ten
+and rating-weighted shares +0.003, +0.004 and −0.007 on margin MAE but +0.0010
+to +0.0012 on winner Brier; 0.075 a minute −0.035 ± 0.017; 0.075 plus 0.035 for
+regulars out for all of the last ten −0.051 ± 0.022 and −0.0009 ± 0.0004. All
+`within_noise` on the gate; the real gate run of the last agreed to 7.1e-15 per
+margin. Written up in `docs/backtest.md`, "Tried, not merged: 2026-11-09".
+`absence_live.py` on production (read-only, by run id): the same direction
+live, toward a smaller term, within two standard errors on 97 games.
+
+`line_blend.py --reference datasets/backtest-2026-11-07-market-strength
+--market-history data/market-history` and `--live <production or a copy>`:
+blending the published margin with the line, (1 − w) × model + w × line. Replay
+with the close (an upper bound): margin MAE 11.161 at w = 0, 10.898 at w = 0.85
+and 1 (−0.264 ± 0.057 and −0.263 ± 0.066); with the opener (a lower bound)
+best near w = 0.5–0.65 (−0.145 ± 0.054) and worse than that at w = 1 (−0.058 ±
+0.079). Live, the last DraftKings line captured by each forecast's `as_of`: the
+final forecast (median 11 minutes before tip, its line 0.10 points from the
+close) 12.118 at w = 0 against 10.850 at w = 1 (−1.268 ± 0.405, 120 games); the
+first forecast of the day (median 446 minutes before tip, its line 0.79 from
+the close) 11.871 against 10.882 (−0.989 ± 0.283, 110 games). Not adopted (owner,
+2026-11-10): the model is to beat the line without using it as an input. The
+figures stay as a measure of the gap the model has to close on its own; that
+the line-weighted error falls all the way to w = 1 live says the model's
+disagreements with the line carry no information yet.
