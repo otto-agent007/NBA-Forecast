@@ -4,7 +4,9 @@
 code and scores them. It is the gate for model changes (see `AGENTS.md`): a
 change to how forecasts are computed is judged here first, on the same games
 and players as the committed reference, before anything is merged or
-activated.
+activated. The command below replays the baseline path; the same command with
+`--production-path` replays the path production runs, against its own
+reference ("Production path" below), and a change is judged on both.
 
 ```bash
 python -m nba_forecast backtest \
@@ -247,19 +249,138 @@ actual +7).
 
 ## Production path
 
-The gate replays `model._baseline_forecast`. Production runs
+The baseline command replays `model._baseline_forecast`. Production runs
 `candidate.forecast_candidate`, which adds the redistribution of absent
 players' minutes to teammates, pace and defense factors with team volume
 budgets, and the fitted rest and travel context. `--production-path ARTIFACT`
 replays that path: each game gets the pace and defense environment built from
 the team games of earlier dates (a labelled historical reconstruction), the
-rest and travel context from the season calendar, and the artifact's
-parameters and fitted context model. `datasets/model-upgrade-2026-10-23/artifact.json.gz`
-carries the same parameters and context model as the live 0.6.0 artifact.
-To replay it, add `--production-path datasets/model-upgrade-2026-10-23/artifact.json.gz`
-to the gate command; `AGENTS.md` still gates on the baseline path. Live-only inputs are still absent: recap role context, shot
-profiles, aggregate historical priors. The context model was fitted on
-2025-26, so that season is in-sample for it.
+rest and travel context from the season calendar, and the artifact's model
+version, parameters and fitted context model. Since 2026-11-09 `AGENTS.md`
+gates on it too: the gate command with
+
+```bash
+  --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
+  --reference datasets/backtest-2026-11-09-production-path
+```
+
+and its own `--output`. It took 34 minutes 44 seconds at idle priority on
+2026-11-09 (1,897 CPU seconds, peak resident memory 490 MiB); the baseline
+replay takes about eleven. Rerun against the reference it wrote byte-identical
+rows and reported every paired difference exactly zero, so a verdict on this
+path measures the change and nothing else. The scoreboard records the path
+(`model_path`) and, under `parameters.production_artifact`, the artifact file's
+path and SHA256, its model version and key, parameters and hashes of its
+context model and excluded games. A reference replayed on the other path is refused before
+anything is replayed, because the difference between the paths would read as
+the change; `--cross-path` allows it when that difference is what is wanted,
+and then the exit code is never 3. Against a production-path reference the
+run also compares what the replay reads from the two artifacts (model version,
+parameters, context-model and excluded-games hashes; not the model key, which
+changes every release) and prints a warning, also saved as the comparison's
+`artifact_warning`, when one differs or the reference does not record it: an
+artifact change would otherwise read as the code change. A reference saved
+before the hashes were recorded can carry them in a `manifest.json` beside its
+scoreboard. `datasets/backtest-2026-10-27-production-path` (the 0.5.0
+artifact, no hashes) draws the warning.
+
+CI does not replay this path yet. Its `--limit 400` smoke run took 870 CPU
+seconds here against 195 for the baseline one (4.47 times); at that ratio
+CI's baseline smoke step, 131 to 243 seconds on 2026-11-09, would become 10 to
+18 minutes for each Python version. With `--limit 100` it took 224 seconds,
+about what the baseline smoke run costs now, so one separate job on one Python
+version would run beside the matrix without lengthening CI; that is the
+proposal, not yet in `.github/workflows/ci.yml`.
+
+`datasets/production-artifact-2026-11-09/` is the artifact production ran on
+2026-11-09 (0.6.0), exported by `scripts/research/export_production_artifact.py`
+without its release binding and its live-fitted interval calibration (see its
+README). It is refined from the 0.5.0 artifact in
+`datasets/model-upgrade-2026-10-23/`, which earlier production-path runs used:
+the parameters, context model and excluded games are the same, the model
+version, key and known-at are not. Without their live inputs the refined
+branches the version turns on change nothing in the replay. The context model
+was fitted on 504 games of 2025-26 up to 2026-01-15, so that season is partly
+in-sample for it.
+
+What the replayed path still leaves out, against a live forecast (counts from
+the newest final forecast of each of 12 games of 2026-11-07..09, 311 projected
+players: `python3 scripts/research/live_inputs.py --directory
+data/operations/production --runs 70 --stride 9` on 2026-11-09):
+
+- The previous season. The gate replays each season alone, so players have no
+  earlier-season rows, team ratings no last-season prior, and pace and defense
+  only this season's games; live reads the previous season too. The
+  early-season replay (`--previous-history`, `--previous-team-games`) adds it.
+- Aggregate historical priors (career season totals, `historical.season_prior`):
+  199 of the 311 players had one; they set minutes, rate and shooting priors.
+- Court-location shot quality (`shot_quality`, refined): changed the shooting
+  of 232 of the 311, by 0.031 points a player in absolute value on average
+  before the budgets (expected attempts times the percentage change; signed
+  mean −0.004, largest 0.25).
+- Injury-exit role context (`role_context`, refined): 1 of the 311.
+- Rosters and statuses: the replay's roster is the box score's players with the
+  T-minus-30 report's statuses; live projects the league roster with the live
+  checkpoint's report, ESPN fallbacks, reviews and adjudications.
+- Projected starters (`preflight.lineups`): in live `totals.game_totals` (and
+  so `scoreline.reconcile`) a withheld projected starter is not covered by the
+  replacement-rate minutes, so the totals stay partial; the replay has no
+  lineups and treats no one as a projected starter.
+- Interval calibration: live reads the artifact's prospective calibration; the
+  replay fits the same two-tailed, per-minutes-bucket method walk-forward on
+  its own residuals.
+- `boxscore_model.extend_boxscore` and the shot profiles move no point or
+  minute, but with their expected makes live `scoreline.reconcile` leaves a
+  game unscaled when a scaled player's points no longer fit his attempts; the
+  replay never meets that refusal.
+- Margins: the replay also locates a game whose team totals are partial (a
+  withheld player), for which live publishes no margin; the market strength
+  reads ESPN's archived closes in the replay and the saved pregame captures
+  live (each provider's last, averaged). The margin calibration has never
+  been ready live, so nothing differs there today.
+- Winner probability: the replay scores P(margin > 0.5) under the normal; the
+  distribution production publishes leaves out a zero margin and renormalises,
+  which gives the home side +0.012 on average on these games. Rescored that way
+  the winner Brier changes by −0.0002 pooled on the baseline path and −0.0001
+  on the production path, by at most 0.0007 in one season
+  (`scripts/research/path_scoreboards.py`).
+
+### 2026-11-09: the production path against the baseline
+
+`datasets/backtest-2026-11-09-production-path/` replayed main 1385e80 (the
+release production ran) with
+`datasets/production-artifact-2026-11-09/artifact.json.gz` (SHA256
+`648950cbaf9dba58…`), paired with the baseline reference
+`datasets/backtest-2026-11-07-market-strength`. Its scoreboard predates the
+artifact fields and `--cross-path`: its `comparison` block, `worse`, is that
+cross-path comparison, the difference between the paths and not a gate
+verdict, and its `manifest.json` records the artifact file, its hashes and
+this. Production path minus baseline, pooled over
+the three seasons, ± two clustered standard errors as the gate prints them
+(`python3 scripts/research/path_scoreboards.py --baseline
+datasets/backtest-2026-11-07-market-strength --production
+datasets/backtest-2026-11-09-production-path`):
+
+| Metric | Production path minus baseline | Verdict |
+|---|---|---|
+| Player points MAE | −0.0095 ± 0.0032 | within the materiality floor (0.0224) |
+| Minutes MAE | −0.0030 ± 0.0022 | within the floor (0.0242) |
+| Team points MAE | +0.421 ± 0.169 | worse, in each season (+0.18, +0.48, +0.60) |
+| Margin MAE | +0.044 ± 0.064 | within noise |
+| Participation Brier | 0 | identical: the path shares the participation model |
+| Winner Brier | −0.0007 ± 0.0012 | within noise (improved in 2024-25 only) |
+| 80% interval score | −0.003 ± 0.016 | within noise |
+| Points bias | −0.086 → −0.271 | worse, in each season |
+| Team-points bias | −1.23 → −3.21 | worse, in each season |
+| Margin bias | +0.12 → +0.13 | within noise |
+
+Against the closing line on the same 2,604 games the model's margin MAE is
+11.161 on the baseline path and 11.205 on the production path, the close's
+10.898: a gap of +0.263 and +0.307. The production path keeps October's
+shortfall in team totals (team-points bias −1.23 → −3.21) and gains nothing
+measurable in margin or winners. On the replayed seasons these layers do not
+by themselves open a wider gap to the close; where the replay and live still
+differ is the list above.
 
 First run, 2026-10-27, against `datasets/backtest-2026-10-26-absence` (the
 baseline path), ± two standard errors:
