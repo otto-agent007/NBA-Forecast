@@ -33,6 +33,8 @@ function TileTeam({ game, side }) {
   );
 }
 
+const DETAIL_FIELDS = ["forecast", "forecast_stage", "forecasts", "injury_capture", "preflight", "availability_update"];
+
 export default function App() {
   const [data, setData] = useState(null),
     [error, setError] = useState(""),
@@ -46,8 +48,11 @@ export default function App() {
     [forecastStage, setForecastStage] = useState("latest"),
     [detail, setDetail] = useState(null),
     [refreshRevision, setRefreshRevision] = useState(0),
+    [details, setDetails] = useState({}),
+    [reviews, setReviews] = useState({}),
     [now, setNow] = useState(Date.now());
   const refreshInFlight = useRef(false);
+  const dataRef = useRef(null);
   const reload = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -58,7 +63,9 @@ export default function App() {
         new URLSearchParams(location.search).get("snapshot") === "1";
       // no-cache revalidates with the server's ETag: an unchanged page costs a 304, not 20 MB.
       const response = await fetch(
-        staticMode ? "./dashboard.json" : "/api/dashboard",
+        // view=day: one game day's forecasts with the page, the rest on demand (plain
+        // /api/dashboard is the whole payload, for pages built before this one).
+        staticMode ? "./dashboard.json" : "/api/dashboard?view=day",
         { cache: "no-cache" },
       );
       if (!response.ok)
@@ -75,9 +82,24 @@ export default function App() {
       // The server names each game's opening forecast by stage instead of repeating it.
       for (const g of next.games)
         g.forecast = g.forecast ?? g.forecasts?.[g.forecast_stage] ?? null;
+      // A day the server stops carrying (the opening day moves once tonight's games
+      // tip) keeps the details it had until its own fetch returns.
+      const previous = dataRef.current;
+      if (Array.isArray(previous?.detail_days) && Array.isArray(next.detail_days)) {
+        const dropped = previous.detail_days.filter((day) => !next.detail_days.includes(day));
+        if (dropped.length)
+          setDetails((old) => {
+            const kept = { ...old };
+            for (const day of dropped)
+              kept[day] = Object.fromEntries(previous.games.filter((g) => gameDay(g) === day)
+                .map((g) => [g.game_id, Object.fromEntries(DETAIL_FIELDS.filter((k) => k in g).map((k) => [k, g[k]]))]));
+            return kept;
+          });
+      }
+      dataRef.current = next;
       setData(next);
       setRefreshRevision((old) => old + 1);
-      setDate((old) => old || initialDay(next));
+      setDate((old) => old || next.default_day || initialDay(next));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -94,9 +116,59 @@ export default function App() {
     }, 30000);
     return () => clearInterval(timer);
   }, [reload]);
+  // The live server sends one game day's forecasts with the page (detail_days) and
+  // any other day's from /api/forecasts; a saved snapshot carries every day's.
+  const serverDays = Array.isArray(data?.detail_days) ? data.detail_days : null;
+  const dayPending = Boolean(serverDays && date && !serverDays.includes(date) && !details[date]);
+  useEffect(() => {
+    if (!serverDays || !date || serverDays.includes(date)) return;
+    const controller = new AbortController();
+    fetch(`/api/forecasts?date=${encodeURIComponent(date)}`, { cache: "no-cache", signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error("Forecasts for this date are unavailable.");
+        return response.json();
+      })
+      .then((next) => setDetails((old) => ({ ...old, [date]: next.games || {} })))
+      .catch((e) => {
+        if (e.name !== "AbortError") setError(e.message);
+      });
+    return () => controller.abort();
+  }, [data, date]);
+  // Daily reviews are listed by date and fetched one night at a time.
+  const reviewDates = Array.isArray(data?.daily_review_dates) ? data.daily_review_dates : null;
+  useEffect(() => {
+    if (!reviewDates || tab !== "Performance" || !reviewDates.includes(date)) return;
+    const controller = new AbortController();
+    fetch(`/api/daily-reviews/${encodeURIComponent(date)}`, { cache: "no-cache", signal: controller.signal })
+      // 404: no review saved for that night. Any other failure stays pending; the next poll retries.
+      .then((response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error("Daily review unavailable");
+        return response.json();
+      })
+      .then((report) => setReviews((old) => ({ ...old, [date]: report })))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [data, date, tab]);
+  const view = useMemo(() => {
+    if (!data) return null;
+    const games = !serverDays ? data.games : data.games.map((g) => {
+      const extra = serverDays.includes(gameDay(g)) ? null : details[gameDay(g)]?.[g.game_id];
+      if (!extra) return g;
+      const merged = { ...g, ...extra };
+      merged.forecast = merged.forecast ?? merged.forecasts?.[merged.forecast_stage] ?? null;
+      return merged;
+    });
+    return {
+      ...data,
+      games,
+      daily_reviews: reviewDates ? reviews : data.daily_reviews,
+      daily_review_pending: Boolean(reviewDates?.includes(date) && !(date in reviews)),
+    };
+  }, [data, details, reviews, date]);
   const games = useMemo(
-    () => data?.games.filter((g) => gameDay(g) === date) || [],
-    [data, date],
+    () => view?.games.filter((g) => gameDay(g) === date) || [],
+    [view, date],
   );
   const selectedGame = games.find((g) => g.game_id === selected) || games[0];
   const game = useMemo(() => {
@@ -106,10 +178,10 @@ export default function App() {
     return { ...selectedGame, forecast: saved };
   }, [selectedGame, forecastStage]);
   const players = useMemo(() => {
-    if (!data) return [];
-    if (tab === "Games") return gamePlayers(data, game);
+    if (!view) return [];
+    if (tab === "Games") return gamePlayers(view, game);
     const pool = new Map(
-      (tab === "Projections" ? [] : data.players).map((p) => [
+      (tab === "Projections" ? [] : view.players).map((p) => [
         p.player_id,
         {
           ...p,
@@ -119,9 +191,9 @@ export default function App() {
       ]),
     );
     for (const g of games)
-      for (const p of gamePlayers(data, g)) pool.set(p.player_id, p);
+      for (const p of gamePlayers(view, g)) pool.set(p.player_id, p);
     return [...pool.values()];
-  }, [data, games, game, tab]);
+  }, [view, games, game, tab]);
   function chooseTab(value) {
     setTab(value);
     setQuery("");
@@ -296,12 +368,13 @@ export default function App() {
                 ? "Saved snapshot"
                 : "Saved operational evidence"}{" "}
               · {stamp(data.generated_at)}{" "}
+              {dayPending && <span role="status">Loading this date's forecasts…</span>}{" "}
               <span>Times shown in Pacific Time</span>
             </div>
             {tab === "Postgame" ? (
               <Postgame game={game} refreshRevision={refreshRevision} />
             ) : tab === "Performance" ? (
-              <Performance data={data} date={date} onSelect={setDetail} onGame={id=>{setSelected(id);setTab("Games");}} />
+              <Performance data={view} date={date} onSelect={setDetail} onGame={id=>{setSelected(id);setTab("Games");}} />
             ) : tab === "Projections" ? (
               <Projections
                 players={players}
@@ -364,7 +437,7 @@ export default function App() {
                     {tab === "Games" && (
                       <Sidebar
                         game={game}
-                        data={data}
+                        data={view}
                         now={now}
                         onReview={review}
                       />

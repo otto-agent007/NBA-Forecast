@@ -40,7 +40,7 @@ export default function Performance({ data,date,onGame,onSelect }) {
         <h2>How the model is doing</h2>
         <p>Prospective results from predictions saved before tipoff.</p>
       </div>
-      <DailyReview report={data.daily_reviews?.[date]} recurrence={data.daily_review_recurrence} date={date} onGame={onGame} onPlayer={row=>{
+      <DailyReview report={data.daily_reviews?.[date]} pending={data.daily_review_pending} recurrence={data.daily_review_recurrence} date={date} onGame={onGame} onPlayer={row=>{
         const game=data.games.find(g=>g.game_id===row.game_id);
         const forecast=game?.forecasts?.final || game?.forecast;
         const player=forecast?.predictions.find(p=>p.player_id===row.player_id);
