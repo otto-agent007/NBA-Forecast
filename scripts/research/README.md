@@ -166,7 +166,7 @@ and the derived service's `_ledger_state` (row counts through the same view,
 every minute) now read `run_records`. The dashboard's `_ledger_key` and other
 readers still count or list through the view.
 
-## Run on 2026-11-09
+## Run on 2026-11-09 (stored run bytes)
 
 `stored_run_bytes.py --directory scratch/2026-10-29-derived/production-copy --runs 6 --step 40`
 (six live runs of 10-28 and 10-29 read by rowid; their `runs/<run_id>/` files read,
@@ -255,7 +255,7 @@ calibration artifact differs only in `off_slate` and
 the mixed ledger writes the same 165 files; dashboard game payloads equal
 1206/1206 (12 showing a slim run). RESULT OK.
 
-## Run on 2026-11-09
+## Run on 2026-11-09 (absence harness)
 
 `absence_harness.py --reference datasets/backtest-2026-11-07-market-strength
 --components <replay_components.py run>/components.json.gz` (25 s): 0 of 2,604
