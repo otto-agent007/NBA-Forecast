@@ -1,7 +1,17 @@
 name: Tests
+# A pull request is tested by its pull_request run; a push to a PR branch used
+# to start a second, identical run. Pushes are tested only on main, and any
+# other branch can be run by hand (Actions > Tests > Run workflow).
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A newer push to the same pull request cancels its older, unfinished run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

@@ -72,9 +72,10 @@ python3 -m nba_forecast --help                 # every command
 npm ci --prefix dashboard && npm test --prefix dashboard && npm run build --prefix dashboard
 ```
 
-The backtest command is in `AGENTS.md` (about eleven minutes); CI runs the
-tests on Python 3.11 to 3.13, a 400-game smoke replay against the reference,
-and the dashboard's unit, build and end-to-end checks.
+The backtest command is in `AGENTS.md` (about eleven minutes); CI, on each
+pull request and each push to main, runs the tests on Python 3.11 to 3.13, a
+400-game smoke replay against the reference, and the dashboard's unit, build
+and end-to-end checks.
 
 ## Where things are
 
