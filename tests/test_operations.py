@@ -188,6 +188,35 @@ class OperationsTests(unittest.TestCase):
             self.assertEqual(second['created_runs'],0)
             self.assertEqual(second['recovered_runs'],1)
             self.assertEqual(len(list((Path(d)/'runs').glob('*/profiles.json'))),1)
+    def test_a_tick_stores_the_games_players_and_counts_the_rest_of_the_roster(self):
+        schedule=normalize_season(payload([game()]),NOW)
+        schedule['version']='v1'
+        roster=inputs()[0]['roster']
+        roster['team_ids']=[str(t) for t in range(1610612737,1610612767)]
+        for p,t in zip(roster['players'],roster['team_ids']):
+            p['team_id']=t
+            p['status']='unknown'
+        roster['observed_at']=NOW
+        with tempfile.TemporaryDirectory() as d, patch('nba_forecast.operations.fetch_schedule',return_value=schedule),patch('nba_forecast.operations.fetch_roster',return_value=roster),patch('nba_forecast.operations._now',return_value=NOW),patch('nba_forecast.store._now',return_value=datetime.fromisoformat(NOW.replace('Z','+00:00'))),patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')):
+            self.assertEqual(run_tick(d,[])['created_runs'],1)
+            with sqlite3.connect(Path(d)/'forecast.sqlite') as conn:
+                run_id,saved=conn.execute('SELECT run_id,forecast_json FROM runs').fetchone()
+            forecast=json.loads(saved)
+            # One player a team: the game's two are stored, the other 28 are counted.
+            self.assertEqual(sorted(p['team_id'] for p in forecast['predictions']),['1610612738','1610612752'])
+            self.assertTrue(all(p['game_id']=='0022600001' and p['status']=='needs_review' for p in forecast['predictions']))
+            self.assertEqual({k:forecast['coverage'][k] for k in ('roster_players','pool_rows','by_status')},
+                             dict(roster_players=30,pool_rows=30,by_status=dict(needs_review=2,no_game=28)))
+            output=Path(d)/'runs'/run_id
+            self.assertEqual(json.loads((output/'forecast.json').read_text()),forecast)
+            # The saved inputs and the role profiles still cover the league roster.
+            self.assertEqual(len(json.loads((output/'snapshot.json').read_text())['roster']['players']),30)
+            self.assertEqual(len(json.loads((output/'profiles.json').read_text())['players']),30)
+            # A lost forecast.json is written again from the ledger, in the stored shape.
+            (output/'forecast.json').unlink()
+            second=run_tick(d,[])
+            self.assertEqual((second['created_runs'],second['recovered_artifacts']),(0,1))
+            self.assertEqual(json.loads((output/'forecast.json').read_text()),forecast)
     def test_lock_refuses_overlapping_tick(self):
         with tempfile.TemporaryDirectory() as d:
             import fcntl
@@ -394,7 +423,9 @@ class EvidenceTickTests(unittest.TestCase):
         pointer.write_text(json.dumps(dict(artifact_sha256=digest,activated_at=artifact['known_at'])))
         assessment=dict(status='ready',model_key='test',training_cutoff=NOW,evidence_kind='prospective_saved_forecast',
             residual_evidence_sha256='evidence',sample_count=200,game_count=20,errors=[])
-        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment):
+        # The fit is mocked, and so is its replay from the ledger bytes before activation.
+        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment),\
+                patch('nba_forecast.prospective_calibration.verify_prospective_sources',return_value=True):
             first=run_tick(self.folder,[])
             self.assertEqual(first['created_runs'],1,first['errors'])
             saved=self.saved()[0]
@@ -411,6 +442,24 @@ class EvidenceTickTests(unittest.TestCase):
             self.assertEqual(pointer.read_bytes(),upgraded,'the same evidence is not refit')
             third=run_tick(self.folder,[])
             self.assertEqual(third['created_runs'],0,third['errors'])
+
+    def test_ready_calibration_that_does_not_replay_from_ledger_bytes_is_not_activated(self):
+        # The fit reads the derived sidecar; activation needs the same fit from the ledger and final bytes.
+        from nba_forecast.enhancements import install_artifact
+        artifact=dict(model_version='regular-season-baseline-0.5.0',model_key='test',known_at='2026-10-21T15:00:00Z',
+            parameters={},team_games=[],context_model=None,calibration=None,excluded_history_game_ids=[],validation_report={'scope':'test'})
+        digest=install_artifact(self.folder,artifact)
+        pointer=self.folder/'model-upgrade-active.json'
+        pointer.write_text(json.dumps(dict(artifact_sha256=digest,activated_at=artifact['known_at'])))
+        assessment=dict(status='ready',model_key='test',training_cutoff=NOW,evidence_kind='prospective_saved_forecast',
+            residual_evidence_sha256='evidence',sample_count=200,game_count=20,errors=[])
+        replay=patch('nba_forecast.prospective_calibration.verify_prospective_sources',return_value=False)
+        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment),replay as verify:
+            run_tick(self.folder,[])
+            derived=run_derived(self.folder)
+        verify.assert_called_once()
+        self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],digest)
+        self.assertTrue(any(e.get('task')=='prospective_calibration' and 'did not replay' in str(e.get('detail')) for e in derived['errors']),derived['errors'])
 
     def saved(self):
         with sqlite3.connect(self.folder/'forecast.sqlite') as conn:

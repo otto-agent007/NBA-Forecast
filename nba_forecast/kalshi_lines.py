@@ -210,7 +210,9 @@ def capture_kalshi_lines(folder, games, as_of, fetch=None, deadline=None):
             report['deferred'].append(game['game_id'])
         except (ValueError, OSError, KeyError, TypeError) as exc:
             report['errors'].append(dict(game_id=game['game_id'], error=str(exc)))
-    atomic_json(state_path, dict(version=VERSION, captured=captured))
+    saved = dict(version=VERSION, captured=captured)
+    if saved != state:  # a call with nothing due writes nothing
+        atomic_json(state_path, saved)
     return report
 
 

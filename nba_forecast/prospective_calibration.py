@@ -48,83 +48,147 @@ def _source_kind(prediction):
     return "unknown"
 
 
-def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family=None):
+# What collect_samples reads from a selected prediction; ``components`` keeps only the
+# uncertainty audit that interval_family_of and _source_kind read.
+_FIELDS = ("status", "points_mean", "points_sd", "team_id", "start_time", "expected_minutes",
+           "points_lower80", "points_upper80")
+_CAUGHT = (ValueError, KeyError, TypeError, AttributeError)
+
+
+def _compact(prediction):
+    kept = {k: prediction[k] for k in _FIELDS if k in prediction}
+    if "components" in prediction:
+        components = prediction["components"]
+        kept["components"] = ({"uncertainty": components["uncertainty"]} if "uncertainty" in components else {}) \
+            if isinstance(components, dict) else components
+    return kept
+
+
+def run_ops(parsed):
+    """What one live league run contributes to the selection, before the cutoff or model key is applied.
+
+    ``parsed`` is a ``derived_cache.Parsed`` row. The fields follow the selector's
+    own order: the timestamps, the creation-time and digest checks, the model key it
+    is filtered on, then everything read after that filter.
+    """
+    row = parsed.row
+    try:
+        created, run_cutoff = parse_time(row["created_at"]), parse_time(row["as_of"])
+    except _CAUGHT as exc:
+        return dict(time_error=str(exc))
+    try:
+        if run_cutoff > created:
+            raise ValueError("run cutoff follows its actual creation time")
+        if parsed.digest("forecast") != row["forecast_sha256"]:
+            raise ValueError("immutable forecast hash mismatch")
+        forecast = parsed.forecast()
+    except _CAUGHT as exc:
+        return dict(time_error=None, pre_error=str(exc))
+    try:
+        model_key = dict(value=forecast.get("model_key"))
+    except _CAUGHT as exc:
+        model_key = dict(error=str(exc))
+    post = dict(off_slate=0, not_pregame=0, error=None, forecast_sha256=row["forecast_sha256"])
+    try:
+        post["run_key"] = forecast.get("model_key") or forecast.get("model_version")
+        if parse_time(forecast["as_of"]) != run_cutoff:
+            raise ValueError("forecast and ledger cutoffs disagree")
+        season = forecast["season"]
+        if not isinstance(season, str):
+            raise ValueError("forecast season is malformed")
+        predictions = forecast["predictions"]
+        if not isinstance(predictions, list):
+            raise ValueError("forecast predictions must be a list")
+        run_keys = set()
+        entries = []
+        for prediction in predictions:
+            if prediction.get("game_id") is None:
+                post["off_slate"] += 1
+                continue
+            gid, pid = prediction["game_id"], prediction["player_id"]
+            if not all(isinstance(value, str) and value for value in (gid, pid, prediction["team_id"])):
+                raise ValueError("forecast game/player/team identity is malformed")
+            if Path(gid).name != gid or gid in {".", ".."}:
+                raise ValueError("forecast game ID cannot identify an archive file")
+            key = (gid, pid)
+            if key in run_keys:
+                raise ValueError("duplicate forecast game/player identity")
+            run_keys.add(key)
+            start = parse_time(prediction["start_time"])
+            if created >= start:
+                post["not_pregame"] += 1
+                continue
+            entries.append([gid, pid, _compact(prediction)])
+        post.update(season=season, entries=entries)
+    except _CAUGHT as exc:
+        post["error"] = str(exc)
+    return dict(time_error=None, pre_error=None, model_key=model_key, post=post)
+
+
+def _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family=None, direct=False):
     """Latest pregame prediction per game/player.
 
     With ``interval_family`` every live run whose predictions built their sd
     that way is eligible, whatever its model key; otherwise only runs of the
     exact ``model_key`` are.
+
+    Each run's contribution (``run_ops``) is read from the derived sidecar, which
+    opens the ledger read-only and extracts each run once in its lifetime;
+    ``direct`` (an activation) reads and verifies every run's bytes on this call.
     """
+    from contextlib import closing
+    from .derived_cache import direct_rows, open_cache
     selected = {}
-    # A URI in read-only mode cannot create a missing DB, migrate a schema, or
-    # execute the store's normal schema/trigger setup on the active ledger.
-    with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA query_only=ON")
-        query = ("SELECT rowid AS insertion_order,run_id,created_at,as_of,"
-                 "forecast_json,forecast_sha256 FROM runs "
-                 "WHERE mode='live' AND scope='league'")
-        for run in connection.execute(query):
-            counts["live_runs"] += 1
-            try:
-                created, run_cutoff = parse_time(run["created_at"]), parse_time(run["as_of"])
-                if created > cutoff:
-                    excluded["future_run"] += 1
-                    continue
-                if run_cutoff > created:
-                    raise ValueError("run cutoff follows its actual creation time")
-                encoded = run["forecast_json"]
-                if hashlib.sha256(encoded.encode()).hexdigest() != run["forecast_sha256"]:
-                    raise ValueError("immutable forecast hash mismatch")
-                forecast = json.loads(encoded)
-                if interval_family is None and forecast.get("model_key") != model_key:
-                    excluded["model_mismatch_run"] += 1
-                    continue
-                counts["model_runs"] += 1
-                run_key = forecast.get("model_key") or forecast.get("model_version")
-                if parse_time(forecast["as_of"]) != run_cutoff:
-                    raise ValueError("forecast and ledger cutoffs disagree")
-                season = forecast["season"]
-                if not isinstance(season, str):
-                    raise ValueError("forecast season is malformed")
-                predictions = forecast["predictions"]
-                if not isinstance(predictions, list):
-                    raise ValueError("forecast predictions must be a list")
-                run_keys = set()
-                entries = []
-                for prediction in predictions:
-                    if prediction.get("game_id") is None:
-                        excluded["off_slate"] += 1
-                        continue
-                    gid, pid = prediction["game_id"], prediction["player_id"]
-                    if not all(isinstance(value, str) and value for value in (gid, pid, prediction["team_id"])):
-                        raise ValueError("forecast game/player/team identity is malformed")
-                    if Path(gid).name != gid or gid in {".", ".."}:
-                        raise ValueError("forecast game ID cannot identify an archive file")
-                    key = (gid, pid)
-                    if key in run_keys:
-                        raise ValueError("duplicate forecast game/player identity")
-                    run_keys.add(key)
-                    start = parse_time(prediction["start_time"])
-                    if created >= start:
-                        excluded["not_pregame"] += 1
-                        continue
-                    entries.append((key, prediction))
-                rank = (created, run["insertion_order"])
-                for key, prediction in entries:
-                    if key not in selected or rank > selected[key][0]:
-                        # Do not filter status or numeric support until latest
-                        # identity is chosen, independently of every outcome.
-                        selected[key] = (rank, dict(run_id=run["run_id"], model_key=run_key,
-                            forecast_created_at=run["created_at"], season=season,
-                            forecast_sha256=run["forecast_sha256"], prediction=prediction))
-            except (ValueError, KeyError, TypeError, AttributeError) as exc:
-                errors.append(dict(run_id=run["run_id"], reason=str(exc)))
+    if direct:
+        runs = direct_rows(db, "prospective")
+    else:
+        with closing(open_cache(db)) as cache:
+            runs = cache.rows("prospective")
+    for run in runs:
+        if run["mode"] != "live" or run["scope"] != "league":
+            continue
+        counts["live_runs"] += 1
+        ops = run["value"]
+        if ops["time_error"] is not None:
+            errors.append(dict(run_id=run["run_id"], reason=ops["time_error"]))
+            continue
+        created = parse_time(run["created_at"])
+        if created > cutoff:
+            excluded["future_run"] += 1
+            continue
+        if ops["pre_error"] is not None:
+            errors.append(dict(run_id=run["run_id"], reason=ops["pre_error"]))
+            continue
+        if interval_family is None:
+            if "error" in ops["model_key"]:
+                errors.append(dict(run_id=run["run_id"], reason=ops["model_key"]["error"]))
+                continue
+            if ops["model_key"]["value"] != model_key:
+                excluded["model_mismatch_run"] += 1
+                continue
+        counts["model_runs"] += 1
+        post = ops["post"]
+        if post["off_slate"]:
+            excluded["off_slate"] += post["off_slate"]
+        if post["not_pregame"]:
+            excluded["not_pregame"] += post["not_pregame"]
+        if post["error"] is not None:
+            errors.append(dict(run_id=run["run_id"], reason=post["error"]))
+            continue
+        rank = (created, run["insertion_order"])
+        for gid, pid, prediction in post["entries"]:
+            key = (gid, pid)
+            if key not in selected or rank > selected[key][0]:
+                # Do not filter status or numeric support until latest
+                # identity is chosen, independently of every outcome.
+                selected[key] = (rank, dict(run_id=run["run_id"], model_key=post["run_key"],
+                    forecast_created_at=run["created_at"], season=post["season"],
+                    forecast_sha256=post["forecast_sha256"], prediction=prediction))
     counts["selected_predictions"] = len(selected)
     return {key: entry[1] for key, entry in selected.items()}
 
 
-def collect_samples(directory, model_key, as_of, interval_family=None):
+def collect_samples(directory, model_key, as_of, interval_family=None, *, direct=False):
     """Return prospective samples, exclusion audit and saved-interval scores.
 
     With ``interval_family`` the samples pool across model keys sharing that
@@ -155,7 +219,7 @@ def collect_samples(directory, model_key, as_of, interval_family=None):
         result.update(counts=dict(counts), exclusions=dict(excluded))
         return result
     try:
-        selected = _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family)
+        selected = _selected_forecasts(db, model_key, cutoff, counts, excluded, errors, interval_family, direct)
     except sqlite3.Error as exc:
         errors.append(dict(path=str(db), reason=str(exc)))
         result.update(counts=dict(counts), exclusions=dict(excluded))
@@ -254,7 +318,7 @@ def collect_samples(directory, model_key, as_of, interval_family=None):
     return result
 
 
-def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_games=20, interval_family=None):
+def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_games=20, interval_family=None, *, direct=False):
     """Fit a candidate artifact; frozen saved-interval assessment stays separate.
 
     Player observations within a game are dependent. The minimum game count is
@@ -263,7 +327,7 @@ def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_ga
     """
     if isinstance(minimum_games, bool) or not isinstance(minimum_games, int) or minimum_games < 1:
         raise ValueError("minimum_games must be a positive integer")
-    collection = collect_samples(directory, model_key, as_of, interval_family)
+    collection = collect_samples(directory, model_key, as_of, interval_family, direct=direct)
     artifact = fit_calibration(collection["samples"], model_key=model_key, as_of=as_of,
                                minimum_samples=minimum_samples, interval_family=interval_family)
     artifact.update(game_count=collection["counts"]["games"], minimum_games=minimum_games,
@@ -275,3 +339,19 @@ def fit_prospective(directory, model_key, as_of, minimum_samples=200, minimum_ga
     if artifact["game_count"] < minimum_games:
         artifact.update(status="not_ready", reason="insufficient_games", quantile=None)
     return artifact
+
+
+def verify_prospective_sources(directory, artifact, as_of):
+    """Fit ``artifact`` again from the ledger and final bytes read and verified on this call, never the derived sidecar.
+
+    An activation installs only a fit this reproduces exactly; it differs only when
+    the sidecar's facts no longer describe the ledger's bytes.
+    """
+    try:
+        again = fit_prospective(directory, artifact["model_key"], as_of, minimum_samples=artifact["minimum_samples"],
+                                minimum_games=artifact["minimum_games"], interval_family=artifact.get("interval_family"),
+                                direct=True)
+    except (KeyError, TypeError, ValueError):
+        return False
+    encode = lambda value: json.dumps(value, sort_keys=True, default=str)
+    return encode(again) == encode(artifact)

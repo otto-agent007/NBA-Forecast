@@ -13,12 +13,12 @@ import time
 from zoneinfo import ZoneInfo
 
 from .data import fetch_roster,fetch_json,boxscore_url,normalize_boxscore
-from .schedule import fetch_schedule,fetch_verified_secondary_schedule,due_jobs,game_context,atomic_json,canonical
+from .schedule import fetch_schedule,fetch_verified_secondary_schedule,due_jobs,game_context,atomic_json,canonical,saved_calendar
 from .injuries import fetch_injury_check
 from .injury_parser import pdf_text,parse_report,apply_report,PARSER_VERSION
 from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
-from .store import save_run,evaluate_run,performance_report
+from .store import save_run,evaluate_run,performance_report,_is_legacy,stored_forecast
 from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check,reported_unavailable
 from .preflight import run_preflight,PREFLIGHT_VERSION
@@ -31,6 +31,7 @@ from .intervals import INTERVAL_FAMILY
 from .market_lines import capture_game_lines,market_report,saved_capture_evidence
 from .kalshi_lines import capture_kalshi_lines
 from .reference import archive_daily_references
+from .capture import tick_fallback
 
 
 def _now():
@@ -48,20 +49,30 @@ CALENDAR_RETRY_SECONDS=(300,3*3600)
 # never rebuilds them: a rebuild takes minutes, and the tick's checkpoint
 # forecasts and line captures run to the minute.
 DERIVED_REFRESH_SECONDS=6*3600
+# New forecast runs alone rebuild them at most this often. A pregame run changes no
+# scored figure; rebuilding on every run kept the service busy from the 9 AM
+# forecasts to the last final (180 full rebuilds in 58.6 hours, 2026-11-07 to 11-09).
+DERIVED_RUNS_REFRESH_SECONDS=1800
 # A saved roster this recent serves preliminary forecasts; the T-30 final checkpoint
 # refreshes one older than fifteen minutes. Membership changes are an evidence change.
 ROSTER_REUSE_SECONDS=3*3600
 ROSTER_FINAL_REUSE_SECONDS=900
 # A job that failed is retried after this long (near tipoff, sooner).
 JOB_RETRY_SECONDS=(900,300)
-# The market captures are optional downloads; they run after the pregame forecasts
-# and share one time budget, cut further when the tick is already old, so a slow
+# The market captures are the capture service's (``capture.py``); when it is not running
+# the tick captures after the pregame forecasts within this budget, cut further when the
+# tick is already old, so a slow
 # network (each request waiting out its timeout) cannot starve a checkpoint or push
 # the tick into systemd's ten-minute kill. On 2026-11-06 the captures took 135-475 s
 # a tick for two hours of failing name resolution and the 9 AM forecasts came 82
 # minutes late.
 CAPTURE_BUDGET_SECONDS=120
 TICK_SOFT_LIMIT_SECONDS=420
+# The evaluation memory outlives a deploy: its entries are scored again under the new
+# code a few at a time, for at most this long a tick, instead of all in the first
+# tick. On 2026-11-09 the memory was discarded with the code and the first tick after
+# the deploy re-scored 3800 runs in 379 s, writing nothing, while games tipped.
+EVALUATION_RECHECK_SECONDS=20
 # The tick's record of a player sync keeps its counts; these per-player blocks are
 # the sync's own players/index.json and made each ticks.jsonl row about 400 KB.
 PLAYER_SYNC_DETAIL_KEYS=('rotation_roles','player_summaries','shot_queue')
@@ -110,13 +121,24 @@ def _game_archives(raw):
     return names
 
 
+def _runs_table(conn):
+    """Where to list runs without opening their JSON: ``run_records``, or a ledger from before history deduplication's ``runs`` table.
+
+    The ``runs`` view joins each run to its history on ``history_sha256``, which is
+    stored after ``snapshot_json``: reading through it walks every run's whole
+    snapshot (about 0.9 MB of overflow pages each). The table holds the same rows
+    under the same rowids. The layout test is the store's own (``store._is_legacy``).
+    """
+    return 'runs' if _is_legacy(conn) else 'run_records'
+
+
 def _ledger_state(db):
     """Append-only tables: row counts and newest rowids identify their contents."""
     if not Path(db).exists():
         return None
     with closing(sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)) as conn:
         return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table}').fetchone())
-                for table in ('runs','evaluations')]
+                for table in (_runs_table(conn),'evaluations')]
 
 
 def _roster(folder,season,raw,jobs,report):
@@ -143,19 +165,259 @@ def _roster(folder,season,raw,jobs,report):
     return roster
 
 
-def _evidence_key(check,espn_injuries,roster,stage):
-    """What a forecast would be built from; a new forecast is made only when this changes.
+def _retry_slot(stage,reason):
+    """A time slot standing in for evidence that cannot be read: the attempt repeats every
+    JOB_RETRY_SECONDS (fifteen minutes, five near tipoff) instead of never."""
+    seconds=JOB_RETRY_SECONDS[1] if stage=='final' else JOB_RETRY_SECONDS[0]
+    return [reason,int(parse_time(_now()).timestamp())//seconds]
 
-    Without a usable injury check the key falls back to a time slot, so the
-    attempt is repeated periodically instead of never.
+
+def _evidence_key(check,espn_injuries,roster,stage,game,report,inputs):
+    """What this game's forecast would be built from; a new forecast is made only when this changes.
+
+    ``report`` is this game's part of the report edition the forecast applies
+    (``_report_state``), ``espn_injuries`` the digest of ESPN's injury list for the
+    game at the last capture, the roster part is the two teams' members and
+    statuses, and ``inputs`` the league-wide preparation inputs (``_league_inputs``),
+    the game's own (``_game_inputs``) and what its review and roster review decide
+    (``_review_state``, ``_roster_review_state``). A new edition that leaves this
+    game's lines alone, a roster move elsewhere and an upcoming game's line
+    capture are not this game's evidence. Without a usable injury check the key
+    falls back to a time slot, so the attempt is repeated periodically instead of never.
     """
     if isinstance(check,Exception) or check is None:
-        seconds=JOB_RETRY_SECONDS[1] if stage=='final' else JOB_RETRY_SECONDS[0]
-        reports=['unavailable',int(parse_time(_now()).timestamp())//seconds]
+        reports=_retry_slot(stage,'unavailable')
     else:
-        reports=[[name,(item.get(name) or {}).get('sha256')] for item in check['games'] for name in ('anchor_report','latest_report')]
-    members=sorted((p['player_id'],p['team_id'],p.get('status','unknown')) for p in roster['players']) if roster else None
-    return hashlib.sha256(canonical(dict(reports=reports,espn_injuries=espn_injuries,roster=members))).hexdigest()
+        reports=report
+    teams={game['home_team_id'],game['away_team_id']}
+    members=sorted((p['player_id'],p['team_id'],p.get('status','unknown')) for p in roster['players'] if p['team_id'] in teams) if roster else None
+    return hashlib.sha256(canonical(dict(reports=reports,espn_injuries=espn_injuries,roster=members,league=inputs))).hexdigest()
+
+
+# What a parsed report row says about its edition rather than the player: an edition
+# repeating a player's line changes these, not the forecast (``source_line`` also
+# carries the page's column layout, which other teams' lines shift).
+_EDITION_FIELDS=frozenset(('published_at','retrieved_at','sha256','source_url','source_line','source_name'))
+
+
+def _edition(raw,check,game,schedule,roster,parsed):
+    """``(evidence, extraction)`` of the edition ``_forecast_job`` applies to this game: its latest
+    report, else its anchor, parsed as the forecast parses it. ``extraction`` is None without a
+    roster or when the edition cannot be parsed; ``parsed`` caches parses by digest for the tick."""
+    item=next((g for g in check.get('games',[]) if g.get('game_id')==game['game_id']),None) or {}
+    evidence=item.get('latest_report') or item.get('anchor_report')
+    sha=(evidence or {}).get('sha256')
+    if not evidence or roster is None or not isinstance(sha,str):
+        return evidence,None
+    if sha not in parsed:
+        try:
+            parsed[sha]=parse_report(pdf_text(raw/(sha+'.pdf'),sha),schedule,roster,evidence)
+        except (ValueError,OSError,KeyError,TypeError,AttributeError):
+            parsed[sha]=None
+    return evidence,parsed[sha]
+
+
+def _review_state(review,check,game,schedule,roster,raw,parsed,now):
+    """Which review entries the forecast applies and which a newer report supersedes.
+
+    ``apply_review(..., skip_superseded=True)`` skips an entry published before
+    the player's status in the applied edition, and that status carries the
+    edition's publication time (listed or "not listed" on a complete report),
+    which ``_report_state`` leaves out. This applies the same edition to a copy
+    of the two teams as ``_forecast_job`` does and makes the same comparison, so
+    an edition that supersedes an entry, or stops superseding it, changes the key.
+    """
+    if not isinstance(review,dict) or not isinstance(review.get('availability'),list):
+        return review is not None
+    snapshot=dict(as_of=now.isoformat(),games=[game],roster=roster)
+    if not isinstance(check,Exception) and check is not None and roster is not None:
+        _,extraction=_edition(raw,check,game,schedule,roster,parsed)
+        if extraction is not None:
+            try:
+                snapshot=apply_report(snapshot,extraction,allow_not_listed=True)
+            except (ValueError,KeyError,TypeError):
+                pass  # Stale or future-known: the forecast applies no edition either.
+    players={p['player_id']:p for p in (snapshot['roster'] or {}).get('players',[])}
+    state=[]
+    for update in review['availability']:
+        try:
+            p=players.get(update['player_id'])
+            published=parse_time(update.get('status_published_at',update['status_observed_at']))
+            superseded=bool(p and p.get('status_observed_at')) and published<parse_time(p.get('status_published_at',p['status_observed_at']))
+            state.append([update['player_id'],superseded])
+        except (KeyError,TypeError,ValueError,AttributeError):
+            state.append(None)  # apply_review refuses it; the review digest keys the job.
+    return state
+
+
+def _roster_review_state(folder,game,season,roster,now):
+    """What ``roster_review.resolution`` decides for each team of a game with a roster review.
+
+    A review quarantines its players only while it is in force (observed within
+    six hours, not expired) and while ESPN's and the official NBA rosters still
+    show the reviewed difference; the preflight reads both rosters live. For a
+    team whose review is in force at ``now`` this reads them through the same
+    reference cache (``reference.espn_roster``, ``official_roster``; ESPN's
+    scoreboard for its team IDs), so the preflight of a forecast made in this tick
+    finds the same copies. A source that fails here resolves as it does there: no
+    quarantine. The projected-starter condition is left out (``profiles=None``);
+    starters follow from inputs the key already holds.
+    """
+    path=Path(folder)/'roster-reviews'/(game['game_id']+'.json')
+    if not path.exists():
+        return None
+    from .roster_review import active_review,resolution
+    reviews=json.loads(path.read_text())
+    snapshot=dict(as_of=now.isoformat(),season=season,roster=roster or dict(players=[]),roster_reviews=reviews)
+    teams=[t for t in (game['home_team_id'],game['away_team_id']) if active_review(snapshot,game,t)]
+    if not teams:
+        return dict.fromkeys((game['home_team_id'],game['away_team_id']))
+    reference=_roster_references(folder,game,season,teams,reviews)
+    state={}
+    for team in (game['home_team_id'],game['away_team_id']):
+        item=resolution(snapshot,None,reference,game,team) if team in teams else None
+        state[team]=sorted(item['quarantine_player_ids']) if item else None
+    return state
+
+
+def _roster_references(folder,game,season,teams,reviews):
+    """ESPN's and the official roster of these teams, as ``collect_references`` gathers them; reads the cache when fresh."""
+    from .reference import BASE,board_events,fetch_reference,espn_roster,official_roster
+    directory=Path(folder)/'references'
+    reference=dict(rosters={},official_rosters={})
+    try:
+        date=parse_time(game['start_time']).astimezone(ZoneInfo('America/New_York')).strftime('%Y%m%d')
+        board,_=fetch_reference(BASE+'scoreboard?dates='+date,directory)
+        candidates=[sides for sides,event in board_events(board) if (event['home'],event['away'])==(game.get('home_tricode'),game.get('away_tricode'))]
+    except (ValueError,OSError,KeyError,TypeError):
+        return reference
+    if len(candidates)!=1:
+        return reference
+    for side,team in candidates[0].items():
+        tid=game[side+'_team_id']
+        if tid not in teams:
+            continue
+        try:
+            reference['rosters'][tid],_=espn_roster(team,season,directory)
+            if any(r.get('team_id')==tid and r.get('game_id')==game['game_id'] for r in reviews):
+                reference['official_rosters'][tid]=official_roster(tid,season,directory)
+        except (ValueError,OSError,KeyError,TypeError):
+            continue
+    return reference
+
+
+def _report_state(raw,check,game,schedule,roster,parsed,now):
+    """This game's part of the report edition its forecast applies, as ``_forecast_job`` applies it.
+
+    The forecast applies the game's latest report, else its anchor, to the two
+    teams (``apply_report``): the game's rows (status and reported status), the
+    teams' coverage on the game's Eastern date, the extraction's completeness flags
+    and the issues the availability supplements consult
+    (``availability.needs_empty_report``), and whether the edition is applied at
+    all (its chronology and the 24-hour staleness rule). An edition that cannot be
+    parsed is keyed by its digest, as every edition was before. ``parsed`` caches
+    each edition's parse by digest for the tick.
+    """
+    evidence,extraction=_edition(raw,check,game,schedule,roster,parsed)
+    if not evidence:
+        return dict(edition=None)
+    if extraction is None:
+        return dict(edition=evidence.get('sha256'))
+    try:
+        published,retrieved=parse_time(evidence['published_at']),parse_time(evidence['retrieved_at'])
+        applied=published<=retrieved<=now and now-published<=timedelta(hours=24)
+    except (KeyError,TypeError,ValueError):
+        applied=False
+    teams={game['home_team_id'],game['away_team_id']}
+    day=parse_time(game['start_time']).astimezone(ZoneInfo('America/New_York')).date().isoformat()
+    matchup=str(game.get('away_tricode'))+'@'+str(game.get('home_tricode'))
+    coverage=extraction.get('team_coverage',[])+extraction.get('complete_teams',[])
+    ours=lambda name:sorted((c for c in extraction.get(name,[]) if c.get('date')==day and c.get('team_id') in teams),key=canonical)
+    return dict(applied=applied,
+        rows=sorted(({k:v for k,v in r.items() if k not in _EDITION_FIELDS} for r in extraction.get('rows',[]) if r.get('game_id')==game['game_id']),key=canonical),
+        team_coverage=ours('team_coverage'),complete_teams=ours('complete_teams'),covers_day=any(c.get('date')==day for c in coverage),
+        pages_complete=extraction.get('pages_complete'),heading_matches=extraction.get('heading_matches'),
+        issues=sorted((i for i in extraction.get('issues',[]) if i.get('team_id') in (None,*teams) and i.get('date',day)==day
+                       and i.get('matchup',matchup)==matchup and i.get('game_id',game['game_id'])==game['game_id']),key=canonical))
+
+
+def _stamps(paths):
+    """Name, size and modification time of each file: a rewrite is a change, an unchanged file is not read."""
+    out=[]
+    for path in paths:
+        try:
+            info=path.stat()
+            out.append((path.name,info.st_size,info.st_mtime_ns))
+        except OSError:
+            out.append((path.name,None,None))
+    return sorted(out)
+
+
+def _league_inputs(folder,history,active_model,now):
+    """Fingerprint of the league-wide sources every game's preparation reads as of ``now``; once per tick.
+
+    The merged history (captured finals, their enrichment and official revisions:
+    profiles, rotation and every replay), the contemporary environment finals
+    (``enhancements.prepare``), the saved lines of each already-tipped game the
+    margin inputs price (``market_lines.closing_margins``, recovered closes
+    included), the collected shot files (shot profiles and shot quality; a pending
+    one, which both skip, is left out) and the archived NBA box-score pages
+    (injury role context). The saved lines of games not yet tipped are not read
+    by the preparation, so a capture before tipoff changes nothing here. On
+    2026-10-30's slate (old production copy) this took 0.7 s a tick.
+    """
+    from .enhancements import _contemporary_games
+    from .role_context import _URL as BOX_SCORE_PAGE
+    folder=Path(folder)
+    cutoff=parse_time(now)
+    out=dict(history=hashlib.sha256(canonical(history)).hexdigest())
+    try:
+        contemporary,sources=_contemporary_games(folder,now)
+    except (ValueError,OSError,KeyError,TypeError) as exc:
+        contemporary,sources=[],[f'unreadable: {type(exc).__name__}: {exc}']
+    out['environment']=sources
+    starts={}
+    for record in list((active_model or {}).get('team_games') or [])+contemporary:
+        if isinstance(record,dict) and record.get('game_id'):
+            starts[record['game_id']]=record.get('game_time')
+    priced=[]
+    for gid,start in starts.items():
+        try:
+            if start and parse_time(start)<cutoff:
+                priced.append(folder/'market'/'game-lines'/(gid+'.jsonl'))
+        except (TypeError,ValueError):
+            continue
+    out['closes']=_stamps(p for p in priced if p.exists())
+    shots=[]
+    for path in sorted((folder/'shots').glob('*.json')):
+        try:
+            raw=path.read_bytes()
+            if json.loads(raw).get('missing_reason'):
+                continue  # Pending (a retry rewrites it): neither shot profiles nor shot quality read it.
+            shots.append((path.name,hashlib.sha256(raw).hexdigest()))
+        except (ValueError,OSError,AttributeError):
+            shots.append((path.name,None))
+    out['shots']=shots
+    pages=[]
+    for path in (folder/'raw').glob('*.provenance.json'):
+        try:
+            if BOX_SCORE_PAGE.fullmatch(json.loads(path.read_bytes()).get('source_url','')):
+                pages.append(path.name)
+        except (ValueError,OSError,AttributeError,TypeError):
+            pages.append(path.name)  # Unreadable: count it, conservatively.
+    out['box_score_pages']=sorted(pages)
+    return hashlib.sha256(canonical(out)).hexdigest()
+
+
+def _game_inputs(folder,schedule,game,team_games):
+    """The per-game preparation inputs outside the report and roster: the schedule entry and its
+    rest and travel context, and the T-30 checkpoints of the two teams' earlier games, which
+    ``reported_unavailable`` reads for the participation window."""
+    teams=(game['home_team_id'],game['away_team_id'])
+    earlier=sorted({gid for team in teams for gid in team_games.get(team,())})
+    return dict(game={k:v for k,v in game.items() if k!='schedule_corroboration'},
+                context=game_context(schedule,game['game_id']),
+                checkpoints=[[gid,*_stamps([folder/'injuries/games'/gid/'final.json'])[0][1:]] for gid in earlier])
 
 
 def _calendar_due(state,now):
@@ -231,21 +493,6 @@ def _calendar(folder,season,report):
     return schedule
 
 
-def saved_calendar(folder):
-    """The calendar the ticks are using, from disk alone: the day's ESPN-verified copy while it is in use, else the saved NBA calendar.
-
-    Returns ``(schedule, source)``; the schedule is None until the first tick saves one.
-    """
-    saved=_read(folder/'schedule/latest.json',None)
-    if saved is None:
-        return None,None
-    state=_read(folder/'schedule/fetch-state.json',{})
-    verified=_read(folder/'schedule/secondary/verified-latest.json',None)
-    if state.get('source')=='espn' and verified and verified.get('crosscheck',{}).get('nba_base_version')==saved.get('version'):
-        return verified,'espn_verified_cached_nba'
-    return saved,'saved_nba'
-
-
 def ledger_runs(db):
     """Yield bounded batches of run metadata, releasing readers before writes.
 
@@ -272,11 +519,11 @@ def ledger_runs(db):
 
 
 def _run_ids(db):
-    """(run_id, mode) in insertion order, without opening any JSON."""
+    """(run_id, mode) in insertion order, without opening any JSON (``_runs_table``)."""
     if not Path(db).exists():
         return []
     with closing(sqlite3.connect(db)) as conn:
-        return conn.execute('SELECT run_id,mode FROM runs ORDER BY rowid').fetchall()
+        return conn.execute(f'SELECT run_id,mode FROM {_runs_table(conn)} ORDER BY rowid').fetchall()
 
 
 def _run_row(db,run_id,columns):
@@ -331,7 +578,9 @@ def apply_review(snapshot,review,*,skip_superseded=False):
     return out
 
 
-def run_tick(directory,history):
+def run_tick(directory,history,history_key=None):
+    """One tick. ``history_key`` names the input history's content (``tick_memo.history_key`` of its files);
+    without it the rows are digested."""
     folder=Path(directory)
     folder.mkdir(parents=True,exist_ok=True)
     lock=folder/'tick.lock'
@@ -344,7 +593,7 @@ def run_tick(directory,history):
         raise ValueError('tick already running') from exc
     report=dict(started_at=_now(),status='running',created_runs=0,recovered_runs=0,evaluated_runs=0,errors=[],warnings=[],missed_final_games=[],waiting_jobs=[])
     try:
-        _tick(folder,history,report)
+        _tick(folder,history,report,history_key)
         report['status']='partial' if report['errors'] or report['missed_final_games'] else 'complete'
     except Exception as exc:
         report['errors'].append(dict(task='tick',error=f'{type(exc).__name__}: {exc}'))
@@ -373,8 +622,12 @@ def _phases(report):
     return mark
 
 
-def _tick(folder,history,report):
-    validate_history(history)
+def _tick(folder,history,report,history_key=None):
+    from .tick_memo import HistoryMemo
+    # The input history, the captured finals and their enrichment are prepared once per
+    # input state (``tick_memo``), not every minute, and shared with the player sync.
+    memo=HistoryMemo(folder,history,history_key)
+    memo.validate_input()
     phase=_phases(report)
     tick_started=time.monotonic()
     # Daily evidence must still be collected when the calendar endpoint fails.
@@ -402,12 +655,13 @@ def _tick(folder,history,report):
     phase('recover_runs')
     # Enrichment only fills optional fields (rebounds, assists, steals, blocks, starter)
     # into captured finals; a failure is reported and the tick goes on to forecast.
-    try:
-        from .player_sync import enrich_final_cache
-        report['warnings'].extend(dict(task='enrich_finals',**e) for e in enrich_final_cache(folder,skipped=[]))
-    except Exception as exc:
-        report['errors'].append(dict(task='enrich_finals',error=f'{type(exc).__name__}: {exc}'))
-    history=_merge_finals(history,cache,errors=report['errors'])
+    history,skipped,merge_errors,_,failure=memo.merged()
+    if failure is None:
+        report['warnings'].extend(dict(task='enrich_finals',**e) for e in skipped)
+    else:
+        report['errors'].append(dict(task='enrich_finals',error=f'{type(failure).__name__}: {failure}'))
+    report['errors'].extend(merge_errors)
+    report['warnings'].extend(memo.warnings())
     prior_path=folder/'historical-priors.json'
     if prior_path.exists():
         book=json.loads(prior_path.read_text())
@@ -427,8 +681,8 @@ def _tick(folder,history,report):
         error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
     active_model,model_digest=load_active(folder,_now())
     # The ESPN game summary's injury lists are forecast evidence. The digests the last
-    # capture saved key the jobs; the capture itself runs after the forecasts, so a
-    # change ESPN makes rebuilds the forecast one tick later.
+    # capture saved key the jobs: the capture service's run at :45, about 15 s before
+    # this tick, or this tick's own fallback capture after its forecasts, a tick later.
     capture=dict(evidence=saved_capture_evidence(folder,upcoming))
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.
@@ -440,7 +694,7 @@ def _tick(folder,history,report):
             checks[job['game_id']]=fetch_injury_check(dict(season=season,games=[by_id[job['game_id']]],as_of=_now(),forecast_stage=job['stage']),raw,capture_cache=capture_cache)
         except (ValueError,OSError) as exc:
             checks[job['game_id']]=exc
-    reviews=_job_keys(folder,jobs,checks,capture,roster,active_model,model_digest)
+    reviews=_job_keys(folder,jobs,checks,capture,roster,active_model,model_digest,schedule=schedule,history=history,errors=report['errors'])
     phase('evidence_checks')
     # A job that failed is retried after a pause instead of every minute.
     failed=state.setdefault('failed_jobs',{})
@@ -453,6 +707,13 @@ def _tick(folder,history,report):
     report['deferred_jobs']=[dict(game_id=j['game_id'],stage=j['stage'],failed_at=failed[j['key']]['at'])
                              for j in jobs if j['key'] not in state['jobs'] and deferred(j)]
     needed=[j for j in jobs if j['key'] not in state['jobs'] and not deferred(j)]
+    # A checked edition that changed nothing for a game makes no run; its check is still archived.
+    for job in jobs:
+        if job['key'] in state['jobs']:
+            try:
+                _record_unchanged_check(folder,checks.get(job['game_id']),job['game_id'],job['stage'])
+            except Exception as exc:  # One game's archive problem costs that game's record only.
+                report['errors'].append(dict(task='record_check',game_id=job['game_id'],stage=job['stage'],error=f'{type(exc).__name__}: {exc}'))
     tick=SimpleNamespace(schedule=schedule,by_id=by_id,roster=roster,raw=raw,db=db,state=state,statepath=statepath,report=report,
                          failed=failed,checks=checks,reviews=reviews,history=history,parsed_reports={},active_model=active_model,
                          model_digest=model_digest)
@@ -464,17 +725,19 @@ def _tick(folder,history,report):
             failed[job['key']]=dict(at=_now(),reason=type(exc).__name__)
     atomic_json(statepath,state)
     phase('forecasts')
-    # Market lines for upcoming games, at the forecast cadence, after the pregame
-    # deadlines and within the capture budget; never a reason to fail the tick.
-    deadline=time.monotonic()+max(0.,min(CAPTURE_BUDGET_SECONDS,TICK_SOFT_LIMIT_SECONDS-(time.monotonic()-tick_started)))
-    try:
-        report['market_lines']=capture_game_lines(folder,upcoming,season,_now(),deadline=deadline)
-    except Exception as exc:
-        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
-    try:
-        report['kalshi_lines']=capture_kalshi_lines(folder,upcoming,_now(),deadline=deadline)
-    except Exception as exc:
-        report['warnings'].append(dict(task='kalshi_lines',error=f'{type(exc).__name__}: {exc}'))
+    # Market lines are the capture service's job (nba-capture, ``capture.py``). The tick
+    # captures them itself, after the pregame deadlines and within the capture budget
+    # (half each, so a slow ESPN cannot starve Kalshi), only when that service has not
+    # finished a run recently; never a reason to fail the tick.
+    seconds=max(0.,min(CAPTURE_BUDGET_SECONDS,TICK_SOFT_LIMIT_SECONDS-(time.monotonic()-tick_started)))
+    report['market_capture'],results=tick_fallback(folder,dict(
+        market_lines=lambda deadline:capture_game_lines(folder,upcoming,season,_now(),deadline=deadline),
+        kalshi_lines=lambda deadline:capture_kalshi_lines(folder,upcoming,_now(),deadline=deadline)),seconds,_now())
+    for name,(value,exc) in results.items():
+        if exc is None:
+            report[name]=value
+        else:
+            report['warnings'].append(dict(task=name,error=f'{type(exc).__name__}: {exc}'))
     phase('market_lines')
     # Prioritize pregame deadlines over downloads and postgame reporting.
     if active_model:
@@ -495,11 +758,12 @@ def _tick(folder,history,report):
     if (folder/'roster.json').exists():
         try:
             from .player_sync import sync_player_data
-            synced=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
+            synced=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule,memo=memo)
             report['player_sync']=player_sync_summary(synced)
             report['warnings'].extend(dict(task='shot_data',**e) for e in synced['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+        report['warnings'].extend(memo.warnings())
     phase('player_sync')
     # LiveData play-by-play for the postgame recaps and the daily review's exit and blowout labels.
     try:
@@ -510,7 +774,7 @@ def _tick(folder,history,report):
         report['errors'].append(dict(task='postgame_sources',error=f'{type(exc).__name__}: {exc}'))
     phase('postgame_sources')
     try:
-        _evaluate_runs(folder,db,report)
+        _evaluate_runs(folder,db,report,deadline=tick_started+TICK_SOFT_LIMIT_SECONDS)
     except Exception as exc:
         report['errors'].append(dict(task='evaluate_runs',error=f'{type(exc).__name__}: {exc}'))
     _missed_finals(state,schedule,report,folder)
@@ -610,6 +874,9 @@ def _game_identity(row):
     return (row['season'],parse_time(row['game_time']),tuple(sorted((row['team_id'],row['opponent_id']))))
 
 
+FINAL_IDENTITY_MISMATCH='Captured final and input history disagree on game identity; the captured final is used'
+
+
 def _merge_finals(history,cache,errors=None):
     """The input history plus every captured final, the newest known_at winning per player-game.
 
@@ -625,6 +892,11 @@ def _merge_finals(history,cache,errors=None):
     first={}
     for r in history:
         first.setdefault(r['game_id'],r)
+    # The players ``combined`` holds for each game, so a final replaces its game's rows
+    # without scanning every row of the history for every final.
+    players_by_game={}
+    for gid,pid in combined:
+        players_by_game.setdefault(gid,set()).add(pid)
     for p in sorted(cache.glob('*.json')):
         try:
             rows=json.loads(p.read_text())
@@ -640,42 +912,126 @@ def _merge_finals(history,cache,errors=None):
             mismatched={r['game_id'] for r in rows
                         if r['game_id'] in first and _game_identity(first[r['game_id']])!=_game_identity(r)}
             if mismatched:
-                errors.append(dict(task='finals_cache',game_id=p.stem,
-                    error='Captured final and input history disagree on game identity; the captured final is used'))
-        for key in [k for k in combined if (k[0]==p.stem and k[1] not in players) or k[0] in mismatched]:
+                errors.append(dict(task='finals_cache',game_id=p.stem,error=FINAL_IDENTITY_MISMATCH))
+        stem=p.stem
+        stale=[(gid,pid) for gid in {stem,*mismatched} for pid in players_by_game.get(gid,())
+               if gid in mismatched or pid not in players]
+        for key in stale:
             del combined[key]
+            players_by_game[key[0]].discard(key[1])
         for row in rows:
             key=(row['game_id'],row['player_id'])
             old=combined.get(key)
             if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):
                 combined[key]=row
+                players_by_game.setdefault(key[0],set()).add(key[1])
     history=list(combined.values())
     validate_history(history)
     return history
 
 
-def _job_keys(folder,jobs,checks,capture,roster,active_model,model_digest):
-    """Extend each job key with everything a forecast is built from; return the games' reviews."""
+def _check_identity(check,game_id,stage):
+    """A recorded check minus its retrieval times: the editions, phase and status the checkpoint saw."""
+    item=next((g for g in (check or {}).get('games',[]) if g.get('game_id')==game_id),None)
+    if item is None:
+        return None
+    return canonical(dict(stage=stage,**{k:v for k,v in item.items() if k not in ('anchor_report','latest_report')},
+        reports=[(item.get(name) or {}).get('sha256') for name in ('anchor_report','latest_report')]))
+
+
+def _record_unchanged_check(folder,check,game_id,stage):
+    """Archive a usable check whose game already has its forecast, once per edition and phase.
+
+    Before per-game keys every new edition made a run, and ``_forecast_job``
+    archived its check; an edition that changes nothing for this game makes no run
+    now, so the edition record (``record_check``) is written here instead.
+    """
+    if isinstance(check,Exception) or check is None:
+        return
+    try:
+        latest=_read(folder/'injuries/games'/game_id/'latest.json',None)
+    except (ValueError,OSError):
+        latest=None  # Unreadable: the record below replaces it.
+    current=_check_identity(check,game_id,stage)
+    if current is not None and (latest is None or _check_identity(latest,game_id,latest.get('forecast_stage'))!=current):
+        record_check(folder,check,stage)
+
+
+def _job_keys(folder,jobs,checks,capture,roster,active_model,model_digest,*,schedule,history,parsed=None,errors=None):
+    """Extend each job key with everything its game's forecast is built from; return the games' reviews.
+
+    ``history`` is the tick's merged history; ``parsed`` caches report parses by
+    digest for the tick (each edition is parsed once however many games read it).
+    A game whose key cannot be computed is reported in ``errors`` and keyed on a
+    retry slot (``_retry_slot``): it is forecast now and again each slot, as every
+    game was on each report edition before per-game keys, never skipped. An
+    unreadable review is held as its error, which fails that game's forecast
+    rather than letting it run without the review.
+    """
     reviews={}
+    errors=[] if errors is None else errors
+    parsed={} if parsed is None else parsed
+    now=parse_time(_now())
+    by_id={g['game_id']:g for g in schedule['games']}
+    league=team_games=None
+    if jobs:
+        try:
+            league=_league_inputs(folder,history,active_model,_now())
+            team_games={}
+            for row in history:
+                if row.get('season')==schedule.get('season'):
+                    team_games.setdefault(row['team_id'],set()).add(row['game_id'])
+        except Exception as exc:
+            league=None
+            errors.append(dict(task='evidence_key',error=f'League inputs: {type(exc).__name__}: {exc}',
+                               action='Every game is keyed on a retry slot this tick.'))
     for job in jobs:
+        gid=job['game_id']
         version=active_model['model_version'] if active_model else MODEL_VERSION
-        evidence=_evidence_key(checks.get(job['game_id']),(capture.get('evidence') or {}).get(job['game_id']),roster,job['stage'])
+        path=folder/'reviews'/(gid+'.json')
+        try:
+            if path.exists():
+                reviews[gid]=json.loads(path.read_text())
+        except (ValueError,OSError) as exc:
+            reviews[gid]=ValueError(f'Review input is unreadable: {type(exc).__name__}: {exc}')
+        try:
+            if league is None:
+                raise _Unkeyed()
+            game=by_id[gid]
+            check=checks.get(gid)
+            report=None if isinstance(check,Exception) or check is None else _report_state(folder/'raw',check,game,schedule,roster,parsed,now)
+            inputs=dict(league=league,game=_game_inputs(folder,schedule,game,team_games))
+            if gid in reviews:
+                inputs['review']=_review_state(reviews[gid],check,game,schedule,roster,folder/'raw',parsed,now)
+            roster_review=_roster_review_state(folder,game,schedule.get('season'),roster,now)
+            if roster_review is not None:
+                inputs['roster_review']=roster_review
+            evidence=_evidence_key(check,(capture.get('evidence') or {}).get(gid),roster,job['stage'],game,report,inputs)
+            files=''
+            prior_book=folder/'historical-priors.json'
+            if prior_book.exists():
+                files+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
+            roster_review=folder/'roster-reviews'/(gid+'.json')
+            if roster_review.exists():
+                files+=':roster-review:'+hashlib.sha256(roster_review.read_bytes()).hexdigest()
+            if gid in reviews and not isinstance(reviews[gid],Exception):
+                files+=':review:'+hashlib.sha256(canonical(reviews[gid])).hexdigest()
+        except Exception as exc:
+            if not isinstance(exc,_Unkeyed):
+                errors.append(dict(task='evidence_key',game_id=gid,stage=job['stage'],error=f'{type(exc).__name__}: {exc}',
+                                   action='Keyed on a retry slot: forecast now and again each slot.'))
+            evidence=hashlib.sha256(canonical(_retry_slot(job['stage'],'unkeyed'))).hexdigest()
+            files=''
         job['key']+=f':model:{version}:parser:{PARSER_VERSION}:validator:{PREFLIGHT_VERSION}:evidence:{evidence}'
         job['key']+=':boxscore:'+BOX_MODEL_VERSION
         if active_model:
             job['key']+=':configuration:'+active_model['model_key']+':artifact:'+model_digest
-        prior_book=folder/'historical-priors.json'
-        if prior_book.exists():
-            job['key']+=':history-prior:'+hashlib.sha256(prior_book.read_bytes()).hexdigest()
-        roster_review=folder/'roster-reviews'/(job['game_id']+'.json')
-        if roster_review.exists():
-            job['key']+=':roster-review:'+hashlib.sha256(roster_review.read_bytes()).hexdigest()
-        path=folder/'reviews'/(job['game_id']+'.json')
-        if path.exists():
-            review=json.loads(path.read_text())
-            reviews[job['game_id']]=review
-            job['key']+=':review:'+hashlib.sha256(canonical(review)).hexdigest()
+        job['key']+=files
     return reviews
+
+
+class _Unkeyed(Exception):
+    """The league inputs could not be read this tick (already reported once)."""
 
 
 def _forecast_job(folder,job,tick):
@@ -709,6 +1065,8 @@ def _forecast_job(folder,job,tick):
         raise ValueError('No roster observed within 48 hours; injury checkpoint retained, forecast withheld')
     snapshot['as_of']=_now()
     if job['game_id'] in reviews:
+        if isinstance(reviews[job['game_id']],Exception):
+            raise reviews[job['game_id']]
         snapshot=apply_review(snapshot,reviews[job['game_id']],skip_superseded=True)
         report['warnings'].extend(dict(task='review',**w) for w in snapshot.get('review_warnings',[]))
     usable=eligible_history(snapshot,history)
@@ -743,7 +1101,9 @@ def _forecast_job(folder,job,tick):
         return
     snapshot['preflight']=verification
     profiles=build_profiles(snapshot,usable)
-    prediction=forecast(snapshot,usable)
+    # The ledger and the run's forecast.json keep the game's players; the rest of the
+    # league roster (no_game rows) stays as counts in the forecast's coverage.
+    prediction=stored_forecast(snapshot,forecast(snapshot,usable))
     run_id=save_run(db,snapshot,usable,prediction)
     # The immutable operation_key in the run is authoritative if interrupted here.
     state['jobs'][job['key']]=run_id
@@ -845,15 +1205,35 @@ def _absent_from_final(rows,predictions):
     return absent
 
 
-def _evaluate_runs(folder,db,report):
+def _evaluate_runs(folder,db,report,*,recheck_seconds=EVALUATION_RECHECK_SECONDS,deadline=None):
     """Score live runs whose final files or evaluation revisions changed since they were last scored.
 
     Runs are immutable, so each run's game IDs are remembered; an unchanged run
     costs one file hash per game instead of decoding its forecast again.
+
+    The memory (``evaluation-state.json``) outlives a code change. New code can
+    change which final rows a run is scored against (``_absent_from_final``, the
+    validation in ``evaluate_run``), so an entry remembered under older code is
+    scored again under this code before it counts as unchanged; ``stale`` in
+    the file lists the entries still waiting for that. A stale run whose finals
+    or revisions changed is scored at once, like a new run. The others are
+    re-checked newest run first (the games being read and reviewed now), for
+    ``recheck_seconds`` a tick, so a deploy costs the next ticks seconds each
+    instead of costing the first one minutes. A re-check that finds the same
+    final rows writes nothing: ``evaluate_run`` appends a revision only when
+    they differ.
+
+    Past ``deadline`` (a ``time.monotonic()`` value, the tick's soft limit)
+    nothing more is scored; those runs wait for the next tick and the ones
+    already scored are remembered. ``report['evaluation_backlog']`` counts the
+    stale entries left, the ones re-checked now, how many of those gained a
+    revision, and the changed runs deferred by the deadline.
     """
     path=folder/'evaluation-state.json'
     saved=_read(path,{})
-    known=saved.get('runs',{}) if saved.get('code')==_code_digest() else {}
+    known=saved.get('runs',{})
+    # Entries this code has not scored yet: every one of them after a code change.
+    stale=set(known) if saved.get('code')!=_code_digest() else set(saved.get('stale',[]))&set(known)
     if not Path(db).exists():
         return
     with closing(sqlite3.connect(db)) as conn:
@@ -867,14 +1247,12 @@ def _evaluate_runs(folder,db,report):
         return finals[gid]
     def signature(games,revision):
         return hashlib.sha256(canonical(dict(finals=[[gid,final(gid)[0]] for gid in games],revision=revision))).hexdigest()
-    unchanged=0
-    for run_id,mode in _run_ids(db):
-        if mode!='live':
-            continue
-        entry=known.get(run_id)
-        if entry and entry['signature']==signature(entry['games'],latest.get(run_id)):
-            unchanged+=1
-            continue
+    def score(run_id):
+        """Score one run against its saved finals and remember it as scored by this code.
+
+        Returns None when the evaluation failed (reported; the run stays as it was and is
+        tried again next tick), else whether it had finals to score and whether that wrote a revision.
+        """
         run=_run_row(db,run_id,'snapshot_json,forecast_json')
         snapshot=json.loads(run['snapshot_json'])
         prediction=json.loads(run['forecast_json'])
@@ -891,25 +1269,67 @@ def _evaluate_runs(folder,db,report):
         if actuals:
             try:
                 revision=evaluate_run(db,run_id,actuals)['revision']
-                report['evaluated_runs']+=1
             except Exception as exc:
                 report['errors'].append(dict(task='evaluation',run_id=run_id,error=f'{type(exc).__name__}: {exc}'))
-                continue
+                return None
         known[run_id]=dict(games=games,signature=signature(games,revision))
+        stale.discard(run_id)
+        return dict(evaluated=bool(actuals),revised=revision!=latest.get(run_id))
+    def late():
+        return deadline is not None and time.monotonic()>=deadline
+    unchanged=deferred=0
+    waiting=[]
+    live=set()
+    for run_id,mode in _run_ids(db):
+        if mode!='live':
+            continue
+        live.add(run_id)
+        entry=known.get(run_id)
+        if entry and entry['signature']==signature(entry['games'],latest.get(run_id)):
+            if run_id in stale:
+                waiting.append(run_id)
+            else:
+                unchanged+=1
+            continue
+        if late():
+            deferred+=1
+            continue
+        result=score(run_id)
+        if result and result['evaluated']:
+            report['evaluated_runs']+=1
+    stale&=live  # an entry for a run this ledger does not hold has nothing to re-check
+    rechecked=revised=0
+    stop=time.monotonic()+recheck_seconds
+    for run_id in reversed(waiting):
+        if time.monotonic()>=stop or late():
+            break
+        result=score(run_id)
+        if result:
+            rechecked+=1
+            revised+=result['revised']
     report['unchanged_evaluation_runs']=unchanged
-    atomic_json(path,dict(code=_code_digest(),runs=known))
+    report['evaluation_backlog']=dict(stale=len(stale),rechecked=rechecked,revised=revised,deferred=deferred)
+    atomic_json(path,dict(code=_code_digest(),runs=known,stale=sorted(stale)))
 
 
 def _derived_signature(folder,db,schedule,active_model,model_digest):
-    """Fingerprint of everything the derived reports read, without reading their contents."""
+    """Fingerprint of everything the derived reports read, without reading their contents.
+
+    Returns ``(signature, runs)``: the forecast runs table's count and newest rowid
+    are kept apart from the rest (``_derived_due`` rebuilds for new runs alone at
+    most every DERIVED_RUNS_REFRESH_SECONDS); evaluations, finals, archives and
+    everything else are in ``signature``.
+    """
     # Per-observation corroboration metadata changes every cross-check; the games do not.
     games=[{k:v for k,v in g.items() if k!='schedule_corroboration'} for g in schedule['games']]
-    return hashlib.sha256(canonical(dict(code=_code_digest(),ledger=_ledger_state(db),
+    ledger=_ledger_state(db)
+    runs,evaluations=(ledger[0],ledger[1]) if ledger else (None,None)
+    return hashlib.sha256(canonical(dict(code=_code_digest(),evaluations=evaluations,
         pacific_date=parse_time(_now()).astimezone(PACIFIC).date().isoformat(),
         schedule=dict(season=schedule.get('season'),games=games),
         model=[active_model['model_key'],model_digest] if active_model else None,
         finals=_contents(folder/'finals'),game_archives=_game_archives(folder/'raw'),
-        roster=(folder/'roster.json').exists(),request=_read(folder/'derived-request.json',None)))).hexdigest()
+        roster=(folder/'roster.json').exists(),request=_read(folder/'derived-request.json',None)))).hexdigest(),runs
 
 
 def request_derived(folder,reason):
@@ -918,12 +1338,19 @@ def request_derived(folder,reason):
 
 
 def _derived_due(folder,db,schedule,active_model,model_digest):
-    """Whether the derived reports need rebuilding: an input changed, an output is missing, or they are DERIVED_REFRESH_SECONDS old.
+    """Whether the derived reports need rebuilding: an input changed, an output is missing, they are
+    DERIVED_REFRESH_SECONDS old, or new forecast runs arrived and they are DERIVED_RUNS_REFRESH_SECONDS old.
 
-    Returns ``(due, signature, saved)``, ``saved`` being the summary of the last rebuild.
+    A new pregame run changes no scored figure: the market report covers finished
+    games, and accuracy and calibration move only when a run is evaluated. It
+    reaches the reports that list unscored forecasts (performance's pending
+    groups, today's daily review, the calibration collection counts) within
+    DERIVED_RUNS_REFRESH_SECONDS, instead of setting off a full rebuild for each
+    run. Returns ``(due, signature, runs, saved)``, ``saved`` being the summary of
+    the last rebuild.
     """
     saved=_read(folder/'derived-reports.json',{})
-    signature=_derived_signature(folder,db,schedule,active_model,model_digest)
+    signature,runs=_derived_signature(folder,db,schedule,active_model,model_digest)
     outputs=[folder/'performance.json',folder/'benchmarks.json',folder/'daily-reviews/index.json',folder/'market/report.json']
     if active_model:
         outputs.append(folder/'model-status.json')
@@ -934,8 +1361,8 @@ def _derived_due(folder,db,schedule,active_model,model_digest):
     except (KeyError,TypeError,ValueError):
         age=None
     current=(saved.get('signature')==signature and age is not None and 0<=age<DERIVED_REFRESH_SECONDS
-             and all(p.exists() for p in outputs))
-    return not current,signature,saved
+             and (saved.get('runs')==runs or age<DERIVED_RUNS_REFRESH_SECONDS) and all(p.exists() for p in outputs))
+    return not current,signature,runs,saved
 
 
 def run_derived(directory):
@@ -984,7 +1411,7 @@ def _derived(folder,report):
     _recover_missed(folder,schedule,report)
     db=folder/'forecast.sqlite'
     active_model,model_digest=load_active(folder,_now())
-    due,signature,saved=_derived_due(folder,db,schedule,active_model,model_digest)
+    due,signature,runs,saved=_derived_due(folder,db,schedule,active_model,model_digest)
     if not due:
         report.update(status='unchanged',computed_at=saved['computed_at'])
         return
@@ -992,7 +1419,7 @@ def _derived(folder,report):
     report['final_sync']=_read(folder/'last-tick.json',{}).get('final_sync')
     _derived_reports(folder,db,schedule,active_model,model_digest,report)
     computed=_now()
-    atomic_json(folder/'derived-reports.json',dict(signature=signature,computed_at=computed,
+    atomic_json(folder/'derived-reports.json',dict(signature=signature,runs=runs,computed_at=computed,
         report={k:report[k] for k in ('prospective_calibration','prospective_margin_calibration','postgame','daily_review','market') if k in report},
         errors=list(report['errors']),warnings=list(report['warnings'])))
     report.update(status='rebuilt',computed_at=computed)
@@ -1057,21 +1484,27 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
     atomic_json(folder/'performance.json',performance)
     atomic_json(folder/'benchmarks.json',benchmark_report(db,performance))
     if active_model:
-        from .prospective_calibration import fit_prospective
+        from .prospective_calibration import fit_prospective, verify_prospective_sources
         from .prospective_margin_calibration import fit_prospective_margin, verify_margin_calibration_sources
         from .margins import CALIBRATION_FAMILY
         from .enhancements import install_artifact
-        assessed=fit_prospective(folder,active_model['model_key'],_now(),interval_family=INTERVAL_FAMILY)
+        assessed_at=_now()
+        assessed=fit_prospective(folder,active_model['model_key'],assessed_at,interval_family=INTERVAL_FAMILY)
         atomic_json(folder/'prospective-calibration-status.json',assessed)
         report['prospective_calibration']={k:assessed.get(k) for k in ('status','sample_count','game_count','minimum_games','reason')}
         report['errors'].extend(dict(task='prospective_calibration',detail=e) for e in assessed.get('collection_errors',[]))
         if assessed['status']=='ready' and assessed.get('residual_evidence_sha256')!=(active_model.get('calibration') or {}).get('residual_evidence_sha256'):
-            updated=deepcopy(active_model)
-            updated['calibration']=assessed
-            updated['known_at']=_now()
-            digest=install_artifact(folder,updated)
-            if _activate(folder,model_digest,digest,report):
-                active_model,model_digest=updated,digest
+            # The fit read the derived sidecar; an activation is fitted again from the ledger and final bytes.
+            if verify_prospective_sources(folder,assessed,assessed_at):
+                updated=deepcopy(active_model)
+                updated['calibration']=assessed
+                updated['known_at']=_now()
+                digest=install_artifact(folder,updated)
+                if _activate(folder,model_digest,digest,report):
+                    active_model,model_digest=updated,digest
+            else:
+                report['errors'].append(dict(task='prospective_calibration',
+                    detail='Ready calibration did not replay against the ledger and final bytes read directly'))
         margin_assessed=fit_prospective_margin(folder,CALIBRATION_FAMILY,_now())
         atomic_json(folder/'prospective-margin-calibration-status.json',margin_assessed)
         report['prospective_margin_calibration']={k:margin_assessed.get(k) for k in ('status','reason','sample_count','training_games','validation_games')}
@@ -1113,3 +1546,10 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
         report['market']=market['summary']
     except Exception as exc:
         report['errors'].append(dict(task='market_report',error=f'{type(exc).__name__}: {exc}'))
+    try:
+        from .kalshi_props import props_report
+        props=props_report(folder,schedule,_now())
+        atomic_json(folder/'market/props-report.json',props)
+        report['props']={k:props['summary'].get(k) for k in ('status','games','rungs','median_players')}
+    except Exception as exc:
+        report['errors'].append(dict(task='props_report',error=f'{type(exc).__name__}: {exc}'))

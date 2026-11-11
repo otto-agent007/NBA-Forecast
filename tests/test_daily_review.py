@@ -73,6 +73,15 @@ class DailyReviewTests(NightFixture):
         self.assertEqual(stage['margin_evaluation']['status'],'pending')
         self.assertEqual(len(stage['players']),2)
 
+    def test_selection_carries_the_margin_parameter_set_the_run_saved(self):
+        from nba_forecast.daily_review import _selected
+        games={'G1':self.g}
+        self.assertIsNone(_selected(self.folder,games,ASOF,'2026-27')[('G1','final')]['margin_parameters'])
+        self.s['model_enhancements']=dict(margin_inputs=dict(parameters=dict(rating_weight=.65)))
+        self.save('with-parameters',created='2026-10-22T13:00:00Z')
+        chosen=_selected(self.folder,games,ASOF,'2026-27')[('G1','final')]
+        self.assertEqual((chosen['run_id'],chosen['margin_parameters']),('with-parameters',dict(rating_weight=.65)))
+
     def test_latest_stage_selection_excludes_replays_and_post_tipoff(self):
         self.save('prelim',stage='preliminary',points=18)
         self.save('replay',created='2026-10-22T13:00:00Z',mode='replay',points=24)
@@ -366,6 +375,24 @@ class NightSignalTests(NightFixture):
         home=next(t for t in lost['teams'] if t['team_id']=='T1')
         self.assertEqual((home['error'],home['model_points']),(4,4))
         self.assertEqual([(d['player_id'],d['miss_class']) for d in home['drivers']],[('P1','volume')])
+
+    def test_a_partial_roster_run_is_not_scored_over_the_earlier_estimated_margin(self):
+        # Hawks at Pacers, 2026-11-02: an estimated -11.4, then runs that projected seven Pacers published
+        # a -55.7 player sum, and the last of them was the scored forecast.
+        self.f['game_totals']=[dict(game_id='G1',status='complete',points_mean=30,teams=[
+            dict(team_id='T1',side='home',status='complete',points_mean=20),dict(team_id='T2',side='away',status='complete',points_mean=10)])]
+        self.f['margin_forecasts']=[dict(game_id='G1',home_team_id='T1',away_team_id='T2',status='estimated',mean_margin=4.,player_sum_margin=10.,home_win_probability=.6)]
+        self.save('estimated',stage='preliminary',created='2026-10-22T13:00:00Z')
+        self.f['game_totals']=[dict(game_id='G1',status='partial',points_mean=27,teams=[
+            dict(team_id='T1',side='home',status='partial',points_mean=6),dict(team_id='T2',side='away',status='complete',points_mean=21)])]
+        self.f['margin_forecasts']=[dict(game_id='G1',home_team_id='T1',away_team_id='T2',status='unavailable',reason='incomplete_team_totals',mean_margin=None)]
+        self.save('partial',created='2026-10-22T14:00:00Z')
+        self.lines('G1',-5)
+        g=self.report()['games'][0]
+        self.assertEqual(g['stages']['final']['run_id'],'partial')  # its players are still the final forecast
+        self.assertEqual((g['market']['run_id'],g['market']['stage']),('estimated','preliminary'))
+        self.assertEqual(g['market']['margin'],dict(model=4.,close=5,kalshi=None,actual=0))
+        self.assertEqual(g['market']['total']['model'],30)
 
     def test_next_report_and_recap_explain_an_early_exit(self):
         g9=dict(self.g,game_id='G9',start_time='2026-10-24T18:00:00Z',away_team_id='T3')

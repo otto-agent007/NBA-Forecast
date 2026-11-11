@@ -282,7 +282,7 @@ def _replay(directory, envelope, rows, snapshot):
         raise ValueError('Injury source is future-known')
     key = ('recap', str(Path(directory).resolve()), replay_cache.digest(metadata), replay_cache.digest(envelope['game']),
            replay_cache.digest(rows), replay_cache.stamp(_raw_paths(directory, metadata)))
-    return replay_cache.replay(key, lambda: _replay_source(directory, envelope, metadata, rows))
+    return replay_cache.replay(key, lambda: _replay_source(directory, envelope, metadata, rows), directory)
 
 
 def _raw_paths(directory, metadata):
@@ -295,7 +295,7 @@ def _source_envelope_game(directory, metadata, rows):
     """The game identity a raw page states against one set of rows, read once per process (``replay_cache``)."""
     key = ('recap-game', str(Path(directory).resolve()), replay_cache.digest(metadata), replay_cache.digest(rows),
            replay_cache.stamp(_raw_paths(directory, metadata)))
-    return replay_cache.replay(key, lambda: _source_game(_read_raw(directory, metadata), metadata, rows))
+    return replay_cache.replay(key, lambda: _source_game(_read_raw(directory, metadata), metadata, rows), directory)
 
 
 def _replay_source(directory, envelope, metadata, rows):

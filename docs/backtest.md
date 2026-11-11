@@ -4,7 +4,9 @@
 code and scores them. It is the gate for model changes (see `AGENTS.md`): a
 change to how forecasts are computed is judged here first, on the same games
 and players as the committed reference, before anything is merged or
-activated.
+activated. The command below replays the baseline path; the same command with
+`--production-path` replays the path production runs, against its own
+reference ("Production path" below), and a change is judged on both.
 
 ```bash
 python -m nba_forecast backtest \
@@ -247,19 +249,138 @@ actual +7).
 
 ## Production path
 
-The gate replays `model._baseline_forecast`. Production runs
+The baseline command replays `model._baseline_forecast`. Production runs
 `candidate.forecast_candidate`, which adds the redistribution of absent
 players' minutes to teammates, pace and defense factors with team volume
 budgets, and the fitted rest and travel context. `--production-path ARTIFACT`
 replays that path: each game gets the pace and defense environment built from
 the team games of earlier dates (a labelled historical reconstruction), the
-rest and travel context from the season calendar, and the artifact's
-parameters and fitted context model. `datasets/model-upgrade-2026-10-23/artifact.json.gz`
-carries the same parameters and context model as the live 0.6.0 artifact.
-To replay it, add `--production-path datasets/model-upgrade-2026-10-23/artifact.json.gz`
-to the gate command; `AGENTS.md` still gates on the baseline path. Live-only inputs are still absent: recap role context, shot
-profiles, aggregate historical priors. The context model was fitted on
-2025-26, so that season is in-sample for it.
+rest and travel context from the season calendar, and the artifact's model
+version, parameters and fitted context model. Since 2026-11-09 `AGENTS.md`
+gates on it too: the gate command with
+
+```bash
+  --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
+  --reference datasets/backtest-2026-11-09-production-path
+```
+
+and its own `--output`. It took 34 minutes 44 seconds at idle priority on
+2026-11-09 (1,897 CPU seconds, peak resident memory 490 MiB); the baseline
+replay takes about eleven. Rerun against the reference it wrote byte-identical
+rows and reported every paired difference exactly zero, so a verdict on this
+path measures the change and nothing else. The scoreboard records the path
+(`model_path`) and, under `parameters.production_artifact`, the artifact file's
+path and SHA256, its model version and key, parameters and hashes of its
+context model and excluded games. A reference replayed on the other path is refused before
+anything is replayed, because the difference between the paths would read as
+the change; `--cross-path` allows it when that difference is what is wanted,
+and then the exit code is never 3. Against a production-path reference the
+run also compares what the replay reads from the two artifacts (model version,
+parameters, context-model and excluded-games hashes; not the model key, which
+changes every release) and prints a warning, also saved as the comparison's
+`artifact_warning`, when one differs or the reference does not record it: an
+artifact change would otherwise read as the code change. A reference saved
+before the hashes were recorded can carry them in a `manifest.json` beside its
+scoreboard. `datasets/backtest-2026-10-27-production-path` (the 0.5.0
+artifact, no hashes) draws the warning.
+
+CI does not replay this path yet. Its `--limit 400` smoke run took 870 CPU
+seconds here against 195 for the baseline one (4.47 times); at that ratio
+CI's baseline smoke step, 131 to 243 seconds on 2026-11-09, would become 10 to
+18 minutes for each Python version. With `--limit 100` it took 224 seconds,
+about what the baseline smoke run costs now, so one separate job on one Python
+version would run beside the matrix without lengthening CI; that is the
+proposal, not yet in `.github/workflows/ci.yml`.
+
+`datasets/production-artifact-2026-11-09/` is the artifact production ran on
+2026-11-09 (0.6.0), exported by `scripts/research/export_production_artifact.py`
+without its release binding and its live-fitted interval calibration (see its
+README). It is refined from the 0.5.0 artifact in
+`datasets/model-upgrade-2026-10-23/`, which earlier production-path runs used:
+the parameters, context model and excluded games are the same, the model
+version, key and known-at are not. Without their live inputs the refined
+branches the version turns on change nothing in the replay. The context model
+was fitted on 504 games of 2025-26 up to 2026-01-15, so that season is partly
+in-sample for it.
+
+What the replayed path still leaves out, against a live forecast (counts from
+the newest final forecast of each of 12 games of 2026-11-07..09, 311 projected
+players: `python3 scripts/research/live_inputs.py --directory
+data/operations/production --runs 70 --stride 9` on 2026-11-09):
+
+- The previous season. The gate replays each season alone, so players have no
+  earlier-season rows, team ratings no last-season prior, and pace and defense
+  only this season's games; live reads the previous season too. The
+  early-season replay (`--previous-history`, `--previous-team-games`) adds it.
+- Aggregate historical priors (career season totals, `historical.season_prior`):
+  199 of the 311 players had one; they set minutes, rate and shooting priors.
+- Court-location shot quality (`shot_quality`, refined): changed the shooting
+  of 232 of the 311, by 0.031 points a player in absolute value on average
+  before the budgets (expected attempts times the percentage change; signed
+  mean −0.004, largest 0.25).
+- Injury-exit role context (`role_context`, refined): 1 of the 311.
+- Rosters and statuses: the replay's roster is the box score's players with the
+  T-minus-30 report's statuses; live projects the league roster with the live
+  checkpoint's report, ESPN fallbacks, reviews and adjudications.
+- Projected starters (`preflight.lineups`): in live `totals.game_totals` (and
+  so `scoreline.reconcile`) a withheld projected starter is not covered by the
+  replacement-rate minutes, so the totals stay partial; the replay has no
+  lineups and treats no one as a projected starter.
+- Interval calibration: live reads the artifact's prospective calibration; the
+  replay fits the same two-tailed, per-minutes-bucket method walk-forward on
+  its own residuals.
+- `boxscore_model.extend_boxscore` and the shot profiles move no point or
+  minute, but with their expected makes live `scoreline.reconcile` leaves a
+  game unscaled when a scaled player's points no longer fit his attempts; the
+  replay never meets that refusal.
+- Margins: the replay also locates a game whose team totals are partial (a
+  withheld player), for which live publishes no margin; the market strength
+  reads ESPN's archived closes in the replay and the saved pregame captures
+  live (each provider's last, averaged). The margin calibration has never
+  been ready live, so nothing differs there today.
+- Winner probability: the replay scores P(margin > 0.5) under the normal; the
+  distribution production publishes leaves out a zero margin and renormalises,
+  which gives the home side +0.012 on average on these games. Rescored that way
+  the winner Brier changes by −0.0002 pooled on the baseline path and −0.0001
+  on the production path, by at most 0.0007 in one season
+  (`scripts/research/path_scoreboards.py`).
+
+### 2026-11-09: the production path against the baseline
+
+`datasets/backtest-2026-11-09-production-path/` replayed main 1385e80 (the
+release production ran) with
+`datasets/production-artifact-2026-11-09/artifact.json.gz` (SHA256
+`648950cbaf9dba58…`), paired with the baseline reference
+`datasets/backtest-2026-11-07-market-strength`. Its scoreboard predates the
+artifact fields and `--cross-path`: its `comparison` block, `worse`, is that
+cross-path comparison, the difference between the paths and not a gate
+verdict, and its `manifest.json` records the artifact file, its hashes and
+this. Production path minus baseline, pooled over
+the three seasons, ± two clustered standard errors as the gate prints them
+(`python3 scripts/research/path_scoreboards.py --baseline
+datasets/backtest-2026-11-07-market-strength --production
+datasets/backtest-2026-11-09-production-path`):
+
+| Metric | Production path minus baseline | Verdict |
+|---|---|---|
+| Player points MAE | −0.0095 ± 0.0032 | within the materiality floor (0.0224) |
+| Minutes MAE | −0.0030 ± 0.0022 | within the floor (0.0242) |
+| Team points MAE | +0.421 ± 0.169 | worse, in each season (+0.18, +0.48, +0.60) |
+| Margin MAE | +0.044 ± 0.064 | within noise |
+| Participation Brier | 0 | identical: the path shares the participation model |
+| Winner Brier | −0.0007 ± 0.0012 | within noise (improved in 2024-25 only) |
+| 80% interval score | −0.003 ± 0.016 | within noise |
+| Points bias | −0.086 → −0.271 | worse, in each season |
+| Team-points bias | −1.23 → −3.21 | worse, in each season |
+| Margin bias | +0.12 → +0.13 | within noise |
+
+Against the closing line on the same 2,604 games the model's margin MAE is
+11.161 on the baseline path and 11.205 on the production path, the close's
+10.898: a gap of +0.263 and +0.307. The production path keeps October's
+shortfall in team totals (team-points bias −1.23 → −3.21) and gains nothing
+measurable in margin or winners. On the replayed seasons these layers do not
+by themselves open a wider gap to the close; where the replay and live still
+differ is the list above.
 
 First run, 2026-10-27, against `datasets/backtest-2026-10-26-absence` (the
 baseline path), ± two standard errors:
@@ -676,6 +797,110 @@ above seeds them.
 A result here is necessary, not sufficient: a change that improves the replay is
 expected to show up live after enough games, and both are reported.
 
+## Live replay
+
+The gate replays the baseline path on box-score rosters; live, the margin has
+trailed the close by more than the gate predicts, over games made by four
+margin methods and several fixes. `scripts/research/live_replay.py` scores the
+code of the checkout it sits in on the inputs the live forecasts actually had:
+for each finished game it takes the pregame run the market report scores (the
+last final-stage run before tip, else the last preliminary; `--which first`
+takes the day's first), re-forecasts it from the run's saved snapshot and
+history, and scores it beside what was published and the closing line, with
+the market report's and the ledger evaluation's own rules (published margin,
+closing line, winner Brier; `store._report` for players). It reads a
+production copy, never production, and finds runs through `state.json` and the
+ledger's `run_records` by key, one 59 MB history at a time.
+
+```bash
+nice -n 19 python3 scripts/research/live_replay.py --copy COPY \
+  --output-frozen OUT/frozen.json --output-rebuilt OUT/rebuilt.json
+python3 scripts/research/live_replay.py --compare MAIN/rebuilt.json BRANCH/rebuilt.json
+```
+
+`--ledger` reads the runs from another ledger, by key only (production's,
+read-only, while COPY holds the small files), and `--artifacts` the model
+artifacts from another folder. This host's disks ignore I/O priority classes
+(`ionice -c3` does nothing under mq-deadline), so the tool throttles itself:
+after each game it sleeps twice the time it spent reading (`--io-share`, a
+third by default), at least a second after each history, and it pauses while
+production's last completed tick started more than two minutes ago.
+
+Two modes. **Frozen** forecasts the snapshot exactly as stored: a run made by
+the same release must come back byte for byte (the self-test), and code inside
+`forecast` (player model, allocation, blend weights) shows up, but nothing that
+was prepared before the forecast and saved in the snapshot does. In particular a
+run of an earlier margin method carries margin inputs today's code refuses
+(`unsupported_margin_inputs`), so its replay publishes the player sum.
+**Rebuilt** also prepares `model_enhancements` again with this code, from the
+run's own model artifact, as of the run's `prepared_at`: the pace and defense
+environment and the margin inputs (team ratings with the market-implied
+strength from closes retrieved by then, the outcome dispersion). The line
+captures are bounded by `retrieved_at` (PR #36), which is sufficient when every
+capture was appended before its game tipped and no recovered close was
+retrieved before its recovery began; the tool counts both in the copy (on
+2026-11-10: 0 of 1,960 captures after tip, 0 of 10 recovered closes). The
+environment finals are not: a record carries no
+time it was written, and a box score fetched again later is written as a new
+record that keeps the box score's earlier `known_at`. So by default the rebuild
+reads only the records the run itself read (its `live_team_game_sources`);
+`--finals known-at` reads every record by `known_at`, and each run reports what
+that would add. Everything else stays frozen and is listed in the output: the
+roster and the injury statuses as parsed then, `reported_unavailable`, the
+historical priors, shot profiles and shot quality (their preparation writes
+evidence files into the data folder), role context, the preflight and its
+lineups, and the history.
+
+The proof that the rebuild is as-of clean is the self-test applied to the
+prepared inputs: for every run the running release made, preparing again must
+give the same `model_enhancements` (the same `inputs_sha256` for the margin
+inputs); the output says so, or says the proof is missing when the copy has no
+run of that release. On the 2026-10-29 copy with the code of release
+`e4b31470`, the twelve runs that release made came back byte for byte in both
+modes and their prepared inputs hashed the same; the sixteen runs of the same
+margin method and parameters had identical margin inputs.
+
+Limits: a few weeks of games on fifteen game dates, one sportsbook's captured
+close (the lines are captures, not quotes; 12 of the 134 replayed games have
+none), and the frozen inputs above. `--compare` pairs two outputs on the same
+original runs and prints candidate minus base with one standard error
+clustered by Eastern date, so a model branch can be judged on live inputs:
+run the script in main's tree, run it in the branch's tree, compare.
+
+First run, 2026-11-10, main `1385e80` (package `db02339b`, the deployed
+release), on the 134 finished games of 2026-10-23..11-09 with a pregame run (128
+final-stage, 6 preliminary; median 9.9 minutes before tip), runs read by key
+from production's ledger, the other files frozen from the 11-09 copy; about 20
+minutes for both modes. ± is one standard error clustered by Eastern date.
+Margin against the final, on the 122 games with a DraftKings close (15 dates):
+
+| Games | Published | Today's code, rebuilt | Close | Today − published | Today − close |
+|---|---|---|---|---|---|
+| All 122 | 12.51 | 11.77 | 10.76 | −0.73 ± 0.50 | +1.01 ± 0.29 |
+| Without the 4 published 10+ from the close | 11.92 | 11.95 | 10.92 | +0.03 ± 0.12 | +1.04 ± 0.29 |
+| Original v1 runs (8, one date) | 12.55 | 6.00 | 4.62 | −6.54 ± 2.93 | +1.38 ± 1.60 |
+| Original v2 runs (16) | 11.33 | 10.93 | 11.12 | −0.40 ± 0.46 | −0.19 ± 0.93 |
+| Original v3 runs (77) | 12.62 | 12.22 | 10.94 | −0.40 ± 0.57 | +1.28 ± 0.33 |
+| Original v4 runs (21, three dates) | 12.99 | 12.99 | 12.17 | +0.00 | +0.82 ± 1.11 |
+
+Today's code would have avoided the four outliers (three opening-night v1
+games, and Hawks at Pacers on 2026-11-02, whose short bench left a 60.9-point
+Pacers total and the player sum as the published margin; 29.75 published
+against 6.59 replayed) and otherwise scores like what was published: on live inputs it trails the close by about one point, against the
+gate's 0.26, so the gap between the gate and live is not the mix of margin
+methods or the fixed bugs. Winner Brier 0.2077 published, 0.2043 replayed,
+0.1814 the close (120 games); game total 14.80, 14.75 and 13.81; team points
+10.13 → 9.83 (−0.30 ± 0.20, bias −0.80 → −0.83); player points of players
+who played 4.45 → 4.42 (−0.033 ± 0.015, bias +0.46 → +0.14), minutes 4.83 →
+4.78 (bias +1.01 → +0.44), participation Brier 0.0733 → 0.0710. Frozen, the
+v1–v3 runs keep only their player sum (`unsupported_margin_inputs`): 12.07
+against the close's 10.76 on the 122 games. Self-test: the 3 runs of the
+deployed release and the 18 of the previous v4 release come back byte for byte
+in both modes; preparing again reproduced the deployed release's
+`model_enhancements` (3 of 3) and every v4 run's margin inputs and closes read
+(21 of 21). The `known_at` bound alone would have read another version of an
+environment final in 3 of the 122 runs; on those games it moves no margin.
+
 ## Updating the reference
 
 When a change is merged, run the full backtest, commit its two files as
@@ -920,3 +1145,106 @@ at this deploy. The absence adjustment (0.1 points per reported-out minute)
 was sized with the results-only rating; the strength already reflects recent
 absences through the closes of the games they affected, so the two may
 overlap. Not measured on its own.
+
+## Tried, not merged: 2026-11-09 (who counts as an absent regular)
+
+The reference is unchanged. The question came from live: on the games of
+2026-10-24 to 11-09 where the absence term (0.65 × the rating's 0.1 points per
+minute of reported-out regulars) was at least one rating point, the model's
+margin error was larger with the term than without it, and only a quarter of
+the counted minutes belonged to players who had played every team game. A
+regular who has missed most of the team's games still counts at full weight
+(`minutes_per_game` is per game he played; "one of the last ten" is the whole
+season until a team's tenth game), although his absence is partly in the
+results and in the recent closes behind the market strength.
+
+`scripts/research/absence_harness.py` re-scores a reference's margins under any
+absence rule without a replay: it rebuilds every replayed game's reported-out
+players and their game logs with the replay's own functions, and a rule moves
+the published margin by exactly 0.65 × the change in its term (team totals by
+half that, through `scoreline.reconcile`). It reproduces the replay to the
+digit: against `scripts/research/replay_components.py` output of an
+unchanged-code replay (whose rows are byte-identical to the references), 0 of
+2,604 gate and 3,676 seeded games differ in their out players, and the largest
+difference is 2.8e-14 minutes, 5.3e-15 in the absence term and 7.1e-15 in the
+location. A real gate run with the best rule below patched in agreed with the
+harness to 7.1e-15 on every margin and printed its verdict.
+
+Gate seasons, pooled (2,604 games), change against the current rule, ± one
+date-clustered standard error; "gate" is the gate's own verdict (two standard
+errors and the 0.5% floor); the last column is the slope of actual − model on
+home-minus-away counted minutes (per ten, today's eligibility), zero when the
+term is the right size:
+
+| Rule | Margin MAE | Gate | Winner Brier | Gate | Miss per 10 min |
+|---|---|---|---|---|---|
+| Current (0.1 a minute, 15+ minutes, one of the last ten) | 11.161 | | 0.2019 | | +0.17 ± 0.06 |
+| Term off | +0.153 ± 0.069 | worse | +0.0044 ± 0.0013 | worse | −0.48 ± 0.06 |
+| A1 × share of the season's team games he played | +0.003 ± 0.026 | within noise | +0.0011 ± 0.0005 | worse | −0.04 ± 0.06 |
+| A2 × share of the last ten | +0.004 ± 0.032 | within noise | +0.0012 ± 0.0006 | within noise | −0.08 ± 0.06 |
+| A3 × 0.3 season share + 0.7 share weighted with a 7-day half-life | −0.007 ± 0.031 | within noise | +0.0010 ± 0.0006 | within noise | −0.09 ± 0.06 |
+| A4 0.075 a minute | −0.035 ± 0.017 | within noise | +0.0001 ± 0.0003 | within noise | +0.01 ± 0.06 |
+| A4 0.05 a minute | −0.021 ± 0.035 | within noise | +0.0008 ± 0.0006 | within noise | −0.16 ± 0.06 |
+| A5 best share rule refitted (A3 at 0.125; 0.075, 0.125, 0.15 tried for A1–A3) | +0.009 ± 0.026 | within noise | +0.0010 ± 0.0005 | within noise | +0.01 ± 0.06 |
+| Own: 0.075, and 0.035 for 15+ minute regulars out for all of the last ten | −0.051 ± 0.022 | within noise | −0.0009 ± 0.0004 | within noise | +0.03 ± 0.06 |
+| Own: 0.1, and 0.035 for those regulars | −0.006 ± 0.017 | within noise | −0.0009 ± 0.0003 | within noise | +0.20 ± 0.06 |
+
+Team points and the three biases are within noise for every rule, pooled and
+in each season, except A1 refitted at 0.15 (team points worse in 2024-25). Of
+the nine A5 refits six are worse on winner Brier pooled, two of them also on
+margin, and none improves anything. By season, the term off is worse in
+2024-25 (winner Brier) and 2025-26 (margin and winner Brier), A4 at 0.075 is
+improved on margin in 2024-25, and both own rules are improved on winner Brier
+in 2025-26 alone. The real gate on the first own rule:
+margin −0.0506 ± 0.0440, winner Brier −0.0009 ± 0.0009, team points −0.0073 ±
+0.0149, points +0.0002, interval score −0.0003 (± two standard errors), every
+bias unchanged; `within_noise`. On the seeded early-season replay (3,676
+games) the same rule gives −0.043 ± 0.017 and −0.0007 ± 0.0003 (weeks 1–2
+−0.000 ± 0.033, weeks 3–4 −0.036 ± 0.045, weeks 5–8 −0.051 ± 0.040), and the
+share rules again cost winner Brier (+0.0010 each; A2 `worse`); on the midday
+replay −0.054 ± 0.019 and −0.0011 ± 0.0004 (Brier `improved`), A4 at 0.05
+−0.058 ± 0.026 (margin `improved`). The midday tables come from the same
+reconstruction with the midday reports, not separately proven against a
+replay. The gate is `within_noise` for every rule, so nothing changes.
+
+Why the share rules fail: what a counted minute is worth does not fall with
+the share of games the player has missed. Regressing the margin with the term
+removed, home minus away, on counted minutes by group (per ten, one
+standard error), players who played three quarters of the team's games or
+more (but not all) cost −0.35 ± 0.08 on the outcomes and −0.32 ± 0.02 on the
+close; half to three quarters −0.66 ± 0.11 and −0.30 ± 0.02; a quarter to a
+half −0.57 ± 0.18 and −0.34 ± 0.04; under a quarter −0.57 ± 0.17 and
+−0.34 ± 0.05.
+The close charges about the same for every group and the outcomes charge more,
+not less, for the players the share rules discount. In the gate window only
+2% of counted minutes belong to players who have played every team game (6%
+in the seeded replay), so the live quarter reflects how early in the season it
+is, not a different rule. Two things the tables do show: the term is a little
+too large overall (+0.17 ± 0.06 per ten counted minutes; 0.075 a minute takes
+it to zero), and regulars out for all of the last ten games, whom the rule
+leaves out, still cost −0.23 ± 0.08 per ten minutes on the outcomes and −0.14 ±
+0.02 on the close. Both together are the first own rule, chosen after seeing
+these tables on the same seasons; its gain is below the materiality floor.
+
+Live check (`scripts/research/absence_live.py`; the 97 finished games of
+2026-10-24 to 11-09 whose final pregame forecast recorded an absence term,
+read from the production ledger by run id; ± one standard error by Eastern
+date, never below the independent one, the gate's convention). Each out
+player's log was rebuilt from production's finals: 721 of 726 records match
+exactly and the other five differ only in minutes per game (at most 0.06), so
+every season share is exact; `recent_team_games` equals the team's games so
+far for 718 records, and the other eight belong to teams past their tenth game.
+The current rule recomputed from the records reproduces each run's recorded
+term to 1.8e-15. Margin MAE against the current rule over the 97 games: term
+off −0.303 ± 0.208; A1 and A2 −0.056 ± 0.084, A3 −0.059 ± 0.089; A4 0.075
+−0.087 ± 0.054 and 0.05 −0.173 ± 0.108; A5 (A3 at 0.125) +0.018 ± 0.090. The
+first own rule is identical to A4 at 0.075 live (no regular has yet missed ten
+straight team games). On the 78 games where the current term is one rating
+point or more it costs +0.37 ± 0.26, and the model sits +1.27 ± 0.37 past the
+close toward the adjusted side (−0.83 ± 0.31 without the term). The earlier
+figure on the first 71 such games, +0.41 ± 0.16, reproduces as +0.41 ± 0.25:
+its 0.16 was the clustered error over 11 dates, below the independent 0.25.
+Live points the same way as the replay's miss slope, toward a smaller term,
+but by less than two standard errors on 97 games of a season's first three
+weeks, and the replay finds the term off clearly worse; live gives the share
+rules no edge over a smaller coefficient either.

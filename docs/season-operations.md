@@ -11,9 +11,41 @@ backdates a missed capture. `injuries/status.json` exposes waiting, captured
 or retrying state to the dashboard.
 
 Each scheduled game gets preliminary forecasts before its final window,
-starting at 9 AM Pacific on its game date and rebuilt whenever its evidence
-changes: a new official report edition for the game, ESPN's injury list, or the
-roster. The T−30 final checkpoint always produces a run.
+starting at 9 AM Pacific on its game date and rebuilt whenever what that
+game's forecast is built from changes (`operations._evidence_key`): its own
+lines in the official report edition it applies (the two teams' statuses and
+reported statuses, their coverage of the game, the completeness flags and the
+issues the no-injury supplement consults, and whether the edition is applied
+at all), ESPN's injury list for the game, the two teams' roster members and
+statuses, the league-wide preparation inputs (the merged history with captured
+finals and their enrichment, contemporary environment finals, the saved lines
+of already-tipped games the team ratings price, collected shot files and
+archived NBA box-score pages), the game's schedule entry and rest/travel
+context and the T−30 checkpoints of the two teams' earlier games, plus the
+model, parser, validator and priors. A game with a sourced review (`reviews/`)
+also keys on which of its entries the applied edition supersedes (an entry
+older than the edition's status for that player is skipped, so a newer edition
+repeating a line can still change the forecast); a game with a roster review
+(`roster-reviews/`) keys on the quarantine it imposes now: whether the review is
+in force (observed within six hours, not expired) and whether ESPN's and the
+official NBA rosters, read through the preflight's fifteen-minute reference
+cache while it is in force, still show the reviewed difference. The report is one league-wide
+PDF, and before 2026-11-10 its digest keyed every game, so each fifteen-minute
+edition re-forecast the whole slate: of 907 consecutive re-forecasts of a game
+on 2026-11-06 to 11-09, 823 came out identical to two decimals. A new edition
+that leaves a game's lines alone makes no run for it; its check is still
+archived under `injuries/games/GAME_ID/records/` once per edition and phase.
+A forecast kept that way is not rebuilt for inputs the key leaves out: the
+clock in the team ratings' time decay (at most 0.002 margin points on those
+days), roster fields other than membership and status (a renamed player), and
+the preflight's live ESPN cross-checks (rosters without a roster review, the
+scoreboard), which add notes or block a forecast but do not change one that
+was made. Each edition is parsed once per tick for the keys. An unusable check
+still keys on a fifteen-minute slot (five near tipoff), so it is retried rather
+than never; so does a game whose key cannot be computed (an unreadable input
+is reported as an `evidence_key` error for that game and the tick goes on), and
+an unreadable review fails that game's forecast instead of running without it.
+The T−30 final checkpoint always produces a run.
 Earlier upcoming jobs are recorded as waiting, without treating unpublished
 next-day reports as forecast failures. An early-morning game's final window
 still opens at T−30, even before 9 AM. At tipoff minus 30 minutes, the next automatic
@@ -25,7 +57,19 @@ Saving either stage now also requires the cross-check below to pass.
 The live dashboard reloads saved evidence every 30 seconds without overlapping
 requests, preserving the selected game, filters and any explicitly selected
 forecast stage. Its default view switches to the final when that run arrives.
-Static snapshot previews remain fixed until manually refreshed.
+Static snapshot previews remain fixed until manually refreshed. The server
+keeps each payload until a file it was built from changes, so an unchanged
+poll is answered from memory (a 304 when the ETag matches, gzip when the
+browser accepts it). The page asks for `/api/dashboard?view=day`, which
+carries the forecasts, injury captures, preflight audits and availability
+updates for the day the page opens on; it fetches any other day from
+`/api/forecasts?date=YYYY-MM-DD` and each night's review from
+`/api/daily-reviews/YYYY-MM-DD`. Plain `/api/dashboard` still carries every
+day and every review, so a page built before this (a tab left open across a
+deploy) keeps working. `generated_at` is when the content last changed. The
+page's built files are served from `dashboard/dist`: run
+`npm run build --prefix dashboard` after a change to `dashboard/src`, before
+the deploy restarts the dashboard.
 
 Each selected forecast shows away and home team point totals and their combined
 game total. Model `regular-season-baseline-0.4.2` saves these aggregates with the
@@ -132,6 +176,25 @@ a tick; `python -m nba_forecast compact-ticks --directory DIR` rewrites those
 rows in place under the tick lock (run it between ticks; a tick that finds the
 lock held exits and the timer retries a minute later).
 
+The tick's `history` phase (the input history, every captured final, and the
+optional fields enrichment fills from archived LiveData box scores) is prepared
+once per input state, not once a minute (`nba_forecast/tick_memo.py`): its keys
+are the finals' and box-score archives' names, sizes and modification times,
+the `--history` files' and the package's source digest, recorded in
+`cache/history-memo.json` with the merged history stored beside it. A tick whose
+inputs are unchanged reads that history back and repeats the enrichment
+warnings recorded with it; the player sync uses the tick's merge instead of a
+second one. Player pages are rebuilt only when the history, roster or shot
+files change, and a page or `players/index.json` is written only when its
+content changes, so their `as_of` is when the content last changed
+(`cache/player-pages.json` holds each page's digest). That record is keyed on
+the code, so a page's `as_of` means its last change or the last deploy,
+whichever is later. Before 2026-11-09 an idle
+tick spent about 14 s of CPU every minute on this; deleting `cache/` costs one
+tick the old work. The memo never stops a tick: an unreadable, malformed or
+unwritable record is treated as missing (a `history_memo` warning) and the step
+runs as before; the stored merged history is checked against its SHA-256.
+
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:
 extraction failures block new forecasts and are retried. Injury captures remain
@@ -150,7 +213,8 @@ derived service has recovered its report edition, ESPN close and Kalshi close
 (below); older and recovered misses stay on the record and in the dashboard's
 count without marking every later tick.
 Later PDF editions are archived as
-separate evidence. To deliberately revise after a later change, provide new
+separate evidence (and, when they change a game's lines inside the final
+window, make another final-stage run). To deliberately revise after a later change, provide new
 sourced review input before tipoff; the original run remains immutable.
 
 After an outage, `python -m nba_forecast recover-evidence --directory DIR
@@ -211,17 +275,51 @@ for the owner to delete. A conflicting history under one digest aborts it.
 
 An idle tick does little work. Live runs are rescored only when one of their
 `finals/` files or their latest evaluation revision changes
-(`evaluation-state.json`). Performance, benchmarks, calibration, postgame and
+(`evaluation-state.json`). The memory outlives a deploy: a run whose finals
+changed, or that has none remembered, is still scored at once, and the others
+are scored again under the new code newest first, for at most 20 seconds a
+tick (`EVALUATION_RECHECK_SECONDS`), until none remain; the tick's
+`evaluation_backlog` counts the entries left (`stale`), the ones re-checked
+and the revisions that wrote. Until 2026-11-09 a deploy discarded the memory,
+and the first tick after it re-scored 3800 runs in 379 s and wrote no
+revision. No run is scored after the tick's soft limit (420 s); those wait
+for the next tick (`evaluation_backlog.deferred`). Performance, benchmarks, calibration, postgame and
 daily reviews are the derived service's job, not the tick's: `python -m
 nba_forecast derived` runs from its own one-minute timer (`nba-derived.timer`,
-at :30, below the tick's CPU priority) and rebuilds them only when the ledger,
-finals contents, archived box scores or play-by-play, calendar games, active
-model, roster presence, Pacific date, code or an explicit request
+at :30, below the tick's CPU priority) and rebuilds them only when the
+evaluations, finals contents, archived box scores or play-by-play, calendar
+games, active model, roster presence, Pacific date, code or an explicit request
 (`derived-request.json`, written by a tick that recovered run artifacts)
-changes, and at least every six hours. A rebuild takes minutes (on 2026-10-28
+changes, and at least every six hours. New forecast runs alone rebuild them at
+most every 30 minutes (`DERIVED_RUNS_REFRESH_SECONDS`): a pregame run changes
+no scored figure (the market report covers finished games; accuracy and
+calibration move when a run is scored), so only the lists of unscored
+forecasts (performance's pending groups, today's daily review, the calibration
+collection counts) wait up to half an hour. Before 2026-11-10 every new run
+set off a full rebuild, and the service rebuilt 180 times in 58.6 hours on
+2026-11-07 to 11-09, back to back from the 9 AM forecasts to the last final. A rebuild takes minutes (on 2026-10-28
 the performance report alone took 84 s and the ticks that rebuilt took 5 to 10
 minutes, so near-tip Kalshi captures were skipped and the T−30 checkpoints ran
-late); beside the tick it costs the checkpoints and captures nothing. The tick
+late); beside the tick it costs the checkpoints and captures nothing. A
+rebuild reads only the runs saved since the last one: what each report takes
+from a run is extracted once, when the run is first seen, into a sidecar
+beside the ledger, `forecast.<version>.derived-cache.sqlite` (`derived_cache`;
+one file per code version, so a report run from another checkout never writes
+into the service's file; files unused for two days are removed). A run's
+stored digests are checked against its bytes at extraction. Each rebuild (each
+process that opens the sidecar) then re-hashes the `max(32, ceil(live runs /
+48))` runs checked longest ago, so at about 48 rebuilds a day every run is
+checked again within about a day; fewer rebuilds stretch that cycle. A run
+whose bytes or stored digests changed is extracted again and its reports show
+the mismatch as they always did. Calibration activations do not trust the
+sidecar: before installing a ready interval or margin correction, the service
+fits it again from the ledger and final bytes read and verified on that call,
+and installs it only if the two fits agree. A verified official final page is
+kept only while the final file and the archived page and provenance files are
+unchanged on disk; a failed page check is never kept. The file is disposable:
+deleting it, or deploying other code, costs the next rebuild a full extraction
+and gives the same reports; one that cannot be read is replaced, and one that
+cannot be written is kept in memory for the rest of that rebuild. The tick
 carries the last rebuild's summary, errors and warnings into its report
 (`derived_reports`, `derived-reports.json`); the service writes
 `last-derived.json` and appends `derived.jsonl`, and each tick report lists its
@@ -236,15 +334,20 @@ forecast, so before 2026-11-02 every game of a slate replayed every source of
 the season twice: a forecast cost 30 to 35 s, 23 to 30 of them in that
 preparation, and a fifteen-game slate 8 minutes per injury-report edition,
 beyond the tick's ten-minute start limit (the NBA publishes an edition every
-fifteen minutes on a game day, and each edition re-forecasts the slate). Now
+fifteen minutes on a game day, and until 2026-11-10 each edition re-forecast the
+slate). Now
 each source is replayed once per tick process and each league-wide history
 map built once per history object (`nba_forecast/replay_cache.py`): the first
 game of a tick pays the replays (about 20 s), each further game 6 to 8 s, and
 the forecasts are byte-identical. The replay key carries the archive digests,
 the rows replayed against and each archive file's size and modification time,
-so a rewritten archive is replayed and rejected as before. The replay cost of
-that first game grows with the season's archives; a cache that outlives the
-process would be the next step. One game whose source no longer replays is left
+so a rewritten archive is replayed and rejected as before. Since 2026-11-09 a
+replay is also kept on disk under the data folder (`cache/replay/`, keyed on the
+same inputs plus the package's source digest, so a deploy starts a fresh store
+and removes the old one), and the first game of the next tick reads it instead
+of replaying the season again; an unreadable entry is replayed and rewritten.
+The league-wide history maps stay per process (about a second to rebuild from
+the history the tick holds). One game whose source no longer replays is left
 out of that preparation and reported, rather than failing every forecast
 (`full-boxscore.md`, "One bad source costs one game"); before 2026-11-05 one
 unparseable page (0022600160, 2026-11-04) withheld a whole slate.
@@ -289,32 +392,93 @@ unchanged (`docs/backtest.md`, reference 2026-10-27). The market report's
 
 ## Market lines
 
-Each tick archives the sportsbook lines ESPN's game summary carries (spread,
-total and moneyline per provider, with opening and current values) for every
-upcoming game at the forecast cadence (hourly while the game waits for the
+The capture service archives the sportsbook lines ESPN's game summary carries
+(spread, total and moneyline per provider, with opening and current values) for
+every upcoming game at the forecast cadence (hourly while the game waits for the
 morning checkpoint, every 15 minutes within a day, every 5 minutes in the last
 30), under `market/game-lines/GAME_ID.jsonl` with source URL, hash and
 retrieval time; a record is appended only when a provider's lines change. The
-last capture before tipoff is the closing line. Since 2026-11-06 the captures
-(ESPN and Kalshi together) run after the tick's forecasts and share a budget of
-120 seconds, less when the tick is already past seven minutes; a game the budget
-does not reach is listed as `deferred` and waits for the next tick, where its
-cadence slot is still open. Before that they ran first and unbounded, and two
-hours of failing name resolution that morning (each request waiting out its
-timeout) kept the captures at 135–475 seconds a tick, killed ten ticks at
-systemd's ten-minute limit and delayed the 9 AM forecasts by 82 minutes. The
-summary's injury lists are forecast evidence: the digest the last capture saved
-keys each forecast job, so a change ESPN makes rebuilds the forecast one tick
-later. `market/report.json` compares
-each finished game's latest pregame forecast with its closing line: the
+last capture before tipoff is the closing line.
+
+Since 2026-11-10 the captures run on their own timer, not in the tick:
+`python -m nba_forecast capture --directory DIR` (`nba-capture.service` and
+`.timer`, every minute at :45; `nba_forecast/capture.py`). It reads the saved
+calendar and captures for the games the tick treats as upcoming (scheduled and
+tipping within 24 hours, including games still waiting for the 9 AM
+checkpoint), each provider at its own cadence slot. ESPN runs in one lane and
+Kalshi in another (its game lines first, then the player props, below), until
+one deadline 40 seconds after the run starts, so a slow ESPN cannot starve
+Kalshi or the reverse; a game a lane does not reach is listed as `deferred` and
+waits for the next run, where its slot is still open. Every request has a
+12-second timeout and each lane checks the deadline before each request (ESPN
+also between a game's scoreboard and summary), so a run ends within 52 seconds;
+the unit's two-minute start limit ends a run stuck on name resolution, which
+the timeouts do not cover. Kalshi's two series run one after
+the other because side by side (42 requests in 6.6 seconds) they drew HTTP 429
+on 2026-11-10. A run writes `last-capture.json` and, when it did something,
+one line of counts to `capture.jsonl`; an idle run (every slot already taken)
+takes about 0.2 seconds and 28 MB and writes nothing else; a run that finds the
+capture lock held (`busy`) captures nothing and leaves `last-capture.json` to the
+last run that did. `market/index.json` is rebuilt once per run, games or not,
+and only when a line file changed. Every capture of upcoming games, the
+service's and the tick's, holds `capture.lock`; the derived service's evidence
+recovery and the `recover-evidence` command append to `market/game-lines/` and
+`market/kalshi/` without it, but only for tipped games, whose files no capture
+writes after tipoff.
+
+Before that the tick captured after its forecasts, so a long or blocked tick
+lost captures: on 2026-11-09 (Pacific, by 23:25) 67 of 1,320 ticks ran past a
+minute and 9 past three (the longest 532 s), and no tick started between 16:52
+and 17:08 while a deploy held the lock, so the 17:00 tip (0022600207) got its
+last ESPN and Kalshi captures 9.7 minutes before tip, against 0.8 to 0.9 minutes
+(Kalshi) for the night's other games (`scripts/research/capture_gaps.py`).
+
+The tick still captures the game lines (not the props), as before, when the
+service has not finished a run within three minutes
+(`capture.HEARTBEAT_SECONDS`, from `last-capture.json`; a failed or busy run
+does not count) and the capture lock is free: a host without the unit, or with it
+stopped, keeps its lines. It then gives ESPN and Kalshi half of its 120-second
+capture budget each, in turn, and reports `market_lines` and `kalshi_lines` as
+before; when the service is capturing, the tick reports
+`market_capture: {by: "nba-capture", last_finished_at, ...}` instead and no
+`market_lines` or `kalshi_lines`. Before 2026-11-06 the captures ran first and
+unbounded, and two hours of failing name resolution that morning kept them at
+135–475 seconds a tick, killed ten ticks at systemd's ten-minute limit and
+delayed the 9 AM forecasts by 82 minutes.
+
+The summary's injury lists are forecast evidence: the digest the last capture
+saved (`market/capture-state.json`) keys each forecast job, and the tick reads
+it at its start. With the capture at :45 a change ESPN makes reaches the next
+tick about 15 seconds after the capture saw it, instead of one tick (a minute
+or more) after a capture made at the end of the previous tick; the file is
+replaced atomically, so the tick never reads a partial one.
+
+`market/report.json` compares each finished game's latest pregame forecast with its closing line: the
 model's and the market's absolute error against the final margin and total,
 the record of model leans at several edge thresholds, and winner Brier scores.
 The model margin is the published one, the margin forecast's location (the
 player sum blended with the team rating), with `player_sum_margin` beside it;
 before 2026-10-27 the report scored the player sum, which on that week's games
 read 12.15 against the published margin's 11.38.
-Leans on a small sample are not an edge. Player props are not captured; ESPN
-does not publish them.
+Leans on a small sample are not an edge. ESPN's public odds carry no player
+props; Kalshi's do (below).
+
+The all-time margin error mixes every margin method the service has run (v1
+to v4 between 2026-10-24 and 11-09) and several parameter sets. Since
+2026-11-10 each row names the margin method and calibration family (method,
+settlement, parameter digest; `margins.calibration_family`) of the margin
+forecast it published (`margin_method`, `margin_family`; a row that published
+the player sum because its margin forecast was unavailable is counted under
+`player_sum` and in no family, as the prospective calibration leaves such a
+run out), and `margin_breakdown` puts
+each method's and family's own record beside the all-time one:
+`by_margin_method`, `by_margin_family` and `current_margin_family` (the running
+code's `margins.CALIBRATION_FAMILY`), each with games, the model's and the
+close's margin MAE on the same rows, and their paired difference with one
+standard error clustered by Eastern game date. The summary, which every tick
+report carries, adds only `current_margin_family`. The family needs the
+parameter set the run's margin inputs saved, which the report's run selection
+reads with the rest of the run; the dashboard does not show these keys yet.
 
 Since 2026-10-27 each tick also captures Kalshi's game markets as a second
 source (`nba_forecast/kalshi_lines.py`, `market/kalshi/GAME_ID.jsonl`, raw
@@ -326,6 +490,75 @@ the real close. The dashboard lists Kalshi beside the sportsbook, and
 `market/report.json` carries `kalshi_margin`, `kalshi_abs_error` and a Kalshi
 winner Brier. Measured on 2026-10-27 over 23 games, ESPN's sportsbook line sat a
 median 0.33 points from Kalshi at tip (`scripts/research/line_lag.py`).
+
+### Player props (Kalshi)
+
+Since 2026-11-10 the capture service also records Kalshi's player prop markets
+(`nba_forecast/kalshi_props.py`): for each game the series `KXNBAPTS` (points),
+`KXNBAREB`, `KXNBAAST` and `KXNBA3PT`, each a ladder of binary markets per
+player ("Stephen Curry: 25+ points" pays when he scores more than 24.5). They
+opened on game day, 16 to 19 hours before tip, on 2026-11-09 and 11-10; before
+that a game is `unlisted`. The cadence is every 15 minutes within a day of tip and every 5 in
+the last 30: a benchmark needs a close near tip, not a one-minute one. Each
+capture appends a record to `market/kalshi-props/GAME_ID.jsonl` when a quote or a
+match changed (volume and open interest alone do not): per player and
+statistic the ladder of threshold, bid, ask, mid, width, volume, open interest
+and status, the mid only for an active market whose spread is at most
+`kalshi_lines.MAX_WIDTH` (0.12), and the implied median line, where the mids cross
+one half, only when the ladder brackets it. The four responses behind an
+appended record are archived gzipped under `market/kalshi-props/raw/`, named by
+the digest of their bytes, and the record lists each one's URL, retrieval time,
+digest and size. On 2026-11-09 a full game (17 players, 244 rungs) came to 29 KB
+of archives and 24 KB of record a capture, at most 5.3 MB a game day and 53 MB
+for a 10-game slate if every slot appends (one sampled market's quote moved in
+43% of slots and nearly every slot moves some rung;
+`scripts/research/props_capture_cost.py`).
+
+Each market is matched to a roster player of its own team (the ticker's team
+code must be one of the game's two teams): by the exact name, ignoring case,
+punctuation and diacritics; else by the name without a generational suffix
+(Jr., III); else by the same surname with one first name a prefix of the other
+of at least three letters ("Nic" for "Nicolas"). A rule counts only when it
+names one player of that team, and two market names that would match one player
+match neither. Unmatched names are listed in the capture report and the record
+and are never scored. On 2026-11-09 all 106 player ladders saved (points for four
+games; rebounds, assists and threes for one) matched by the exact name
+(`scripts/research/props_capture_cost.py` with a `roster.json`).
+
+Settlement decides the comparison. Each market's rules say: "If a player is
+inactive, or active but never takes the court, the market settles to a fair
+price. Once a player enters the game the market settles based on the player's
+points recorded." The price is therefore conditional on the player entering the
+game, as the model's points and interval are conditional on playing. The derived
+service writes `market/props-report.json` (not shown on the dashboard yet): for
+each finished game, the last pre-tip capture against the final pregame forecast
+and the box score, for players who entered the game (positive minutes) only.
+The model forecasts regulation (its minutes stop at 48) while settlement and
+the box score count overtime points, so an overtime game counts against the
+model.
+Every quoted points rung of a matched, projected player is scored by Brier and
+log loss on whether he cleared it, the market mid against the model's
+probability (a two-piece normal that puts the published 80% interval at the
+10th and 90th percentiles; a normal with `points_sd` beside it), and the implied
+median line against the model's points mean by absolute error. Differences are
+model minus market with one standard error clustered by Pacific game date;
+excluded players and rungs are counted by reason. A median scored on absolute
+error is favoured against a mean when scoring is skewed. Until a captured game
+is final the report says `no_data`. Rebounds, assists and threes are recorded
+but not yet scored. A game is scored once: its counts and sums are kept in
+`market/kalshi-props/report-cache.json` until its props file, its final box score
+or its tipoff changes (a close cannot change after tip, nor can the selected
+forecast: runs made at or after tipoff are never selected), and its scored rungs
+and medians are written once to `market/kalshi-props/scored/GAME_ID.json`. The
+report holds the pooled summary and one line per game; the forecast selection
+is read only for games not yet scored. With ten 2 MB games the next rebuild took
+0.1 ms a game instead of 31 ms, and the report 0.9 KB a game instead of 53 KB
+(`scripts/research/props_report_cost.py`).
+
+These are recorded public prices from Kalshi's read-only API, with no account
+or authentication: what the market said, as a benchmark for the forecasts. They
+are not a quote, an offer, a recommendation or advice to bet, and nothing here
+places an order.
 
 ## Preforecast cross-check
 
@@ -477,6 +710,27 @@ questionable stay unresolved. Omitted/conflicting/unmatched players become
 unknown. Missing team reports and NOT YET SUBMITTED remain review issues.
 
 A tick writes `runs/RUN_ID/profiles.json`, `snapshot.json` and `forecast.json`.
+The ledger row and `forecast.json` hold the forecast as `store.stored_forecast`
+leaves it: the rows of the game's two teams and every other key exactly as the
+model returned them. The model still returns a row for every roster player; the
+other teams' players are `no_game` rows with no numbers (487 of 522 rows, 45%
+of the stored forecast, on runs of 2026-10-28 and 10-29) and are left out. They stay
+on record as counts: `coverage.roster_players` and `coverage.pool_rows` are the
+roster players the model considered, `coverage.by_status` counts all of them,
+and its `no_game` is the number of rows left out. `stored_forecast` validates
+the whole forecast first, so only valid `no_game` rows are left out and a
+malformed one rejects the run as it would have before. `store.save_run` accepts a
+forecast of every roster player once or of every roster player of the slate's
+teams once with those counts, nothing in between. Runs saved before keep every
+row; every reader takes both shapes and returns the same for the same run except
+the counters of skipped off-slate rows (`performance.json`
+`off_slate_rows_ignored`, `collection_exclusions.off_slate` in the calibration
+and model status), the run's own evaluation report (`sample_counts.predictions`
+and `sample_counts.excluded` count, and `excluded` lists, the stored rows), and
+the stored bytes' hash (`forecast_sha256`) with the digests over it (daily-review
+`input_signature`, `residual_evidence_sha256`) wherever a report quotes it
+(`scripts/research/stored_forecast_equivalence.py`). The snapshot keeps the
+league roster (`validate_inputs` requires it for live runs).
 Profiles cover every roster player and expose prior/current observations,
 recent minutes/FGA, scoring attempt rates, starter evidence when actually
 present, and potential vacancies. Prior cached history without starter fields
@@ -523,18 +777,18 @@ pipeline produces this queue; it does not secretly invoke a paid model.
 ## Persistent execution
 
 The repository includes user-systemd service/timer templates in `deploy/systemd/`
-(the tick, the derived-report service and their one-minute timers; the
-installer `scripts/install_services.py` writes all of them, and the dashboard's,
-from `nba_forecast/units.py`). On an always-on Linux host, replace the absolute
-paths in both service templates, ensure `/usr/bin/python3` is Python 3.11+,
+(the tick, the derived-report service, the market-line capture and their
+one-minute timers; the installer `scripts/install_services.py` writes all of
+them, and the dashboard's, from `nba_forecast/units.py`). On an always-on Linux
+host, replace the absolute paths in the service templates, ensure `/usr/bin/python3` is Python 3.11+,
 install Poppler, and run one tick first. Then copy the edited units into
 `~/.config/systemd/user/` and run:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now nba-forecast.timer nba-derived.timer
-systemctl --user list-timers nba-forecast.timer nba-derived.timer
-journalctl --user -u nba-forecast.service -u nba-derived.service
+systemctl --user enable --now nba-forecast.timer nba-derived.timer nba-capture.timer
+systemctl --user list-timers nba-forecast.timer nba-derived.timer nba-capture.timer
+journalctl --user -u nba-forecast.service -u nba-derived.service -u nba-capture.service
 ```
 
 User services need an active user manager; configure lingering on the host if
@@ -552,22 +806,42 @@ python3 -m nba_forecast.deploy --directory data/operations/production
 
 It pins the release, builds the refined model artifact bound to that package
 digest from the active model's parent, backs up and repoints the activation
-while holding the tick's and the derived service's locks (a running tick or
-rebuild finishes first; `--wait` sets how long to wait, 900 s by default),
-writes the derived service and its timer for a host that does not have them
-yet and enables the timer, rewrites `WorkingDirectory` in every service unit,
+while holding the derived service's and the tick's locks (a running rebuild
+finishes first, with the ticks still running, and then the running tick;
+`--wait` sets how long to wait for each, 900 s by default),
+writes the derived and capture services and their timers for a host that does
+not have them yet and enables each new timer, rewrites `WorkingDirectory` in every service unit,
 reloads systemd and restarts the dashboard, and writes
 `production/deployed.json` with the commit, package digest, release, artifact
 and the units written or rewritten. Run it again and it changes nothing. The
 next tick re-forecasts every pregame game under the new artifact; the next
 derived run refits the prospective interval calibration, which is bound to the
-model key.
+model key. Rolling back to a release whose tick report has no
+`evaluation_backlog` also drops the evaluation memory: that release re-scores
+every live run in its first tick, as the deploy of 2026-11-09 did (3800 runs,
+379 s); on a cold page cache, at the 0.78 s a run a copy took on a saturated
+disk, some 4,100 runs would run past the tick's 10-minute timeout.
 
-`last-tick.json` and `last-derived.json`, the append-only `ticks.jsonl` and
-`derived.jsonl`, service exit status and journald surface failures and missed
-final windows. Configure your host monitor to flag nonzero exit status and a
-stale heartbeat (no finished tick for 10 minutes; no finished derived run for
-an hour).
+Rolling back to a release from before 2026-11-10, whose tick captures market
+lines without `capture.lock`, deploy leaves `nba-capture.timer` enabled; run
+`systemctl --user disable --now nba-capture.timer` with the rollback, or two
+processes write the capture files unprotected. A later release re-enables it on
+deploy only if the unit files are absent, so enable it again by hand
+(`systemctl --user enable --now nba-capture.timer`) when rolling forward.
+
+`last-tick.json`, `last-derived.json` and `last-capture.json`, the append-only
+`ticks.jsonl`, `derived.jsonl` and `capture.jsonl`, service exit status and
+journald surface failures and missed final windows. Configure your host monitor
+to flag nonzero exit status and a stale heartbeat (no finished tick for 10
+minutes; no finished derived run for an hour; no finished capture run for three
+minutes, after which the tick captures the game lines itself).
+SQLite's temporary files (a sort larger than its page cache) go to `tmp/`
+in the operations directory, on the ledger's disk: `python -m nba_forecast`
+sets `SQLITE_TMPDIR` there for every command that opens a ledger, unless the
+variable is already set. SQLite's default, `/var/tmp`, is on the root disk
+(`PrivateTmp` is a view of the same disk), where one spilled sort filled the
+remaining 7 GB on 2026-11-09. SQLite reads the variable once, when the
+library loads, so it cannot be changed from inside a running process.
 No email/Slack messages are sent. Back up the entire persistent operations
 directory, especially `forecast.sqlite` with its write-ahead log
 (`forecast.sqlite-wal` and `-shm`, present while a connection is open; a copy

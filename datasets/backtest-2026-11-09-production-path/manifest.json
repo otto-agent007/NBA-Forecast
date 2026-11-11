@@ -1,0 +1,15 @@
+{
+  "comparison": {
+    "cross_path": true,
+    "reference": "datasets/backtest-2026-11-07-market-strength",
+    "reference_model_path": "baseline"
+  },
+  "notes": "Replayed on 2026-11-09 with main 1385e80, before the scoreboard recorded the artifact file, its context-model and excluded-games hashes, and before --cross-path. production_artifact above completes the scoreboard's: the backtest reads the fields the scoreboard lacks from here. The scoreboard's comparison block is the production path against the baseline-path reference, the difference between the paths, not a gate verdict. Rerun on gate/production-path 48262be (package digest dfc2920f) against this directory, it wrote byte-identical rows.json.gz.",
+  "production_artifact": {
+    "context_model_sha256": "2ab3dd5d12e2d9f1f240d4e855d954185289d841972062d56eef8b822200d81f",
+    "excluded_history_sha256": "ae3d42f1c7f00b203c4c82bdb2a438fc2e2be3279b506341247f14bbfb8431d9",
+    "path": "datasets/production-artifact-2026-11-09/artifact.json.gz",
+    "sha256": "648950cbaf9dba588a432c839062d24a2c7dab95b8bcc861672104702a22b6e4"
+  },
+  "schema_version": 1
+}

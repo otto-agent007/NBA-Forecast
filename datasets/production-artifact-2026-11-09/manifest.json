@@ -1,0 +1,31 @@
+{
+  "artifact_sha256": "1b8080a14bcaed16136ebcfa318b03dd3b7d5fd01a78a3a26647f515e6cb6efc",
+  "changed_keys": {
+    "calibration": "set to null",
+    "runner_package_sha256": "removed"
+  },
+  "exported_from": {
+    "activated_at": "2026-11-10T02:59:35.240294+00:00",
+    "active_artifact_sha256": "5a4466c081df9c0c5f22c45f9f99effcec0c16b01277b42940338eb58121b552",
+    "parent_artifact_sha256": "e25bec66bd5a9258eccb5a5de0e47afa0b84b3da1d698c25b8672910eee624b2",
+    "runner_package_sha256": "db02339bd43b5fcddde90eccdbec437687391fb16d096a5e77490b0fe84e7152"
+  },
+  "files": {
+    "artifact.json.gz": {
+      "bytes": 203021,
+      "sha256": "648950cbaf9dba588a432c839062d24a2c7dab95b8bcc861672104702a22b6e4"
+    }
+  },
+  "model_key": "0168f8c388858dc7d605b2eb428cf4f1a31466e724257f7ec96c8e2ba2ce811d",
+  "model_version": "regular-season-baseline-0.6.0",
+  "purpose": "backtest --production-path: the parameters, context model and model version production runs, without the release binding or the live-fitted calibrations. Not installable.",
+  "replay_reads": {
+    "context_model": "2ab3dd5d12e2d9f1f240d4e855d954185289d841972062d56eef8b822200d81f",
+    "excluded_history_game_ids": "ae3d42f1c7f00b203c4c82bdb2a438fc2e2be3279b506341247f14bbfb8431d9",
+    "known_at": "2026-11-10T02:59:35.199150+00:00",
+    "model_key": "0168f8c388858dc7d605b2eb428cf4f1a31466e724257f7ec96c8e2ba2ce811d",
+    "model_version": "regular-season-baseline-0.6.0",
+    "parameters": "3f29d4c3c10c57544955c260068998470fec66fa8c708358dac1362c8441b795"
+  },
+  "schema_version": 1
+}

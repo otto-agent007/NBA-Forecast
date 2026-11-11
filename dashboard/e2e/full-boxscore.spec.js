@@ -60,7 +60,7 @@ const labels = ["MIN:SS", "PTS", "REB", "AST", "STL", "BLK", "FGM/FGA", "FG%",
   "3PM/3PA", "3P%", "FTM/FTA", "FT%", "OREB", "DREB", "TOV", "PF", "+/-"];
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/dashboard", route => route.fulfill({ json: dashboard }));
+  await page.route("**/api/dashboard*", route => route.fulfill({ json: dashboard }));
   await page.route("**/api/players/*", route => route.fulfill({ json: profile }));
   await page.route("https://cdn.nba.com/**", route => route.fulfill({
     contentType: "image/png",

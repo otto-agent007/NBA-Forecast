@@ -5,11 +5,17 @@ from datetime import datetime, timezone, timedelta
 import hashlib
 import gzip
 import json
+import os
 from pathlib import Path
-import sqlite3
 import sys
 
 from .validation import validate_inputs
+
+# sqlite3 is imported inside main(), after sqlite_tmpdir(): SQLite reads SQLITE_TMPDIR
+# once, as the library loads. Nothing imported above may load it.
+
+# Commands whose --directory is not an operations directory holding a ledger.
+OTHER_DIRECTORIES = ('backfill', 'fetch-schedule')
 
 
 def _reject_constant(value):
@@ -35,12 +41,45 @@ def _emit(value, output=None):
 def _tick_summary(report):
     """One line for journald: the timer runs a tick every minute, and the full
     report is already saved as last-tick.json and appended to ticks.jsonl."""
-    keys = ('started_at', 'finished_at', 'status', 'created_runs', 'evaluated_runs', 'recovered_runs',
+    keys = ('started_at', 'finished_at', 'status', 'created_runs', 'evaluated_runs', 'evaluation_backlog', 'recovered_runs',
             'missed_final_games', 'errors', 'warnings', 'timings')
     line = {key: report.get(key) for key in keys}
     line['waiting_jobs'] = len(report.get('waiting_jobs') or [])
     line['deferred_jobs'] = len(report.get('deferred_jobs') or [])
     return line
+
+
+def _ledger_home(args):
+    """The folder of the ledger a command opens: its operations directory, or its --db file's folder."""
+    if getattr(args, 'directory', None) and args.command not in OTHER_DIRECTORIES:
+        return Path(args.directory)
+    if getattr(args, 'db', None):
+        return Path(args.db).parent
+    return None
+
+
+def sqlite_tmpdir(home):
+    """Have SQLite put its temporary files (a sort that outgrows memory) in ``tmp`` beside the ledger.
+
+    Its default is /var/tmp on the root disk, which is small (55 GB, 7 GB free on
+    2026-11-09, when one spilled sort filled it); a service's ``PrivateTmp`` is a
+    private view of that same disk. SQLite reads ``SQLITE_TMPDIR`` once, as the
+    library loads, and ignores a later change (measured on SQLite 3.45.1), so
+    this sets it before the process first loads the library (``_sqlite3``,
+    which ``import sqlite3`` loads) and does nothing once it has. A value already in the environment is kept. SQLite unlinks a
+    temporary file as it opens it, so the folder looks empty.
+
+    Returns the directory set, or None.
+    """
+    if home is None or os.environ.get('SQLITE_TMPDIR') or '_sqlite3' in sys.modules:
+        return None
+    tmp = Path(home).resolve() / 'tmp'
+    try:
+        tmp.mkdir(exist_ok=True)
+    except OSError:
+        return None
+    os.environ['SQLITE_TMPDIR'] = str(tmp)
+    return str(tmp)
 
 
 def _rows(paths):
@@ -133,6 +172,10 @@ def _parser():
     derived = sub.add_parser('derived', help='Rebuild the derived reports (performance, calibration, postgame, daily reviews, market) when their inputs changed; the derived service runs this every minute')
     derived.add_argument('--directory', required=True)
     derived.add_argument('--output')
+    capture = sub.add_parser('capture', help='Capture market lines (ESPN, Kalshi game lines and player props) for the upcoming games of the saved calendar; the capture service runs this every minute')
+    capture.add_argument('--directory', required=True)
+    capture.add_argument('--output', help='Write the full report to this new file')
+    capture.add_argument('--full-report', action='store_true', help='Print the full report instead of the one-line summary')
     benchmarks = sub.add_parser('benchmarks')
     benchmarks.add_argument('--db', required=True)
     benchmarks.add_argument('--output')
@@ -150,7 +193,8 @@ def _parser():
     backtest.add_argument('--injuries', nargs='+', help='Anchor injury reports for the replayed games (datasets/injury-reports-*/statuses.json.gz), one per season')
     backtest.add_argument('--previous-history', nargs='+', help="Each season's previous season of box scores, seeding the history (one per season)")
     backtest.add_argument('--previous-team-games', nargs='+', help="Each season's previous season of team games, seeding the ratings (one per season)")
-    backtest.add_argument('--production-path', metavar='ARTIFACT', help="Replay production's path with this model artifact's parameters and context model (datasets/model-upgrade-2026-10-23/artifact.json.gz)")
+    backtest.add_argument('--production-path', metavar='ARTIFACT', help="Replay production's path with this model artifact's version, parameters and context model (datasets/production-artifact-2026-11-09/artifact.json.gz)")
+    backtest.add_argument('--cross-path', action='store_true', help='Allow a --reference replayed on the other path: the difference between the paths, not a gate (exit code 0)')
     backtest.add_argument('--json', action='store_true', help='Print the scoreboard JSON instead of the table')
     dashboard = sub.add_parser('dashboard')
     dashboard.add_argument('--directory', required=True)
@@ -178,6 +222,8 @@ def _parser():
 def main(argv=None):
     parser = _parser()
     args = parser.parse_args(argv)
+    sqlite_tmpdir(_ledger_home(args))
+    import sqlite3
     exit_code = 0
     try:
         # Refuse overwrite before any ledger or network side effect.
@@ -260,7 +306,8 @@ def main(argv=None):
             exit_code=0 if not value['unresolved'] else 2
         elif args.command == 'tick':
             from .operations import run_tick
-            value=run_tick(args.directory,_rows(args.history))
+            from .tick_memo import history_key
+            value=run_tick(args.directory,_rows(args.history),history_key=history_key(args.history))
             exit_code=0 if value['status']=='complete' and not value['missed_final_games'] else 2
             if not args.output and not args.full_report:
                 print(json.dumps(_tick_summary(value), sort_keys=True, allow_nan=False))
@@ -272,6 +319,13 @@ def main(argv=None):
             from .operations import run_derived
             value=run_derived(args.directory)
             exit_code=0 if value['status']!='error' and not value['errors'] else 2
+        elif args.command == 'capture':
+            from .capture import run_capture, summary_line
+            value=run_capture(args.directory)
+            exit_code=0 if value['status']!='error' else 2
+            if not args.output and not args.full_report:
+                print(json.dumps(summary_line(value), sort_keys=True, allow_nan=False))
+                return exit_code
         elif args.command == 'benchmarks':
             from .benchmarks import benchmark_report
             value=benchmark_report(args.db)
@@ -300,18 +354,21 @@ def main(argv=None):
                                     sources={k: dict(path=str(v), sha256=sha256_of(v)) for k, v in paths.items() if v}))
             artifact = read_source(args.production_path) if args.production_path else None
             board = run_seasons(seasons, args.output, reference=args.reference, warmup_fraction=args.warmup_fraction, artifact=artifact,
+                                artifact_source=dict(path=str(args.production_path), sha256=sha256_of(args.production_path)) if artifact else None,
+                                cross_path=args.cross_path,
                                 limit=args.limit, progress=lambda item: print(json.dumps(item), file=sys.stderr, flush=True))
             print(json.dumps(board, indent=2, sort_keys=True) if args.json else format_scoreboard(board))
-            return 3 if board.get('comparison', {}).get('verdict') == 'worse' else 0
+            comparison = board.get('comparison', {})
+            return 3 if comparison.get('verdict') == 'worse' and not comparison.get('cross_path') else 0
         elif args.command == 'dedupe-histories':
             import fcntl
             from .store import dedupe_histories
             folder=Path(args.directory)
             from .deploy import LOCKS
-            with (folder/LOCKS[0]).open('a') as lock,(folder/LOCKS[1]).open('a') as derived_lock:
+            with (folder/LOCKS[0]).open('a') as first,(folder/LOCKS[1]).open('a') as second:
                 try:
-                    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                    fcntl.flock(derived_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    fcntl.flock(first,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    fcntl.flock(second,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 except BlockingIOError as exc:
                     raise ValueError('a tick or derived rebuild is running; retry when it finishes') from exc
                 value=dedupe_histories(folder/'forecast.sqlite')

@@ -24,9 +24,12 @@ class ServiceInstallerTests(unittest.TestCase):
             result=subprocess.run([sys.executable,str(repo/'scripts/install_services.py'),'--directory',str(repo/'operations'),
                                    '--history',str(history),'--unit-directory',str(units)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            for name in ('nba-forecast.service','nba-derived.service','nba-dashboard.service'):
+            for name in ('nba-forecast.service','nba-derived.service','nba-capture.service','nba-dashboard.service'):
                 settings=dict(line.split('=',1) for line in (units/name).read_text().splitlines() if '=' in line)
                 self.assertEqual(settings['WorkingDirectory'],str(repo))
             self.assertIn(f'derived --directory "{repo/"operations"}"',(units/'nba-derived.service').read_text())
+            self.assertIn(f'capture --directory "{repo/"operations"}"',(units/'nba-capture.service').read_text())
+            self.assertIn('OnCalendar=*-*-* *:*:45',(units/'nba-capture.timer').read_text())
             self.assertEqual(sorted(p.name for p in units.iterdir()),
-                             ['nba-dashboard.service','nba-derived.service','nba-derived.timer','nba-forecast.service','nba-forecast.timer'])
+                             ['nba-capture.service','nba-capture.timer','nba-dashboard.service','nba-derived.service','nba-derived.timer',
+                              'nba-forecast.service','nba-forecast.timer'])

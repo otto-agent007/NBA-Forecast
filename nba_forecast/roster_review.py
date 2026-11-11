@@ -6,7 +6,9 @@ from .rotation import projected_lineups
 from .validation import parse_time
 
 
-def resolution(snapshot,profiles,reference,game,team):
+def active_review(snapshot,game,team):
+    """The one roster review of this game and team in force at ``snapshot['as_of']``, or None:
+    observed within six hours, not yet expired, for this tipoff, with a reason and reviewer."""
     try:
         reviews=[r for r in snapshot.get('roster_reviews',[]) if r['game_id']==game['game_id'] and r['team_id']==team]
         if len(reviews)!=1:
@@ -17,6 +19,22 @@ def resolution(snapshot,profiles,reference,game,team):
             0<=(cutoff-parse_time(review['observed_at'])).total_seconds()<=21600 or not
             cutoff<parse_time(review['expires_at'])<=parse_time(game['start_time']) or not review['reason'] or not review['reviewer']):
             return None
+        return review
+    except (ValueError,KeyError,TypeError):
+        return None
+
+
+def resolution(snapshot,profiles,reference,game,team):
+    """The quarantine a roster review imposes on this team, or None.
+
+    ``profiles`` None leaves out the projected-starter condition; only the
+    evidence key does that (starters follow from inputs it already holds).
+    """
+    try:
+        review=active_review(snapshot,game,team)
+        if review is None:
+            return None
+        cutoff=parse_time(snapshot['as_of'])
         official=reference.get('official_rosters',{}).get(team,{})
         meta=official['evidence']
         if (official['team_id']!=team or official['season']!=snapshot['season'] or
@@ -47,7 +65,7 @@ def resolution(snapshot,profiles,reference,game,team):
             alias_ids.add(alias['player_id'])
         ids=set(review['quarantine_player_ids'])
         disputed={p['player_id'] for p in members if normalized(p['name']) in nba_only}-alias_ids
-        starters=set(projected_lineups(snapshot['roster']['players'],profiles['players'])[team]['player_ids'])
+        starters=set(projected_lineups(snapshot['roster']['players'],profiles['players'])[team]['player_ids']) if profiles is not None else set()
         if not disputed<=ids or not ids<=expected.keys() or ids & starters:
             return None
         return dict(code='roster_membership_review',team_id=team,quarantine_player_ids=sorted(ids),

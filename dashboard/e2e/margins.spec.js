@@ -26,7 +26,7 @@ function fixture(margin = distribution) {
 }
 
 async function open(page, margin) {
-  await page.route("**/api/dashboard", route => route.fulfill({ json: fixture(margin) }));
+  await page.route("**/api/dashboard*", route => route.fulfill({ json: fixture(margin) }));
   await page.route("https://cdn.nba.com/**", route => route.fulfill({ status: 204 }));
   await page.goto("/");
   await expect(page).toHaveTitle("NBA Forecast · Game day");
@@ -62,8 +62,8 @@ test("partial forecasts and legacy snapshots never invent probabilities", async 
   const panel = await open(page, { ...distribution, status: "unavailable", pmf: [], reason: "incomplete_team_totals" });
   await expect(panel).toContainText("Both teams need complete projections");
   await expect(panel.getByLabel("Offered margin line")).toHaveCount(0);
-  await page.unroute("**/api/dashboard");
-  await page.route("**/api/dashboard", route => route.fulfill({ json: fixture(null) }));
+  await page.unroute("**/api/dashboard*");
+  await page.route("**/api/dashboard*", route => route.fulfill({ json: fixture(null) }));
   await page.reload();
   await expect(page.getByRole("region", { name: "Winning margin forecast" })).toContainText("not saved for this forecast");
 });
@@ -86,7 +86,7 @@ test("schedule cross-check and active correction remain visible after a later fa
   data.model_upgrade={model_version:"regular-season-baseline-0.6.0",
     applied_margin_calibration:{status:"ready",training_games:72,validation_games:40},
     prospective_margin:{status:"not_ready",sample_count:112,minimum_training_games:64,minimum_validation_games:32}};
-  await page.route("**/api/dashboard", route => route.fulfill({ json: data }));
+  await page.route("**/api/dashboard*", route => route.fulfill({ json: data }));
   await page.route("https://cdn.nba.com/**", route => route.fulfill({ status: 204 }));
   await page.goto("/");
   await expect(page.getByText("ESPN cross-checked")).toBeVisible();

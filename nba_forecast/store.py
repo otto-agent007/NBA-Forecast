@@ -194,8 +194,37 @@ def _connect(db_path):
     return conn
 
 
+def stored_forecast(snapshot, forecast):
+    """The forecast as a tick stores it: without the rows of roster players whose team is in none of the snapshot's games.
+
+    The model returns one row per roster player. A tick forecasts one game on a
+    league roster, so more than nine rows in ten are ``no_game`` abstentions: no
+    numbers, only an audit block. They are left out and stay on record as
+    counts in ``coverage``, which is unchanged: ``roster_players`` and
+    ``pool_rows`` are the roster players the model considered, ``by_status``
+    counts all of them, and its ``no_game`` is the number of rows left out.
+    Every other key and row is the model's own.
+
+    The whole forecast, as JSON, is validated first (``_validate_forecast``), so a
+    row left out was a valid ``no_game`` row: a known roster player listed once,
+    under his roster name and team, with no game and no numbers. A forecast that
+    fails raises ``ValueError`` and nothing is left out. The result is the
+    validated forecast less exactly those rows.
+    """
+    snapshot, forecast = (json.loads(_canonical(value)) for value in (snapshot, forecast))
+    _validate_forecast(snapshot, forecast)
+    slate = {team for game in snapshot['games'] for team in (game['home_team_id'], game['away_team_id'])}
+    return dict(forecast, predictions=[row for row in forecast['predictions'] if row['team_id'] in slate])
+
+
 def _validate_forecast(snapshot, forecast):
-    """A caller cannot label unrelated or unsupported projections as this run."""
+    """A caller cannot label unrelated or unsupported projections as this run.
+
+    The predictions are every roster player exactly once or, as
+    ``stored_forecast`` leaves them, every roster player of the teams in the
+    snapshot's games exactly once, with the players left out counted in
+    ``coverage``.
+    """
     try:
         if forecast.get('forecast_stage', 'preliminary') != snapshot.get('forecast_stage', 'preliminary'):
             raise ValueError('forecast stage does not match snapshot evidence')
@@ -208,8 +237,19 @@ def _validate_forecast(snapshot, forecast):
         slate = {team: game for game in snapshot['games']
                  for team in (game['home_team_id'], game['away_team_id'])}
         rows = forecast['predictions']
-        if not isinstance(rows, list) or len(rows) != len(roster):
-            raise ValueError('forecast must contain every roster player exactly once')
+        on_slate = sum(player['team_id'] in slate for player in roster.values())
+        if not isinstance(rows, list) or len(rows) not in (len(roster), on_slate):
+            raise ValueError('forecast must contain every roster player exactly once, '
+                             'or every roster player of the slate\'s teams exactly once')
+        # Fewer rows than roster players: the off-slate rows were left out, all of them.
+        omitted = len(roster) - len(rows)
+        if omitted:
+            counted = forecast['coverage']
+            statuses = counted.get('by_status')
+            if (any(type(counted.get(key)) is not int or counted[key] != len(roster) for key in ('roster_players', 'pool_rows'))
+                    or not isinstance(statuses, dict) or type(statuses.get('no_game')) is not int
+                    or statuses['no_game'] != omitted):
+                raise ValueError('off-slate players left out of a forecast must be counted in its coverage')
         seen = set()
         for row in rows:
             player_id = row['player_id']
@@ -224,6 +264,8 @@ def _validate_forecast(snapshot, forecast):
             if any(row[key] != player[key] for key in ('name', 'team_id')):
                 raise ValueError('forecast player identity does not match roster')
             game = slate.get(player['team_id'])
+            if omitted and game is None:
+                raise ValueError('a forecast without its off-slate rows cannot contain one')
             if (row['game_id'] != (game['game_id'] if game else None) or
                     row['start_time'] != (game['start_time'] if game else None)):
                 raise ValueError('forecast game identity does not match schedule')
@@ -543,6 +585,47 @@ def evaluate_run(db_path, run_id, actuals):
         conn.close()
 
 
+def performance_ops(parsed):
+    """What one live league run offers the season selection, before any other run is seen.
+
+    ``parsed`` is a ``derived_cache.Parsed`` row. An error is kept and raised again
+    by ``performance_report``, which never read past a run it could not decode.
+    """
+    from .derived_cache import freeze_exception
+    try:
+        forecast = parsed.forecast()
+        created = parse_time(parsed.row['created_at'])
+        entries, off_slate, ineligible = [], 0, 0
+        for prediction in forecast['predictions']:
+            if prediction['game_id'] is None:
+                off_slate += 1
+                continue
+            if created >= parse_time(prediction['start_time']):
+                ineligible += 1
+                continue
+            entry = {'key': [forecast['season'], forecast['model_version'], prediction['game_id'], prediction['player_id']]}
+            entry.update({k: prediction[k] for k in ('team_id', 'status') if k in prediction})
+            entries.append(entry)
+        return dict(off_slate=off_slate, ineligible=ineligible, entries=entries)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError, OverflowError) as exc:
+        return dict(error=freeze_exception(exc))
+
+
+def _latest_matched(cache, conn, run_id):
+    """The newest evaluation revision of a run and its matched rows, each revision decoded once in its lifetime."""
+    revision = conn.execute('SELECT MAX(revision) FROM evaluations WHERE run_id = ?', (run_id,)).fetchone()[0]
+    if revision is None:
+        return None, {}
+
+    def decode():
+        row = conn.execute('SELECT report_json FROM evaluations WHERE run_id = ? AND revision = ?',
+                           (run_id, revision)).fetchone()
+        return json.loads(row['report_json'])['matched']
+
+    rows = cache.extra('matched', f'{run_id}|{revision}', decode)
+    return revision, {(r['game_id'], r['player_id']): r for r in rows}
+
+
 def performance_report(db_path):
     """Aggregate prospective feedback with a fixed, outcome-blind selector.
 
@@ -551,52 +634,45 @@ def performance_report(db_path):
     forecast therefore cannot fall back to an older, favorable evaluated run.
     Exact clock ties use insertion order. Latest final-result corrections apply
     only after forecast selection. Off-slate pool rows have no outcome target.
+
+    Each run's candidates are read from the derived sidecar (``derived_cache``),
+    extracted once per run; each selected run's newest evaluation is decoded once
+    per revision.
     """
+    from contextlib import closing
+    from .derived_cache import open_cache, thaw_exception
     conn = _connect(db_path)
     try:
-        with conn:
+        with conn, closing(open_cache(db_path)) as cache:
             conn.execute('BEGIN')
-            runs = conn.execute(
-                'SELECT rowid AS insertion_order,run_id,created_at,mode,scope,forecast_json FROM runs')
             selected = {}
             off_slate_rows = non_live_runs = ineligible_rows = 0
-            for run in runs:
+            for run in cache.rows('perf'):
                 if run['mode'] != 'live' or run['scope'] != 'league':
                     non_live_runs += 1
                     continue
-                forecast = json.loads(run['forecast_json'])
+                ops = run['value']
+                if 'error' in ops:
+                    raise thaw_exception(ops['error'])
                 created = parse_time(run['created_at'])
                 rank = created, run['insertion_order']
                 identity = {'run_id': run['run_id'], 'created_at': run['created_at']}
-                for prediction in forecast['predictions']:
-                    if prediction['game_id'] is None:
-                        off_slate_rows += 1
-                        continue
-                    if created >= parse_time(prediction['start_time']):
-                        ineligible_rows += 1
-                        continue
-                    key = (forecast['season'], forecast['model_version'],
-                           prediction['game_id'], prediction['player_id'])
+                off_slate_rows += ops['off_slate']
+                ineligible_rows += ops['ineligible']
+                for entry in ops['entries']:
+                    key = tuple(entry['key'])
                     if key not in selected or rank > selected[key][0]:
                         # Selection needs identity/status only, not another copy
                         # of every input or each prediction's component audit.
                         selected[key] = rank, identity, {
-                            'team_id': prediction['team_id'], 'status': prediction['status']}
+                            'team_id': entry['team_id'], 'status': entry['status']}
 
             # Only now inspect final-result revisions; none participate in selection.
             evaluations = {}
             for _, run, _ in selected.values():
                 if run['run_id'] in evaluations:
                     continue
-                latest = conn.execute(
-                    'SELECT * FROM evaluations WHERE run_id = ? ORDER BY revision DESC LIMIT 1',
-                    (run['run_id'],)).fetchone()
-                if latest:
-                    report = json.loads(latest['report_json'])
-                    matched = {(r['game_id'], r['player_id']): r for r in report['matched']}
-                    evaluations[run['run_id']] = latest['revision'], matched
-                else:
-                    evaluations[run['run_id']] = None, {}
+                evaluations[run['run_id']] = _latest_matched(cache, conn, run['run_id'])
 
             groups = {}
             for key in sorted(selected):

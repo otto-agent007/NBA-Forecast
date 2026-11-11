@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from nba_forecast import deploy as D
 from nba_forecast.enhancements import install_artifact, load_active
@@ -31,6 +34,18 @@ def production(root):
     return active, units
 
 
+def free(root, name):
+    """Whether a tick (``tick.lock``) or a derived run (``derived.lock``) starting now would get its lock."""
+    import fcntl
+    with (root / name).open('a') as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return True
+
+
 class DeployTests(unittest.TestCase):
     def test_deploy_pins_builds_activates_rewrites_and_records_once(self):
         with tempfile.TemporaryDirectory() as d:
@@ -42,6 +57,7 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active, 'a dry run writes nothing')
             self.assertFalse((root / 'deployed.json').exists())
             self.assertFalse((units / 'nba-derived.timer').exists())
+            self.assertFalse((units / 'nba-capture.timer').exists())
             import sqlite3
             self.assertEqual(sqlite3.connect(root / 'forecast.sqlite').execute('PRAGMA journal_mode').fetchone()[0], 'delete')
             result = D.deploy(root, units, systemd=False)
@@ -65,6 +81,10 @@ class DeployTests(unittest.TestCase):
             self.assertIn(f'-m nba_forecast derived --directory "{root}"', derived)
             self.assertIn('Nice=10', derived)
             self.assertIn('Unit=nba-derived.service', (units / 'nba-derived.timer').read_text())
+            capture = (units / 'nba-capture.service').read_text()
+            self.assertIn(f'-m nba_forecast capture --directory "{root}"', capture)
+            self.assertIn(f'WorkingDirectory={root / "runner-releases" / digest}', capture)
+            self.assertIn('OnCalendar=*-*-* *:*:45', (units / 'nba-capture.timer').read_text())
             recorded = json.loads((root / 'deployed.json').read_text())
             self.assertEqual((recorded['package_sha256'], recorded['artifact_sha256']), (digest, result['artifact_sha256']))
             self.assertEqual(recorded['previous']['artifact_sha256'], old_active)
@@ -110,17 +130,80 @@ class DeployTests(unittest.TestCase):
 
     def test_deploy_waits_for_a_running_tick_or_rebuild_and_gives_up_after_the_wait(self):
         import fcntl
+        self.assertEqual(D.LOCKS, ('derived.lock', 'tick.lock'), 'the slow holder is waited for first')
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); old_active, units = production(root)
-            for name in D.LOCKS:
+            for name, holder in (('derived.lock', 'a derived rebuild'), ('tick.lock', 'a tick')):
                 with (root / name).open('a') as held:
                     fcntl.flock(held, fcntl.LOCK_EX)  # a tick, or a derived rebuild, is running
-                    with self.assertRaisesRegex(ValueError, f'held the lock {name}'):
+                    with self.assertRaisesRegex(ValueError, f'{holder} has held the lock {name} for more than 1 seconds; retry later'):
                         D.deploy(root, units, systemd=False, wait=1)
                     self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], old_active)
+                    self.assertFalse((root / 'deployed.json').exists(), 'a deploy that gave up wrote nothing')
                     fcntl.flock(held, fcntl.LOCK_UN)
+                for other in D.LOCKS:  # giving up releases what it had taken
+                    self.assertTrue(free(root, other))
             result = D.deploy(root, units, systemd=False, wait=1)
             self.assertNotEqual(result['artifact_sha256'], old_active)
+
+    def test_ticks_keep_running_while_the_deploy_waits_for_a_rebuild(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            rebuild = (root / 'derived.lock').open('a')
+            fcntl.flock(rebuild, fcntl.LOCK_EX)  # a derived rebuild is part-way through its minutes
+            seen = []
+
+            def waiting(seconds):
+                # The deploy is waiting for the rebuild. Ticks must still start and finish.
+                seen.append(dict(tick_lock_free=free(root, 'tick.lock'),
+                                 pointer=json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256']))
+                if len(seen) == 3:
+                    fcntl.flock(rebuild, fcntl.LOCK_UN)  # the rebuild finishes
+
+            with patch.object(D, 'time', SimpleNamespace(monotonic=time.monotonic, sleep=waiting)):
+                result = D.deploy(root, units, systemd=False, wait=60)
+            rebuild.close()
+            self.assertEqual(seen, [dict(tick_lock_free=True, pointer=old_active)] * 3)
+            self.assertNotEqual(result['artifact_sha256'], old_active)
+
+    def test_the_deploy_holds_the_derived_lock_while_it_waits_for_the_tick(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            tick = (root / 'tick.lock').open('a')
+            fcntl.flock(tick, fcntl.LOCK_EX)  # a tick is running
+            seen = []
+
+            def waiting(seconds):
+                seen.append(free(root, 'derived.lock'))  # no rebuild may start now: it could outlast the tick
+                fcntl.flock(tick, fcntl.LOCK_UN)  # the tick finishes
+
+            with patch.object(D, 'time', SimpleNamespace(monotonic=time.monotonic, sleep=waiting)):
+                D.deploy(root, units, systemd=False, wait=60)
+            tick.close()
+            self.assertEqual(seen, [False])
+
+    def test_both_locks_are_held_while_the_activation_is_read_and_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old_active, units = production(root)
+            held = {}
+
+            def planning(*args, **kwargs):
+                held['read'] = [free(root, name) for name in D.LOCKS]
+                return plan(*args, **kwargs)
+
+            def writing(path, value):
+                if Path(path) == root / 'model-upgrade-active.json':
+                    held['written'] = [free(root, name) for name in D.LOCKS]
+                return write(path, value)
+
+            plan, write = D._plan, D.atomic_json
+            with patch.object(D, '_plan', side_effect=planning), patch.object(D, 'atomic_json', side_effect=writing):
+                result = D.deploy(root, units, systemd=False, wait=1)
+            self.assertEqual(held, dict(read=[False, False], written=[False, False]))
+            self.assertEqual(json.loads((root / 'model-upgrade-active.json').read_text())['artifact_sha256'], result['artifact_sha256'])
+            self.assertEqual([free(root, name) for name in D.LOCKS], [True, True], 'both are released afterwards')
 
     def test_deploy_waits_for_a_ledger_reader_and_gives_up_after_the_wait(self):
         import sqlite3
@@ -134,6 +217,21 @@ class DeployTests(unittest.TestCase):
             reader.rollback()
             reader.close()
             self.assertEqual(D.deploy(root, units, systemd=False, wait=2)['ledger_journal_mode'], 'wal')
+
+    def test_deploy_enables_each_timer_it_creates_and_only_those(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _, units = production(root)
+            (units / 'nba-derived.service').write_text('[Service]\nWorkingDirectory=/old/release\nExecStart=x\n')
+            (units / 'nba-derived.timer').write_text('[Timer]\nOnCalendar=*-*-* *:*:30\n')  # a host from PR #17: derived units only
+            with patch('nba_forecast.deploy.subprocess.run') as run, patch('nba_forecast.deploy._git', return_value=('c' * 40, False)):
+                result = D.deploy(root, units, systemd=True)
+            self.assertEqual(result['units_created'], ['nba-capture.service', 'nba-capture.timer'])
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertIn(['systemctl', '--user', 'enable', '--now', 'nba-capture.timer'], commands)
+            self.assertNotIn(['systemctl', '--user', 'enable', '--now', 'nba-derived.timer'], commands)
+            self.assertIn('nba-derived.service', result['units_rewritten'])
 
     def test_a_unit_without_one_working_directory_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

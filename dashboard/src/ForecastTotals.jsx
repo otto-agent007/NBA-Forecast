@@ -15,7 +15,8 @@ export function MarketLines({ game }) {
   const totals = game.forecast?.totals;
   const home = totals?.teams?.find((t) => t.team_id === game.home_team_id);
   const away = totals?.teams?.find((t) => t.team_id === game.away_team_id);
-  const modelMargin = home?.points_mean != null && away?.points_mean != null ? home.points_mean - away.points_mean : null;
+  // Partial team totals sum only the players the run could project: their difference is no game margin.
+  const modelMargin = totals?.status === "complete" && home?.points_mean != null && away?.points_mean != null ? home.points_mean - away.points_mean : null;
   const modelTotal = totals?.status === "complete" ? totals.points_mean : null;
   return (
     <div className="market-lines" aria-label="Market lines">

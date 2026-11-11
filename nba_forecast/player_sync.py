@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 from .data import normalize_boxscore,fetch_roster
 from .validation import validate_history,parse_time
-from .files import archive_bytes, atomic_json
+from .files import archive_bytes, atomic_bytes, atomic_json, canonical
+from .replay_cache import code_digest
 from .player_data import build_player_pages
 from .shots import fetch_game_shots,normalize_page_shots,SHOT_SOURCE_VERSION
 from .full_boxscore_sources import (fetch_official_game_page,normalize_official_page,revise_final_rows,
@@ -196,7 +197,15 @@ def _pending_shots(gid,rows,now,reason):
                       played_players=sum(r['status']=='played' for r in rows),covered_players=0,players=[]))
 
 
-def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=None):
+def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=None,memo=None):
+    """Complete the season's final boxes and shot evidence (bounded fetches), then the player pages.
+
+    ``memo`` is the tick's ``tick_memo.HistoryMemo``: the enriched, merged history
+    the tick already prepared, instead of enriching and merging again here, and
+    the key that lets an unchanged history, roster and shot set skip rebuilding
+    the pages. Pages and ``players/index.json`` are written only when their
+    content changes; their ``as_of`` is when it last changed (``PAGE_RECORD``).
+    """
     if not 0<=max_shot_games<=50:
         raise ValueError('max_shot_games must be 0..50')
     folder=Path(directory)
@@ -210,16 +219,29 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
     now=datetime.now(timezone.utc).isoformat()
     if parse_time(roster['observed_at'])>parse_time(now):
         raise ValueError('Roster is future-known')
-    atomic_json(folder/'roster.json',roster)
+    _write_changed(folder/'roster.json',roster)
     # One damaged archive or captured final costs that file, not player data for every game.
     # The tick reports the same files at its own merge; standalone runs see them here.
     skipped_sources=[]
-    try:
-        enrich_final_cache(folder,skipped=skipped_sources)
-    except ValueError as exc:
-        skipped_sources.append(dict(error=f'Finals enrichment: {exc}'))
-    from .operations import _merge_finals
-    history=_merge_finals(history,folder/'finals',errors=skipped_sources)
+    history_key=None
+    if memo is None:
+        try:
+            enrich_final_cache(folder,skipped=skipped_sources)
+        except ValueError as exc:
+            skipped_sources.append(dict(error=f'Finals enrichment: {exc}'))
+        from .operations import _merge_finals
+        history=_merge_finals(history,folder/'finals',errors=skipped_sources)
+    else:
+        history,skipped,merge_errors,history_key,failure=memo.merged()
+        skipped_sources.extend(skipped)
+        if failure is not None:
+            if not isinstance(failure,ValueError):
+                raise failure
+            skipped_sources.append(dict(error=f'Finals enrichment: {failure}'))
+        # As a second merge of the tick's merged history reported them: a game-identity
+        # disagreement the tick already reported is not repeated (``HistoryMemo.merged``).
+        skipped_sources.extend(merge_errors)
+    changed_rows=False
     combined={(r['game_id'],r['player_id']):r for r in history}
     targets={}
     for row in history:
@@ -279,6 +301,7 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                         for item in official:
                             item['team_turnover_audit']=dict(status='unavailable',reason=str(exc))
                     rows,revision=_save_official_final(folder,gid,rows,official,metadata)
+                    changed_rows=True
                     targets[gid]=rows
                     _keep_final_players(combined,gid,rows)
                     for row in rows:
@@ -299,27 +322,58 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
             result['next_retry_at']=(parse_time(now)+timedelta(seconds=wait)).isoformat()
         cached[gid]=result
         atomic_json(path,result)
-    shots=[json.loads(p.read_text()) for p in sorted(shots_dir.glob('*.json'))]
     history=list(combined.values())
-    validate_history(history)
+    if memo is None or changed_rows:
+        # Otherwise these are the rows the tick's merge validated.
+        validate_history(history)
     now=datetime.now(timezone.utc).isoformat()
-    pages=build_player_pages(roster,history,season,now,shots)
     output=folder/'players'
     output.mkdir(parents=True,exist_ok=True)
-    for pid,page in pages['players'].items():
-        if not pid.isdigit():
-            raise ValueError('Player page ID must be numeric')
-        page.update(as_of=now,roster_observed_at=roster['observed_at'],season=season)
-        atomic_json(output/(pid+'.json'),page)
-    summary=dict(as_of=now,season=season,players=len(pages['players']),history_rows=len(history),
-                 rotation_roles={pid:page['rotation_role'] for pid,page in pages['players'].items()},
-                 player_summaries={pid:{'name':page['name'],'team_id':page['team_id'],
+    record=_page_record(folder)
+    shot_files=sorted([p.name,*_stat(p)] for p in shots_dir.glob('*.json'))
+    key=None
+    if history_key and not changed_rows:
+        horizon=max(filter(None,(memo.horizon(),record.get('shots_horizon'))),key=parse_time,default=None)
+        if horizon is not None and parse_time(now)>parse_time(horizon):
+            # Past every row's and shot game's time the cutoff selects the same evidence.
+            key=_digest([code_digest(),history_key,_digest(roster),shot_files,season,'beyond'])
+    previous=_read_json(output/'index.json')
+    written_record=None
+    if (key is not None and record.get('key')==key and isinstance(previous,dict)
+            and all((output/(pid+'.json')).exists() for pid in record.get('pages',{}))):
+        # Nothing the pages are built from changed: they and their summaries stand.
+        players=len(record.get('pages',{}))
+        rotation_roles,player_summaries=previous.get('rotation_roles',{}),previous.get('player_summaries',{})
+    else:
+        shots=[json.loads((shots_dir/name).read_text()) for name,*_ in shot_files]
+        pages=build_player_pages(roster,history,season,now,shots)
+        written={}
+        for pid,page in pages['players'].items():
+            if not pid.isdigit():
+                raise ValueError('Player page ID must be numeric')
+            page.update(roster_observed_at=roster['observed_at'],season=season)
+            content=_digest(page)
+            kept=record.get('pages',{}).get(pid)
+            if kept and kept[0]==content and (output/(pid+'.json')).exists():
+                page['as_of']=kept[1]
+            else:
+                page['as_of']=now
+                atomic_json(output/(pid+'.json'),page)
+            written[pid]=[content,page['as_of']]
+        times=[t for g in shots for t in (g.get('known_at'),g.get('game_time')) if isinstance(t,str)]
+        written_record=dict(version=PAGE_VERSION,code=code_digest(),key=key,pages=written,
+                            shots_horizon=max(times,key=parse_time) if times else None)
+        players=len(pages['players'])
+        rotation_roles={pid:page['rotation_role'] for pid,page in pages['players'].items()}
+        player_summaries={pid:{'name':page['name'],'team_id':page['team_id'],
                      'roster_membership':page.get('roster_membership','current'),
                      'identity_basis':page.get('identity_basis'),
                      'season':s['season'],'games':s['gp'],'points_average':s['averages']['pts'],
-                     'minutes_average':s['averages']['minutes'],'as_of':now}
+                     'minutes_average':s['averages']['minutes'],'as_of':page['as_of']}
                      for pid,page in pages['players'].items()
-                     for s in [page['current_season'] if page['current_season']['gp'] else page['prior_season']]},
+                     for s in [page['current_season'] if page['current_season']['gp'] else page['prior_season']]}
+    summary=dict(as_of=now,season=season,players=players,history_rows=len(history),
+                 rotation_roles=rotation_roles,player_summaries=player_summaries,
                  current_season_final_games=len(targets),shot_games_verified=sum(_shot_state(cached.get(gid),rows)[1] for gid,rows in targets.items()),
                  shot_games_reconciled=sum(_shot_state(cached.get(gid),rows)[0] for gid,rows in targets.items()),
                  shot_players_expected=sum(r['status']=='played' for rows in targets.values() for r in rows),
@@ -339,5 +393,70 @@ def sync_player_data(directory,history,*,roster=None,max_shot_games=16,schedule=
                 'Full box score has unavailable statistics, imprecise minutes or no inactive list yet' if _needs_official_final(rows,now) else None),
         next_retry_at=(cached.get(gid) or {}).get('next_retry_at'))
         for gid,rows in sorted(targets.items(),key=lambda item:(item[1][0]['game_time'],item[0]),reverse=True)]
-    atomic_json(output/'index.json',summary)
+    if isinstance(previous,dict) and canonical({k:v for k,v in previous.items() if k!='as_of'})==canonical({k:v for k,v in summary.items() if k!='as_of'}):
+        # Unchanged: the index keeps the time its content last changed.
+        summary=previous
+    else:
+        atomic_json(output/'index.json',summary)
+    if written_record is not None:
+        # Recorded only after the pages and the index are written: a sync stopped in
+        # between finds the old key and rebuilds. A record that cannot be written
+        # costs the next sync a rebuild, never this one.
+        try:
+            _write_changed(folder/PAGE_RECORD,written_record)
+        except OSError:
+            pass
     return summary
+
+
+PAGE_RECORD='cache/player-pages.json'
+PAGE_VERSION=1
+
+
+def _digest(value):
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def _stat(path):
+    info=path.stat()
+    return [info.st_size,info.st_mtime_ns]
+
+
+def _read_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError,ValueError):
+        return None
+
+
+def _page_record(folder):
+    """Each page's content digest (without ``as_of``) and ``as_of``, and the key of the inputs they were built from.
+
+    A record of another release, or with a field of the wrong shape, is no record: the pages are rebuilt.
+    """
+    record=_read_json(folder/PAGE_RECORD)
+    if not isinstance(record,dict) or record.get('version')!=PAGE_VERSION or record.get('code')!=code_digest():
+        return {}
+    pages=record.get('pages',{})
+    text=lambda value:value is None or isinstance(value,str)
+    if not (isinstance(pages,dict) and text(record.get('key')) and text(record.get('shots_horizon'))
+            and all(isinstance(pid,str) and isinstance(kept,list) and len(kept)==2 and all(isinstance(v,str) for v in kept)
+                    for pid,kept in pages.items())):
+        return {}
+    if record.get('shots_horizon') is not None:
+        try:
+            parse_time(record['shots_horizon'])
+        except (ValueError,TypeError):
+            return {}
+    return record
+
+
+def _write_changed(path,value):
+    """Write ``value`` unless the file already holds exactly these bytes."""
+    encoded=canonical(value)
+    try:
+        if Path(path).read_bytes()==encoded:
+            return
+    except OSError:
+        pass
+    atomic_bytes(path,encoded)

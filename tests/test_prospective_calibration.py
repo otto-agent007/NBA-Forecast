@@ -237,6 +237,20 @@ class ProspectiveCalibrationTests(unittest.TestCase):
         self.assertEqual(groups["prospective"]["mean_width"], 6)
         self.assertEqual(groups["heuristic"]["mean_width"], 40)
 
+    def test_activation_replay_reads_ledger_bytes_not_the_derived_sidecar(self):
+        from nba_forecast.prospective_calibration import verify_prospective_sources
+        players = [f"p{i}" for i in range(9)]
+        self.run_row(rows=[prediction(pid) for pid in players])
+        self.finals([actual(pid) for pid in players])
+        artifact = fit_prospective(self.directory, MODEL, AS_OF, minimum_samples=1, minimum_games=1)
+        self.assertEqual(artifact["status"], "ready")
+        self.assertTrue(verify_prospective_sources(self.directory, artifact, AS_OF))
+        # The run's bytes change outside the store after this rebuild extracted its facts.
+        with sqlite3.connect(self.db) as conn:
+            conn.execute("DROP TRIGGER runs_no_update")
+            conn.execute("UPDATE run_records SET forecast_json=forecast_json||' ' WHERE run_id='r1'")
+        self.assertFalse(verify_prospective_sources(self.directory, artifact, AS_OF))
+
 
 if __name__ == "__main__":
     unittest.main()

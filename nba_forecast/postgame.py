@@ -239,14 +239,49 @@ def collect_sources(directory,schedule,now,*,max_games=1,budget_seconds=40):
     return dict(final_games=len(games),complete=complete,pending=len(games)-complete,fetched=fetched,errors=errors)
 
 
+def _opening_forecasts(folder):
+    """The schedule's games and each game's opening forecast view, as ``dashboard_data(folder)`` shows them.
+
+    The dashboard picks, per game and stage, the newest pregame run that forecast the
+    game as the schedule knows it, and opens the game on its final-stage view when
+    there is one. Here the run summaries come from the derived sidecar and only each
+    game's opening run is decoded, once per run and saved profiles, instead of every
+    chosen run of the season on every build.
+    """
+    from contextlib import closing
+    from .dashboard import _choose_runs,_connect,_current_schedule,_decode_run,_profiles_stat
+    from .derived_cache import open_cache,run_summaries
+    schedule=_current_schedule(folder)
+    games=schedule.get('games',[])
+    db=folder/'forecast.sqlite'
+    if not db.exists():
+        return games,{}
+    with closing(open_cache(db)) as cache:
+        chosen,_=_choose_runs(run_summaries(cache,schedule.get('season')),{g['game_id']:g for g in games})
+        stages={}
+        for (gid,stage),(rank,run_id) in chosen.items():
+            stages.setdefault(gid,[]).append(((stage=='final',rank),run_id))
+        views={}
+        for gid,candidates in sorted(stages.items()):
+            # The dashboard opens on the best stage that has a view of the game.
+            for (_,rank),run_id in sorted(candidates,reverse=True):
+                def decode():
+                    with closing(_connect(db)) as conn:
+                        return _decode_run(folder,conn,run_id)['views'].get(gid)
+                view=cache.extra('opening_view',f'{run_id}|{gid}|{_profiles_stat(folder,run_id)}',decode,rank[1])
+                if view is not None:
+                    views[gid]=view
+                    break
+    return games,views
+
+
 def build_postgames(directory):
     """Read only hash-verified archives; no additional API calls or ledger writes."""
-    from .dashboard import dashboard_data
     folder=Path(directory)
     sources=_archived(folder/'raw')
     errors=[]
-    data=dashboard_data(folder)
-    games={g['game_id']:g for g in data['games']}
+    scheduled,views=_opening_forecasts(folder)
+    games={g['game_id']:dict(g,forecast=views.get(g['game_id'])) for g in scheduled}
     output=folder/'postgame'
     output.mkdir(exist_ok=True)
     count=0

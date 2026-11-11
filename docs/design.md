@@ -56,12 +56,17 @@ Output contains `model_version`, `as_of`, `season`, `predictions`,
 `usage_proxy`, `points_mean`, `points_sd`, `points_lower80`,
 `points_upper80` (null when unsupported), `history_games`, `flags`,
 and `components` with model audit details. Out players have zero projections.
+`store.stored_forecast(snapshot, forecast)` is what a tick saves: the same
+forecast without the `no_game` rows of teams outside the snapshot's games,
+which `coverage` (`roster_players`, `pool_rows`, `by_status`) still counts.
 
 `store.save_run(db_path, snapshot, history, forecast, mode='live', scope='league')
 -> str`: transactionally save full canonical inputs and output with SHA256,
 actual wall-clock created_at and unique run_id. Live must be saved before all
 tipoffs, with snapshot.as_of <= now; replay/demo can use past dates but are
 explicitly excluded from live metrics. League scope requires 30 roster teams.
+The predictions are every roster player once, or every roster player of the
+slate's teams once with the others counted in `coverage`.
 No mutation of existing predictions. No silent replacement on rerun.
 `store.evaluate_run(db_path, run_id, actuals) -> dict`: matching final normalized
 rows only. Repeated actuals identical are idempotent; corrections append an

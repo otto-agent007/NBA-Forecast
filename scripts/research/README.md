@@ -10,12 +10,40 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `absence_minutes.py` | How much the margin misses per ten minutes of reported-out regulars, home minus away; the measurement behind `margins.absence_adjustment` | the same, plus the histories and T−30 injury reports |
 | `clv.py` | Closing-line value: does a night-before forecast move the opener? With the point-differential placebo | a night-before replay's `rows.json.gz`, closing lines, the archived ESPN odds responses under `data/market-history/` (gitignored) |
 | `line_lag.py` | How stale the ESPN closing line is against Kalshi's price at tip, on the live captures | `production/market/game-lines`, finals, Kalshi's public API (cached under `data/research/kalshi`) |
+| `fallback_margins.py` | Why live pregame runs published the player-sum margin fallback, when, how wrong against the result next to the same game's nearest estimated run, and what the market report scores once a partial-roster sum is no margin | `news_timing.py extract`'s per-(run, game) file (branch measure/news-timing), the operations copy's schedule, finals and game lines |
 | `early_season.py` | The model against the close by weeks since opening night, and whether players absent with no minutes for the team this season are a systematic margin miss | seeded early-season replays (`docs/backtest.md`, "Early-season replay"), team games, closing lines, histories, T−30 reports |
 | `previous_ids.py` | A previous season's box scores under the next season's player IDs, for seeding 2025-26 from ESPN's 2024-25 | the two histories |
 | `clutch.py` | Whether clutch shooting persists year to year beyond a player's season shooting, against what chance alone gives | the NBA clutch archive (`datasets/clutch-2026-10-22`), the gate's histories |
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
+| `evidence_key_extract.py` | One read of the live runs of a window into a compact per-run summary (game evidence, history digest, model key, margin, players) | an operations directory (read-only; a copy preferred) |
+| `evidence_key_validate.py` | Replays the per-game evidence key over saved live runs: how many re-forecasts it makes, and whether any forecast change happened with the key unchanged (a miss) | the extract above; file write times of the same directory |
+| `evidence_key_verify_tick.py` | On a copy, keys every archived report check of a date with the real parser and roster, checks the league-input digest is deterministic and cheap, and every game's full key is stable | a production copy, the tick's history file |
+| `derived_trigger_simulation.py` | Replays the derived service's trigger under the old rule and with run-only changes waiting 30 minutes: rebuilds and busy hours | an operations directory (read-only): two ledger timestamp columns, `derived.jsonl`, file write times |
+| `tick_memo_check.sh` | Main against this branch on one production copy: merged history, player pages and index identical; history-phase and sync CPU; prepared inputs and forecasts of the newest games identical, cold and warm (helpers `tick_memo_tick_identity.py`, `tick_memo_prepare_identity.py`, `tick_memo_snapshots.py`, `tick_memo_compare.py`, `tick_memo_offline.py`) | a production copy (never production: it makes hard-linked views), two checkouts |
+| `dashboard_compare_servers.py` | Serves one frozen operations copy from main and from this branch and checks every game's calendar fields, each day's details, the other top-level keys and the daily reviews are equal; page and endpoint timings | a frozen production copy, two checkouts |
 | `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
+| `derived_equivalence.py` | Main's full derived rebuild against this branch's cached one on the same copy: every output file identical, cold, warm and after new runs, with timings | a production copy (or `--ledger` subset), two checkouts |
+| `derived_gate_check.py` | On a copy: the cached interval-calibration fit equals its direct re-fit (the activation gate), and margin samples through the cache equal the direct ledger read; what each costs | a production copy, `PYTHONPATH` this checkout |
+| `subset_ledger.py` | Copies the newest N runs of a ledger, with their histories and evaluations and original rowids, for the checks above | a copy's ledger |
+| `live_replay.py` | How the code of the checkout it sits in scores on the live forecasts' own inputs: each finished game's final pregame run (or `--which first`) re-forecast from its saved snapshot and history, `frozen` (the snapshot as stored; a run of the same release must come back byte for byte) or `rebuilt` (the prepared model inputs, team ratings and market strength included, prepared again as of the run), scored beside what was published and the close; `--compare` pairs two outputs game by game | a production copy (never production): `state.json`, the ledger's `run_records` and `histories` by key, `model-artifacts`, `environment-finals`, `market/game-lines`, `finals` |
+| `path_scoreboards.py` | The baseline and production paths side by side: levels pooled and per season, the close on the same games, the gate's paired production-minus-baseline differences, and the winner Brier under the published distribution's home-win probability | two references' `scoreboard.json` and `rows.json.gz` |
+| `export_production_artifact.py` | Whether a dataset artifact still matches what production runs (every field `backtest --production-path` reads), and the export of the live one for it | an operations directory (read only) |
+| `live_inputs.py` | What live forecasts carry that the production-path replay does not build: historical priors, shot quality, role context, lineups, calibration, margin status | an operations directory's saved runs (read only) |
+| `replay_components.py` | Runs the gate unchanged and also saves each replayed game's margin components (player sum, edge, ratings, absence term, every reported-out player's `components.absence`) | the backtest's own arguments |
+| `absence_harness.py` | Re-scores a reference's margins under a different absence rule without a replay (who counts as an absent regular, and for how much); proves itself against `replay_components.py` output to the digit; what a reported-out minute is worth by group, on the close and the outcomes | a reference's `rows.json.gz`, the gate's histories, team games, injury reports and closing lines |
+| `absence_live.py` | The same rules on the live games of a production copy: each out player's log rebuilt from the copy's finals and checked against the saved record | a production copy (`market/report.json`, ledger by run id, finals, schedule) |
+| `line_blend.py` | How much leaning the published margin on the market line would change accuracy: the replay with the close (an upper bound), and live with the last line captured by each forecast's `as_of` | a reference's `rows.json.gz` and closing lines; a production copy |
+| `news_timing.py` | When the line moves 1.5+ points in the last six hours before tip, did the forecast see the availability news that moved it (official report editions we captured, ESPN injury lists we archived), and did it move as much? Timing chain news published → captured → first run applying it → line move, a three-way class per move, the slope of our move on the line's move (date-clustered), and the last pre-tip edition's questionable/probable players against the box score and our final participation probability. `extract` reads every pregame run once into a small file (rows by `run_id`, throttled); `prepare` parses the captured editions; `analyze` prints the tables | a production copy (never production): `state.json`, the ledger's `run_records` by key, `injuries/games/*/records`, `raw/*.pdf`, `market/game-lines`, `market/kalshi`, the summary pages under `references/raw`, `finals` |
+| `error_decomposition.py` | Where the margin, player-points and team-points errors against actual outcomes come from, live and in the backtest: each margin half alone (player sum, team rating with and without the absence term) and the blend weight that minimises the error, calibration of actual on forecast, error by games played and roster continuity, whether team errors persist, players by projected minutes / starter / new team with the share of points error that is minutes, team-points bias; corrections fitted on the backtest applied live, ranked. `replay` runs the backtest with read-only hooks that record each game's halves (`halves.json.gz`) | `live_replay.py` output (and the lineup oracle's O3), the production-path reference, seeded production-path replays made with `replay`, histories, team games, closing lines |
+| `lineup_oracle.py` | An upper bound, labelled as one: how much of the live gap to the close closes if the final pregame forecast knew who played (O1), also who started (O2), also everyone's minutes (O3), applied as input overrides before `model.forecast` so the model's own allocation, absence term and scoreline react; O0 installs the hooks and must reproduce the reference replay; `tables` pairs each level with the reference (margin, gap to the close, winner Brier, team and player points, minutes, the split by availability surprise, and which margin half moved) | `live_replay.py`'s inputs and a reference rebuilt output; the copy's `finals` |
+| `live_components.py` | Which live-only inputs help or hurt live accuracy: replays the live ledger (`live_replay.py`, rebuilt mode) with role context, the shot-quality adjustment, prior-season aggregate priors, all three, the team-rating absence term (off or at half size), or its non-official inputs switched off before `model.forecast` (shallow snapshot copy; the package is unchanged; `none` must reproduce the reference byte for byte), and prints `lineup_oracle.py tables` against actual results plus a per-variant audit of what each component did. Heavy: run through the flock/scope/guard wrapper, overnight. |
+| `absence_scale.py` | How big the team-rating absence term should be: pairs backtests run with `margins.absence_rating_per_minute` at 0 (and another size) with their reference on the same games, against actual results (margin error, winner Brier, ± one SE clustered by Eastern date), and estimates the squared-error-best size as 1 − the slope of (actual − reference) on (term off − reference); optional split by days since opening night | reference and variant backtest `--output` folders; `datasets/` team-games for dates |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
+| `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
+| `run_ids_cold.py` | What listing a ledger's run IDs costs from a cold page cache through the `runs` view against `run_records` | a copy of a ledger |
+| `sqlite_tmpdir_probe.py` | Where this host's SQLite writes a spilled sort's temporary files under each way of choosing the directory | a scratch directory |
+| `stored_run_bytes.py` | Where a stored run's bytes are: `forecast_json` on-game / off-game rows / rest, `snapshot_json` by key, the `runs/<run_id>/` files, the evaluations; growth per day and what a compaction would remove | a copy of an operations directory (read-only, rows by rowid) |
+| `stored_forecast_equivalence.py` | Whether leaving the off-slate rows out of stored forecasts (`store.stored_forecast`) changes anything a reader uses: replay, stored rows, evaluations, derived reports, dashboard, and main reading slim runs | a copy of an operations directory, a main checkout and the branch |
 
 ## Reproduced on 2026-10-26
 
@@ -66,6 +94,15 @@ before 2026-10-27).
 window; per ten uncounted last-season minutes over the first 30% of dates, model
 miss −0.04 ± 0.16, close −0.12 ± 0.04 relative to the model.
 
+## Run on 2026-11-10
+
+`live_replay.py` with main `1385e80` on the 134 finished live games with a
+pregame run (`docs/backtest.md`, "Live replay"): on the 122 with a close,
+rebuilt margin MAE 11.77 against 12.51 published and the close's 10.76, today −
+close +1.01 ± 0.29 (one standard error, Eastern-date clusters); without the
+four games published 10+ points from the close +1.04 ± 0.29, and today −
+published +0.03 ± 0.12. Every v4 run came back byte for byte.
+
 ## Run on 2026-11-06
 
 `close_teacher.py --reference datasets/backtest-2026-11-06-rating-weight`:
@@ -100,3 +137,152 @@ half-life, ridge 0.1) blended into the rating: 0.5 share −0.075 ± 0.018,
 +0.186 at the 0.7 share. The 0.7 share is what `backtest-2026-11-07-market-strength`
 gated (margin −0.090 ± 0.050 at two standard errors, winner Brier −0.0023 ±
 0.0011, improved).
+
+## Measured on 2026-11-09 (operations)
+
+`rescore_after_deploy.py` on the last 400 runs (352 evaluation revisions) of the
+2026-10-29 production ledger, in a private copy, with that day's
+`evaluation-state.json` (written by another release, as after a deploy); main
+at 1385e80 against this branch at 2a2f403, one call standing for one tick. The
+host's disk was saturated by a production copy, so seconds are slow and vary
+with the page cache (main's natural call ran with a cooler cache than its forced
+call).
+
+| Scenario | Calls | First call s | Slowest call s | Re-scored or re-checked runs | Revisions | End state |
+|---|---|---|---|---|---|---|
+| main, the code as deployed | 1 | 234.03 | 234.03 | 299 | 0 | start |
+| branch, same | 7 | 20.52 | 77.33 | 400 | 0 | start |
+| main, a release that changes evaluation (`--changed-absences`) | 1 | 60.82 | 60.82 | 299 | 33 | `c3b5b7a8` |
+| branch, same | 3 | 20.30 | 20.42 | 400 | 33 | `c3b5b7a8` |
+
+The drained branch leaves the evaluations table identical to main's (row
+count, newest rowid, SHA-256 of run, revision and actuals hash in key order),
+and its next call takes 0.34 s. A call is held to the budget plus one run
+except for what comes before the re-checks, chiefly listing the runs (the
+77.33 s call was not broken down). `run_ids_cold.py` on the same copy, cold:
+through the `runs` view 255.86 s and 415.7 MB read, from `run_records` 30.51 s
+and 1.1 MB, identical rows; warm, 0.096 s against under 0.001 s. `_run_ids`
+and the derived service's `_ledger_state` (row counts through the same view,
+every minute) now read `run_records`. The dashboard's `_ledger_key` and other
+readers still count or list through the view.
+
+## Run on 2026-11-09 (stored run bytes)
+
+`stored_run_bytes.py --directory scratch/2026-10-29-derived/production-copy --runs 6 --step 40`
+(six live runs of 10-28 and 10-29 read by rowid; their `runs/<run_id>/` files read,
+read-only, from production): `forecast_json` 2.084 MB a run, of which the
+game's 35 rows 0.927 MB, the other 487 rows 0.945 MB (45.3%; every one `no_game`
+with no game; 447 kB of it each player's history game IDs, 291 kB null
+fields) and the rest 0.212 MB (`allocation_audit` 0.180). `snapshot_json`
+0.863 MB: `model_enhancements` 0.347, `shot_quality` 0.190, `role_context`
+0.093, the other teams' roster entries 0.095 (11.1%), the game's 0.017. Run
+files: `forecast.json` 2.084 MB, `snapshot.json` 0.863, `profiles.json` 0.831
+(0.766 of it other teams' players). An evaluation's `report_json` is about
+164 kB, 39 kB of it `no_game` exclusions. At 240 runs a day the ledger rows
+grow 707 MB a day before and 481 MB after (−227 MB), the run files 907 → 680 MB.
+
+`stored_forecast_equivalence.py` on the same copy, 24 live runs of 10-26 to
+10-29 UTC (12 final, 12 preliminary, three model keys), the newer 15 saved
+slim in the mixed ledger and 9 kept as stored: main and the branch recompute
+the same bytes 24/24, none of them its stored forecast (saved by releases
+before 10-30; main's and the branch's validators both reject all 24 stored
+forecasts, "Forecast margins disagree…", so the 15 slim runs were inserted
+with their own hash); 15/15 slim runs equal the stored forecast in every
+top-level key and every row of the game; evaluations equal except
+`sample_counts.predictions`, `sample_counts.excluded` and `excluded` (486.2
+`no_game` entries fewer a report, 163.7 → 124.4 kB), and main scoring the
+mixed ledger writes the same bytes 21/21; derived reports: 64 of 72 files
+identical, the rest differ only in the off-slate counters
+(`performance.json` `off_slate_rows_ignored`, `collection_exclusions.off_slate`
+in the calibration and model status), the quoted `forecast_sha256` and the
+digests over it (daily-review `input_signature`, `residual_evidence_sha256`),
+9/9 such digests checked by recomputation; main on the mixed ledger writes the
+same 75 files; dashboard game payloads equal 1206/1206 (12 showing a slim
+run). With `--dev-recompute` (today's forecasts from the same snapshots, so
+both ledgers save through `save_run`): 15/15 slim runs through the branch's
+`save_run`, the same results.
+
+The newest runs, on 2026-11-10 (the fresh production copy was not ready; files
+read, read-only, from production's `runs/<run_id>/`):
+`stored_run_bytes.py --files-from production --newest-folders 6` (runs of
+02:16 to 02:52 UTC): `forecast_json` 2.186 MB, the other teams' 486 rows 0.977
+MB (44.7%), the game's 36 rows 0.916, the rest 0.293 (`allocation_audit`
+0.261); `snapshot_json` 1.196 MB (`model_enhancements` 0.415, `shot_quality`
+0.366, `role_context` 0.126, other teams' roster 0.095, 8.0%); `profiles.json`
+0.914 MB, 0.840 of it other teams' players. At 240 runs a day: ledger rows 812
+→ 577 MB a day (−235 MB), run files 1031 → 796 MB. The 4106 run folders hold
+about 4.0 GB of off-game rows in the ledger and as much again in their
+`forecast.json` (estimate: sample mean times count).
+`stored_forecast_equivalence.py --folders 30 --files-from production` (runs of
+00:37 to 02:52 UTC, final and preliminary): main's and the branch's validators
+accept all 30 stored forecasts, the branch accepts all 30 in the stored shape,
+which is exactly the stored forecast without the other teams' rows, as many as
+`coverage.by_status.no_game`: 30/30. After `stored_forecast` began validating the
+whole forecast before leaving rows out (review finding B2-1), the same 30/30, and
+per run (median over the 30, `nice -n 19` on the busy host): the added
+`_validate_forecast` of the whole forecast 24 ms, all of `stored_forecast` (JSON
+round trip of snapshot and forecast plus that validation) 132 ms, `save_run`'s own
+validation of the stored shape 17 ms.
+
+On the fresh copy (`scratch/2026-11-09-rebuild/production-copy-1109`, copied
+2026-11-10T10:11:59Z, 4106 runs, 16.80 GB), after the B2-1 fix:
+`stored_run_bytes.py --runs 8 --step 60` (runs of 11-08 to 11-10):
+`forecast_json` 2.228 MB, off-game rows 0.981 (44.0%), the game's rows 0.981,
+the rest 0.267 (`allocation_audit` 0.234); `snapshot_json` 1.139 MB, other
+teams' roster 0.096 (8.4%); `profiles.json` 0.914, 0.843 of it other teams'
+players; evaluation `report_json` 162–168 kB, 39.3–39.7 kB of it `no_game`
+exclusions. Ledger rows 808 → 573 MB a day at 240 runs (−235 MB), run files
+1027 → 792 MB. A compaction of what is stored would remove about 4.03 GB of
+the ledger's `forecast_json` (4106 runs), 0.29 GB of `report_json` (7372
+revisions) and 4.03 GB of `forecast.json` files (estimates: sample mean times
+count).
+`stored_forecast_equivalence.py --sample-days 5 --per-day 3 --replay all`: 29
+runs of 11-06 to 11-10 UTC (14 final, 15 preliminary, four model keys), 18
+slim, 11 kept as stored; main and the branch recompute the same bytes 29/29;
+21/29 reproduce their stored forecast exactly (every run of model keys
+`bed6565e` and `0168f8c3`), the 8 of 11-06 and 11-07 (keys `717925c7`,
+`35523790`) differ under main the same way in `game_totals`,
+`margin_forecasts` and `predictions`, and both validators reject them the same
+way; all 18 slim runs saved through the branch's `save_run`, 18/18 equal to the
+stored forecast in every top-level key and game row; evaluations differ only in
+`sample_counts.predictions`, `sample_counts.excluded` and `excluded` (487.9
+entries fewer, 166.2 → 126.7 kB), main writes the same revisions 29/29 from the
+mixed ledger, and the full ledger's reports equal production's own 29/29;
+derived reports 154 of 162 files identical, the rest only off-slate counters,
+the stored hash and digests over it (7/7 recomputed; the refitted interval
+calibration artifact differs only in `off_slate` and
+`residual_evidence_sha256`, hence its file name and `artifact_sha256`); main on
+the mixed ledger writes the same 165 files; dashboard game payloads equal
+1206/1206 (12 showing a slim run). RESULT OK.
+
+## Run on 2026-11-09 (absence harness)
+
+`absence_harness.py --reference datasets/backtest-2026-11-07-market-strength
+--components <replay_components.py run>/components.json.gz` (25 s): 0 of 2,604
+games differ from the replay in their out players; largest differences 5.3e-15
+in the absence term and 7.1e-15 in the location (the same on the seeded replay's
+3,676 games). Who counts as an absent regular, and for how much, against the
+current rule, one date-clustered standard error: share-of-season, share-of-last-ten
+and rating-weighted shares +0.003, +0.004 and −0.007 on margin MAE but +0.0010
+to +0.0012 on winner Brier; 0.075 a minute −0.035 ± 0.017; 0.075 plus 0.035 for
+regulars out for all of the last ten −0.051 ± 0.022 and −0.0009 ± 0.0004. All
+`within_noise` on the gate; the real gate run of the last agreed to 7.1e-15 per
+margin. Written up in `docs/backtest.md`, "Tried, not merged: 2026-11-09".
+`absence_live.py` on production (read-only, by run id): the same direction
+live, toward a smaller term, within two standard errors on 97 games.
+
+`line_blend.py --reference datasets/backtest-2026-11-07-market-strength
+--market-history data/market-history` and `--live <production or a copy>`:
+blending the published margin with the line, (1 − w) × model + w × line. Replay
+with the close (an upper bound): margin MAE 11.161 at w = 0, 10.898 at w = 0.85
+and 1 (−0.264 ± 0.057 and −0.263 ± 0.066); with the opener (a lower bound)
+best near w = 0.5–0.65 (−0.145 ± 0.054) and worse than that at w = 1 (−0.058 ±
+0.079). Live, the last DraftKings line captured by each forecast's `as_of`: the
+final forecast (median 11 minutes before tip, its line 0.10 points from the
+close) 12.118 at w = 0 against 10.850 at w = 1 (−1.268 ± 0.405, 120 games); the
+first forecast of the day (median 446 minutes before tip, its line 0.79 from
+the close) 11.871 against 10.882 (−0.989 ± 0.283, 110 games). Not adopted (owner,
+2026-11-10): the model is to beat the line without using it as an input. The
+figures stay as a measure of the gap the model has to close on its own; that
+the line-weighted error falls all the way to w = 1 live says the model's
+disagreements with the line carry no information yet.
