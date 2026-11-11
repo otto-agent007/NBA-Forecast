@@ -8,7 +8,8 @@
 2. Verify availability. Do not infer healthy/available from roster membership or
    absence from an incomplete injury list. Unknown and questionable statuses
    deliberately abstain. Status evidence expires after 24h; rosters after 48h.
-3. Run validation and the deterministic baseline. Every player is represented;
+3. Run validation and the deterministic baseline. Every player is represented
+   (a tick stores the slate's players' rows and counts the rest in `coverage`);
    inspect the numeric, withheld, out and off-slate coverage counts.
 4. Route routine source/status gaps to inexpensive extraction or a human data
    check. Route trades, changed rotations, coaching decisions, lineup roles and

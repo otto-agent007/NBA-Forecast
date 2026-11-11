@@ -19,6 +19,8 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
 | `run_ids_cold.py` | What listing a ledger's run IDs costs from a cold page cache through the `runs` view against `run_records` | a copy of a ledger |
 | `sqlite_tmpdir_probe.py` | Where this host's SQLite writes a spilled sort's temporary files under each way of choosing the directory | a scratch directory |
+| `stored_run_bytes.py` | Where a stored run's bytes are: `forecast_json` on-game / off-game rows / rest, `snapshot_json` by key, the `runs/<run_id>/` files, the evaluations; growth per day and what a compaction would remove | a copy of an operations directory (read-only, rows by rowid) |
+| `stored_forecast_equivalence.py` | Whether leaving the off-slate rows out of stored forecasts (`store.stored_forecast`) changes anything a reader uses: replay, stored rows, evaluations, derived reports, dashboard, and main reading slim runs | a copy of an operations directory, a main checkout and the branch |
 
 ## Reproduced on 2026-10-26
 
@@ -131,3 +133,92 @@ and 1.1 MB, identical rows; warm, 0.096 s against under 0.001 s. `_run_ids`
 and the derived service's `_ledger_state` (row counts through the same view,
 every minute) now read `run_records`. The dashboard's `_ledger_key` and other
 readers still count or list through the view.
+
+## Run on 2026-11-09
+
+`stored_run_bytes.py --directory scratch/2026-10-29-derived/production-copy --runs 6 --step 40`
+(six live runs of 10-28 and 10-29 read by rowid; their `runs/<run_id>/` files read,
+read-only, from production): `forecast_json` 2.084 MB a run, of which the
+game's 35 rows 0.927 MB, the other 487 rows 0.945 MB (45.3%; every one `no_game`
+with no game; 447 kB of it each player's history game IDs, 291 kB null
+fields) and the rest 0.212 MB (`allocation_audit` 0.180). `snapshot_json`
+0.863 MB: `model_enhancements` 0.347, `shot_quality` 0.190, `role_context`
+0.093, the other teams' roster entries 0.095 (11.1%), the game's 0.017. Run
+files: `forecast.json` 2.084 MB, `snapshot.json` 0.863, `profiles.json` 0.831
+(0.766 of it other teams' players). An evaluation's `report_json` is about
+164 kB, 39 kB of it `no_game` exclusions. At 240 runs a day the ledger rows
+grow 707 MB a day before and 481 MB after (−227 MB), the run files 907 → 680 MB.
+
+`stored_forecast_equivalence.py` on the same copy, 24 live runs of 10-26 to
+10-29 UTC (12 final, 12 preliminary, three model keys), the newer 15 saved
+slim in the mixed ledger and 9 kept as stored: main and the branch recompute
+the same bytes 24/24, none of them its stored forecast (saved by releases
+before 10-30; main's and the branch's validators both reject all 24 stored
+forecasts, "Forecast margins disagree…", so the 15 slim runs were inserted
+with their own hash); 15/15 slim runs equal the stored forecast in every
+top-level key and every row of the game; evaluations equal except
+`sample_counts.predictions`, `sample_counts.excluded` and `excluded` (486.2
+`no_game` entries fewer a report, 163.7 → 124.4 kB), and main scoring the
+mixed ledger writes the same bytes 21/21; derived reports: 64 of 72 files
+identical, the rest differ only in the off-slate counters
+(`performance.json` `off_slate_rows_ignored`, `collection_exclusions.off_slate`
+in the calibration and model status), the quoted `forecast_sha256` and the
+digests over it (daily-review `input_signature`, `residual_evidence_sha256`),
+9/9 such digests checked by recomputation; main on the mixed ledger writes the
+same 75 files; dashboard game payloads equal 1206/1206 (12 showing a slim
+run). With `--dev-recompute` (today's forecasts from the same snapshots, so
+both ledgers save through `save_run`): 15/15 slim runs through the branch's
+`save_run`, the same results.
+
+The newest runs, on 2026-11-10 (the fresh production copy was not ready; files
+read, read-only, from production's `runs/<run_id>/`):
+`stored_run_bytes.py --files-from production --newest-folders 6` (runs of
+02:16 to 02:52 UTC): `forecast_json` 2.186 MB, the other teams' 486 rows 0.977
+MB (44.7%), the game's 36 rows 0.916, the rest 0.293 (`allocation_audit`
+0.261); `snapshot_json` 1.196 MB (`model_enhancements` 0.415, `shot_quality`
+0.366, `role_context` 0.126, other teams' roster 0.095, 8.0%); `profiles.json`
+0.914 MB, 0.840 of it other teams' players. At 240 runs a day: ledger rows 812
+→ 577 MB a day (−235 MB), run files 1031 → 796 MB. The 4106 run folders hold
+about 4.0 GB of off-game rows in the ledger and as much again in their
+`forecast.json` (estimate: sample mean times count).
+`stored_forecast_equivalence.py --folders 30 --files-from production` (runs of
+00:37 to 02:52 UTC, final and preliminary): main's and the branch's validators
+accept all 30 stored forecasts, the branch accepts all 30 in the stored shape,
+which is exactly the stored forecast without the other teams' rows, as many as
+`coverage.by_status.no_game`: 30/30. After `stored_forecast` began validating the
+whole forecast before leaving rows out (review finding B2-1), the same 30/30, and
+per run (median over the 30, `nice -n 19` on the busy host): the added
+`_validate_forecast` of the whole forecast 24 ms, all of `stored_forecast` (JSON
+round trip of snapshot and forecast plus that validation) 132 ms, `save_run`'s own
+validation of the stored shape 17 ms.
+
+On the fresh copy (`scratch/2026-11-09-rebuild/production-copy-1109`, copied
+2026-11-10T10:11:59Z, 4106 runs, 16.80 GB), after the B2-1 fix:
+`stored_run_bytes.py --runs 8 --step 60` (runs of 11-08 to 11-10):
+`forecast_json` 2.228 MB, off-game rows 0.981 (44.0%), the game's rows 0.981,
+the rest 0.267 (`allocation_audit` 0.234); `snapshot_json` 1.139 MB, other
+teams' roster 0.096 (8.4%); `profiles.json` 0.914, 0.843 of it other teams'
+players; evaluation `report_json` 162–168 kB, 39.3–39.7 kB of it `no_game`
+exclusions. Ledger rows 808 → 573 MB a day at 240 runs (−235 MB), run files
+1027 → 792 MB. A compaction of what is stored would remove about 4.03 GB of
+the ledger's `forecast_json` (4106 runs), 0.29 GB of `report_json` (7372
+revisions) and 4.03 GB of `forecast.json` files (estimates: sample mean times
+count).
+`stored_forecast_equivalence.py --sample-days 5 --per-day 3 --replay all`: 29
+runs of 11-06 to 11-10 UTC (14 final, 15 preliminary, four model keys), 18
+slim, 11 kept as stored; main and the branch recompute the same bytes 29/29;
+21/29 reproduce their stored forecast exactly (every run of model keys
+`bed6565e` and `0168f8c3`), the 8 of 11-06 and 11-07 (keys `717925c7`,
+`35523790`) differ under main the same way in `game_totals`,
+`margin_forecasts` and `predictions`, and both validators reject them the same
+way; all 18 slim runs saved through the branch's `save_run`, 18/18 equal to the
+stored forecast in every top-level key and game row; evaluations differ only in
+`sample_counts.predictions`, `sample_counts.excluded` and `excluded` (487.9
+entries fewer, 166.2 → 126.7 kB), main writes the same revisions 29/29 from the
+mixed ledger, and the full ledger's reports equal production's own 29/29;
+derived reports 154 of 162 files identical, the rest only off-slate counters,
+the stored hash and digests over it (7/7 recomputed; the refitted interval
+calibration artifact differs only in `off_slate` and
+`residual_evidence_sha256`, hence its file name and `artifact_sha256`); main on
+the mixed ledger writes the same 165 files; dashboard game payloads equal
+1206/1206 (12 showing a slim run). RESULT OK.

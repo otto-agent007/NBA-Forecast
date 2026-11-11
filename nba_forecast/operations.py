@@ -18,7 +18,7 @@ from .injuries import fetch_injury_check
 from .injury_parser import pdf_text,parse_report,apply_report,PARSER_VERSION
 from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
-from .store import save_run,evaluate_run,performance_report,_is_legacy
+from .store import save_run,evaluate_run,performance_report,_is_legacy,stored_forecast
 from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check,reported_unavailable
 from .preflight import run_preflight,PREFLIGHT_VERSION
@@ -759,7 +759,9 @@ def _forecast_job(folder,job,tick):
         return
     snapshot['preflight']=verification
     profiles=build_profiles(snapshot,usable)
-    prediction=forecast(snapshot,usable)
+    # The ledger and the run's forecast.json keep the game's players; the rest of the
+    # league roster (no_game rows) stays as counts in the forecast's coverage.
+    prediction=stored_forecast(snapshot,forecast(snapshot,usable))
     run_id=save_run(db,snapshot,usable,prediction)
     # The immutable operation_key in the run is authoritative if interrupted here.
     state['jobs'][job['key']]=run_id
