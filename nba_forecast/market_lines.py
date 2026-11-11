@@ -363,7 +363,8 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     folder = Path(folder)
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     games = {g['game_id']: g for g in schedule.get('games', []) if g.get('start_time') and g.get('status') not in ('postponed', 'cancelled', 'tbd')}
-    chosen = selected if selected is not None else _selected(folder, games, as_of, schedule.get('season'))
+    # Only the chosen runs' totals and margin are read here, not their predictions.
+    chosen = selected if selected is not None else _selected(folder, games, as_of, schedule.get('season'), predictions=False)
     rows = []
     errors = []
     unavailable = []

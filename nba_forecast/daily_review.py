@@ -36,80 +36,160 @@ def _read(path,default=None):
     return json.loads(path.read_text()) if path.exists() else default
 
 
-def _runs(conn,game_ids,columns):
-    """Live league runs that saved one of these games; no other run is parsed."""
-    return conn.execute(f"SELECT rowid AS insertion_order,{columns} FROM runs WHERE mode='live' AND scope='league' AND EXISTS "
-        "(SELECT 1 FROM json_each(snapshot_json,'$.games') AS g WHERE json_extract(g.value,'$.game_id') IN (SELECT value FROM json_each(?)))",
-        (json.dumps(sorted(game_ids)),))
+def review_facts(parsed):
+    """A live league run as the selectors' ledger query read it, before any game list is applied.
+
+    ``parsed`` is a ``derived_cache.Parsed`` row: the saved games' identities and
+    IDs, and the forecast's season and stage as ``json_extract`` returned them.
+    SQLite fails the whole query on JSON it cannot read; that is kept too.
+    """
+    from .derived_cache import _game_identities,_sql_json,_sql_value
+    try:
+        snapshot=parsed.snapshot()
+    except ValueError:
+        return dict(snapshot_malformed=True)
+    games=_game_identities(_sql_value(snapshot,('games',)))
+    try:
+        forecast=parsed.forecast()
+    except ValueError:
+        return dict(snapshot_malformed=False,forecast_malformed=True,games=games)
+    totals=_sql_value(forecast,('game_totals',))
+    complete=[t.get('game_id') for t in totals if t.get('status')=='complete'] if isinstance(totals,list) else []
+    return dict(snapshot_malformed=False,forecast_malformed=False,games=games,
+                season=_sql_json(forecast,('season',)),stage=_sql_json(forecast,('forecast_stage',)),
+                complete_totals=complete)
 
 
-def _selected(folder,games,as_of,season):
+def _runs(folder,game_ids,*,forecast=True):
+    """Live league runs that saved one of these games, in insertion order; no other run is read.
+
+    Read from the derived sidecar (``derived_cache``), extracted once per run.
+    ``forecast=False`` is ``_later``'s query, which never read the forecast JSON:
+    no season or stage, and a forecast that cannot be decoded is not an error here.
+    """
+    from contextlib import closing
+    from .derived_cache import game_ids as saved_ids,open_cache
+    wanted=set(game_ids)
+    with closing(open_cache(folder/'forecast.sqlite')) as cache:
+        runs=cache.rows('review')
+    for run in runs:
+        if run['mode']!='live' or run['scope']!='league':
+            continue
+        facts=run['value']
+        if facts['snapshot_malformed']:
+            raise sqlite3.OperationalError('malformed JSON')
+        if not any(gid in wanted for gid in saved_ids(facts['games'])):
+            continue
+        if not forecast:
+            yield dict(insertion_order=run['insertion_order'],run_id=run['run_id'],created_at=run['created_at'],
+                       saved_games=facts['games'])
+            continue
+        if facts['forecast_malformed']:
+            raise sqlite3.OperationalError('malformed JSON')
+        yield dict(insertion_order=run['insertion_order'],run_id=run['run_id'],created_at=run['created_at'],
+                   season=facts['season'],stage=facts['stage'],saved_games=facts['games'],
+                   complete_totals=facts['complete_totals'])
+
+
+def _frozen(folder,rowid,gid,home,away,start,created):
+    """The verified parts of one chosen run for one game, or the error that rejects it (raised by the caller)."""
+    from .derived_cache import freeze_exception
+    try:
+        with sqlite3.connect(folder.joinpath('forecast.sqlite').resolve().as_uri()+'?mode=ro',uri=True) as conn:
+            conn.row_factory=sqlite3.Row
+            row=conn.execute('SELECT run_id,created_at,as_of,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE rowid=?',(rowid,)).fetchone()
+        for kind in ('snapshot','forecast'):
+            if hashlib.sha256(row[kind+'_json'].encode()).hexdigest()!=row[kind+'_sha256']:
+                raise ValueError('Frozen '+kind+' hash mismatch: '+row['run_id'])
+        snapshot=json.loads(row['snapshot_json'])
+        forecast=json.loads(row['forecast_json'])
+        if forecast['season']!=snapshot['season']:
+            raise ValueError('Frozen forecast season differs')
+        if not parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])==parse_time(row['as_of'])<=created:
+            raise ValueError('Frozen forecast chronology differs: '+row['run_id'])
+        predictions=[p for p in forecast['predictions'] if p['game_id']==gid]
+        if any(p['team_id'] not in (home,away) or parse_time(p['start_time'])!=start for p in predictions):
+            raise ValueError('Frozen prediction identity differs: '+row['run_id'])
+        entry=dict(run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
+            model_version=forecast['model_version'],model_key=forecast.get('model_key'),season=forecast['season'],
+            forecast_sha256=row['forecast_sha256'],
+            totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==gid),None),
+            margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==gid),None),
+            lineups=snapshot.get('preflight',{}).get('lineups'))
+        return dict(entry=entry),predictions
+    except (KeyError,ValueError,TypeError,AttributeError,OverflowError) as exc:
+        return dict(error=freeze_exception(exc)),None
+
+
+def _selected(folder,games,as_of,season,*,predictions=True):
     """Freeze one entire run per game/stage before opening any outcome file.
 
     Runs are ranked from the ledger columns and the saved game identities; only
-    the chosen run per game and stage is opened, verified and returned. When the
-    chosen run (final, else preliminary) saved incomplete team totals it publishes
-    no game margin (market_lines.published_margin); the latest earlier pregame run
-    of the game with complete totals is then opened too, as its ``margin_selection``.
+    the chosen run per game and stage is opened, verified and returned. Each
+    chosen run is opened and verified once per game in its lifetime (kept in the
+    derived sidecar); ``predictions=False`` leaves out the game's predictions for
+    callers that read only its totals and margin. When the chosen run (final, else
+    preliminary) saved incomplete team totals it publishes no game margin
+    (market_lines.published_margin); the latest earlier pregame run of the game with
+    complete totals is then opened too, as its ``margin_selection``.
     """
+    from contextlib import closing
+    from .derived_cache import open_cache,saved_games,thaw_exception
     db=folder/'forecast.sqlite'
     chosen={}
     cutoff=parse_time(as_of)
     if not db.exists() or not games:
         return chosen
-    with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
-        conn.row_factory=sqlite3.Row
-        ranked={}
-        complete={}
-        columns=("created_at,json_extract(forecast_json,'$.season') AS season,json_extract(forecast_json,'$.forecast_stage') AS stage,"
-                 "json_extract(snapshot_json,'$.games') AS saved_games,json_extract(forecast_json,'$.game_totals') AS saved_totals")
-        for row in _runs(conn,games,columns):
-            created=parse_time(row['created_at'])
-            stage=row['stage'] or 'preliminary'
-            if created>cutoff or row['season']!=season or stage not in ('preliminary','final'):
+    ranked={}
+    complete={}
+    for row in _runs(folder,games):
+        created=parse_time(row['created_at'])
+        stage=row['stage'] or 'preliminary'
+        if created>cutoff or row['season']!=season or stage not in ('preliminary','final'):
+            continue
+        totals=set(row['complete_totals'])
+        for saved in saved_games(row['saved_games']):
+            game=games.get(saved['game_id'])
+            if not game or game.get('status') in ('postponed','cancelled','tbd'):
                 continue
-            totals={t.get('game_id') for t in json.loads(row['saved_totals'] or '[]') if t.get('status')=='complete'}
-            for saved in json.loads(row['saved_games']):
-                game=games.get(saved['game_id'])
-                if not game or game.get('status') in ('postponed','cancelled','tbd'):
-                    continue
-                start=parse_time(game['start_time'])
-                if created>=start or parse_time(saved['start_time'])!=start:
-                    continue
-                if any(saved[k]!=game[k] for k in ('home_team_id','away_team_id')):
-                    continue
-                rank=(created,row['insertion_order'])
-                key=(game['game_id'],stage)
-                if key not in ranked or rank>ranked[key]:
-                    ranked[key]=rank
-                if game['game_id'] in totals:
-                    complete.setdefault(game['game_id'],[]).append((rank,stage))
+            start=parse_time(game['start_time'])
+            if created>=start or parse_time(saved['start_time'])!=start:
+                continue
+            if any(saved[k]!=game[k] for k in ('home_team_id','away_team_id')):
+                continue
+            rank=(created,row['insertion_order'])
+            key=(game['game_id'],stage)
+            if key not in ranked or rank>ranked[key]:
+                ranked[key]=rank
+            if game['game_id'] in totals:
+                complete.setdefault(game['game_id'],[]).append((rank,stage))
+    with closing(open_cache(db)) as cache:
 
-        def frozen(gid,rank):
+        def freeze(gid,rank):
             game=games[gid]
             start=parse_time(game['start_time'])
-            row=conn.execute('SELECT run_id,created_at,as_of,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE rowid=?',(rank[1],)).fetchone()
-            for kind in ('snapshot','forecast'):
-                if hashlib.sha256(row[kind+'_json'].encode()).hexdigest()!=row[kind+'_sha256']:
-                    raise ValueError('Frozen '+kind+' hash mismatch: '+row['run_id'])
-            snapshot=json.loads(row['snapshot_json'])
-            forecast=json.loads(row['forecast_json'])
-            if forecast['season']!=snapshot['season']:
-                raise ValueError('Frozen forecast season differs')
-            if not parse_time(forecast['as_of'])==parse_time(snapshot['as_of'])==parse_time(row['as_of'])<=rank[0]:
-                raise ValueError('Frozen forecast chronology differs: '+row['run_id'])
-            predictions=[p for p in forecast['predictions'] if p['game_id']==gid]
-            if any(p['team_id'] not in (game['home_team_id'],game['away_team_id']) or parse_time(p['start_time'])!=start for p in predictions):
-                raise ValueError('Frozen prediction identity differs: '+row['run_id'])
-            return dict(rank=rank,run_id=row['run_id'],created_at=row['created_at'],as_of=forecast['as_of'],
-                model_version=forecast['model_version'],model_key=forecast.get('model_key'),season=forecast['season'],
-                forecast_sha256=row['forecast_sha256'],predictions=predictions,
-                totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==gid),None),
-                margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==gid),None),
-                lineups=snapshot.get('preflight',{}).get('lineups'))
+            key=f"{rank[1]}|{gid}|{game['home_team_id']}|{game['away_team_id']}|{start.isoformat()}"
+            frozen=cache.get('selection',key)
+            rows=None
+            if frozen is None:
+                frozen,rows=_frozen(folder,rank[1],gid,game['home_team_id'],game['away_team_id'],start,rank[0])
+                cache.put('selection',key,frozen,rank[1])
+                if rows is not None:
+                    cache.put('selection_predictions',key,rows,rank[1])
+            else:
+                frozen=frozen[0]
+            if 'error' in frozen:
+                raise thaw_exception(frozen['error'])
+            entry=dict(rank=rank,**frozen['entry'])
+            if predictions:
+                if rows is None:
+                    saved=cache.get('selection_predictions',key)
+                    rows=saved[0] if saved is not None else _frozen(folder,rank[1],gid,game['home_team_id'],game['away_team_id'],start,rank[0])[1]
+                entry['predictions']=rows
+            return entry
 
         for (gid,stage),rank in sorted(ranked.items()):
-            chosen[(gid,stage)]=frozen(gid,rank)
+            chosen[(gid,stage)]=freeze(gid,rank)
         from .market_lines import published_margin
         for gid in sorted({gid for gid,_ in ranked}):
             selection=chosen.get((gid,'final')) or chosen[(gid,'preliminary')]
@@ -118,7 +198,7 @@ def _selected(folder,games,as_of,season):
             earlier=[(rank,stage) for rank,stage in complete.get(gid,[]) if rank<selection['rank']]
             if earlier:
                 rank,stage=max(earlier)
-                fallback=frozen(gid,rank)
+                fallback=freeze(gid,rank)
                 if published_margin(fallback,games[gid])[0] is not None:
                     selection['margin_selection']=dict(fallback,stage=stage)
     return chosen
@@ -435,28 +515,28 @@ def _later(folder,games,schedule,as_of):
             later=[g for g in playable if team in (g['home_team_id'],g['away_team_id']) and parse_time(g['start_time'])>start]
             if later:
                 following[(game['game_id'],team)]=min(later,key=lambda g:(parse_time(g['start_time']),g['game_id']))
+    from contextlib import closing
+    from .derived_cache import open_cache,saved_games,thaw_exception
     found={gid:{} for gid in games}
     db=folder/'forecast.sqlite'
     if not following or not db.exists():
         return found
     targets={g['game_id']:g for g in following.values()}
     runs={}
-    with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as conn:
-        conn.row_factory=sqlite3.Row
-        latest={}
-        for row in _runs(conn,targets,"created_at,json_extract(snapshot_json,'$.games') AS saved_games"):
-            created=parse_time(row['created_at'])
-            for saved in json.loads(row['saved_games']):
-                target=targets.get(saved['game_id'])
-                if target and created<=cutoff and created<parse_time(target['start_time']):
-                    rank=(created,row['insertion_order'])
-                    latest[saved['game_id']]=max(latest.get(saved['game_id'],rank),rank)
+    latest={}
+    for row in _runs(folder,targets,forecast=False):
+        created=parse_time(row['created_at'])
+        for saved in saved_games(row['saved_games']):
+            target=targets.get(saved['game_id'])
+            if target and created<=cutoff and created<parse_time(target['start_time']):
+                rank=(created,row['insertion_order'])
+                latest[saved['game_id']]=max(latest.get(saved['game_id'],rank),rank)
+    with closing(open_cache(db)) as cache:
         for gid,rank in sorted(latest.items()):
-            row=conn.execute('SELECT run_id,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE rowid=?',(rank[1],)).fetchone()
-            for kind in ('snapshot','forecast'):
-                if hashlib.sha256(row[kind+'_json'].encode()).hexdigest()!=row[kind+'_sha256']:
-                    raise ValueError('Frozen '+kind+' hash mismatch: '+row['run_id'])
-            runs[gid]=(row['run_id'],json.loads(row['snapshot_json']),json.loads(row['forecast_json']))
+            frozen=cache.extra('later',str(rank[1]),lambda:_later_run(folder,rank[1]),rank[1])
+            if 'error' in frozen:
+                raise thaw_exception(frozen['error'])
+            runs[gid]=(frozen['run_id'],dict(role_context=dict(events=frozen['events'])),dict(predictions=frozen['predictions']))
     for (gid,team),target in sorted(following.items()):
         if target['game_id'] not in runs:
             continue
@@ -465,11 +545,39 @@ def _later(folder,games,schedule,as_of):
             if event['game_id']==gid and event['team_id']==team:
                 found[gid].setdefault(event['player_id'],[]).append(dict(kind='recap_exit',detail=event['source_text'],source_url=event['source_url']))
         for p in forecast['predictions']:
-            status=p.get('components',{}).get('availability',{})
+            status=p['availability']
             if p['team_id']==team and p['game_id']==target['game_id'] and status.get('status') in REPORTED:
                 found[gid].setdefault(p['player_id'],[]).append(dict(kind='next_report',detail=f"Listed {status['status']} for the next game",
                     source_url=status.get('status_source_url'),run_id=run_id))
     return found
+
+
+def _later_run(folder,rowid):
+    """What _later reads from one verified run: its recap exit events and each prediction's reported availability."""
+    from .derived_cache import freeze_exception
+    try:
+        with sqlite3.connect(folder.joinpath('forecast.sqlite').resolve().as_uri()+'?mode=ro',uri=True) as conn:
+            conn.row_factory=sqlite3.Row
+            row=conn.execute('SELECT run_id,snapshot_json,forecast_json,snapshot_sha256,forecast_sha256 FROM runs WHERE rowid=?',(rowid,)).fetchone()
+        for kind in ('snapshot','forecast'):
+            if hashlib.sha256(row[kind+'_json'].encode()).hexdigest()!=row[kind+'_sha256']:
+                raise ValueError('Frozen '+kind+' hash mismatch: '+row['run_id'])
+        snapshot,forecast=json.loads(row['snapshot_json']),json.loads(row['forecast_json'])
+        events=(snapshot.get('role_context') or {}).get('events',[])
+        predictions=[dict(player_id=p['player_id'],team_id=p['team_id'],game_id=p['game_id'],
+                          availability=_availability(p.get('components',{}).get('availability',{})))
+                     for p in forecast['predictions']]
+        return dict(run_id=row['run_id'],events=[_event(e) for e in events],predictions=predictions)
+    except (KeyError,ValueError,TypeError,AttributeError,OverflowError) as exc:
+        return dict(error=freeze_exception(exc))
+
+
+def _event(event):
+    return {k:event[k] for k in ('game_id','team_id','player_id','source_text','source_url') if k in event} if isinstance(event,dict) else event
+
+
+def _availability(status):
+    return {k:status[k] for k in ('status','status_source_url') if k in status} if isinstance(status,dict) else status
 
 
 def _previous(folder,games,schedule,as_of,season):

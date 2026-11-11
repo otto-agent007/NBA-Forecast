@@ -129,8 +129,11 @@ class PostgameSourceTests(unittest.TestCase):
         second=self.collect()
         self.assertEqual((second['fetched'],second['complete']),(0,1))
         self.assertEqual(len(self.calls),2)
-        with patch('nba_forecast.dashboard.dashboard_data',return_value=dict(games=[dict(game_id=self.gid)])):
-            index=build_postgames(self.folder)
+        # The game as the saved calendar lists it; with no ledger it has no forecast view.
+        import json
+        (self.folder/'schedule').mkdir(exist_ok=True)
+        (self.folder/'schedule'/'latest.json').write_text(json.dumps(dict(season='2026-27',games=[dict(game_id=self.gid)])))
+        index=build_postgames(self.folder)
         self.assertEqual((index['games'],index['errors']),(1,[]))
         import json
         saved=json.loads((self.folder/'postgame'/(self.gid+'.json')).read_text())

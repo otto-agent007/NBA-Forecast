@@ -423,7 +423,9 @@ class EvidenceTickTests(unittest.TestCase):
         pointer.write_text(json.dumps(dict(artifact_sha256=digest,activated_at=artifact['known_at'])))
         assessment=dict(status='ready',model_key='test',training_cutoff=NOW,evidence_kind='prospective_saved_forecast',
             residual_evidence_sha256='evidence',sample_count=200,game_count=20,errors=[])
-        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment):
+        # The fit is mocked, and so is its replay from the ledger bytes before activation.
+        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment),\
+                patch('nba_forecast.prospective_calibration.verify_prospective_sources',return_value=True):
             first=run_tick(self.folder,[])
             self.assertEqual(first['created_runs'],1,first['errors'])
             saved=self.saved()[0]
@@ -440,6 +442,24 @@ class EvidenceTickTests(unittest.TestCase):
             self.assertEqual(pointer.read_bytes(),upgraded,'the same evidence is not refit')
             third=run_tick(self.folder,[])
             self.assertEqual(third['created_runs'],0,third['errors'])
+
+    def test_ready_calibration_that_does_not_replay_from_ledger_bytes_is_not_activated(self):
+        # The fit reads the derived sidecar; activation needs the same fit from the ledger and final bytes.
+        from nba_forecast.enhancements import install_artifact
+        artifact=dict(model_version='regular-season-baseline-0.5.0',model_key='test',known_at='2026-10-21T15:00:00Z',
+            parameters={},team_games=[],context_model=None,calibration=None,excluded_history_game_ids=[],validation_report={'scope':'test'})
+        digest=install_artifact(self.folder,artifact)
+        pointer=self.folder/'model-upgrade-active.json'
+        pointer.write_text(json.dumps(dict(artifact_sha256=digest,activated_at=artifact['known_at'])))
+        assessment=dict(status='ready',model_key='test',training_cutoff=NOW,evidence_kind='prospective_saved_forecast',
+            residual_evidence_sha256='evidence',sample_count=200,game_count=20,errors=[])
+        replay=patch('nba_forecast.prospective_calibration.verify_prospective_sources',return_value=False)
+        with patch('nba_forecast.operations.fetch_injury_check',side_effect=ValueError('offline')),patch('nba_forecast.outcome_sync.sync_finished_games',return_value={'errors':[]}),patch('nba_forecast.prospective_calibration.fit_prospective',return_value=assessment),replay as verify:
+            run_tick(self.folder,[])
+            derived=run_derived(self.folder)
+        verify.assert_called_once()
+        self.assertEqual(json.loads(pointer.read_text())['artifact_sha256'],digest)
+        self.assertTrue(any(e.get('task')=='prospective_calibration' and 'did not replay' in str(e.get('detail')) for e in derived['errors']),derived['errors'])
 
     def saved(self):
         with sqlite3.connect(self.folder/'forecast.sqlite') as conn:

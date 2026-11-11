@@ -229,7 +229,26 @@ model, roster presence, Pacific date, code or an explicit request
 changes, and at least every six hours. A rebuild takes minutes (on 2026-10-28
 the performance report alone took 84 s and the ticks that rebuilt took 5 to 10
 minutes, so near-tip Kalshi captures were skipped and the T−30 checkpoints ran
-late); beside the tick it costs the checkpoints and captures nothing. The tick
+late); beside the tick it costs the checkpoints and captures nothing. A
+rebuild reads only the runs saved since the last one: what each report takes
+from a run is extracted once, when the run is first seen, into a sidecar
+beside the ledger, `forecast.<version>.derived-cache.sqlite` (`derived_cache`;
+one file per code version, so a report run from another checkout never writes
+into the service's file; files unused for two days are removed). A run's
+stored digests are checked against its bytes at extraction. Each rebuild (each
+process that opens the sidecar) then re-hashes the `max(32, ceil(live runs /
+48))` runs checked longest ago, so at about 48 rebuilds a day every run is
+checked again within about a day; fewer rebuilds stretch that cycle. A run
+whose bytes or stored digests changed is extracted again and its reports show
+the mismatch as they always did. Calibration activations do not trust the
+sidecar: before installing a ready interval or margin correction, the service
+fits it again from the ledger and final bytes read and verified on that call,
+and installs it only if the two fits agree. A verified official final page is
+kept only while the final file and the archived page and provenance files are
+unchanged on disk; a failed page check is never kept. The file is disposable:
+deleting it, or deploying other code, costs the next rebuild a full extraction
+and gives the same reports; one that cannot be read is replaced, and one that
+cannot be written is kept in memory for the rest of that rebuild. The tick
 carries the last rebuild's summary, errors and warnings into its report
 (`derived_reports`, `derived-reports.json`); the service writes
 `last-derived.json` and appends `derived.jsonl`, and each tick report lists its
