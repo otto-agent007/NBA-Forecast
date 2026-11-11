@@ -402,6 +402,16 @@ class MarketStrengthTests(unittest.TestCase):
         self.assertEqual(mixed['D']['rating'], plain['D']['rating'])
         self.assertIsNotNone(mixed['A']['market_strength'])
 
+    def test_calibration_family_names_the_method_settlement_and_parameters(self):
+        method, settlement, digest = margins.CALIBRATION_FAMILY.split('|')
+        self.assertEqual((method, settlement), (margins.METHOD, margins.SETTLEMENT))
+        self.assertEqual(digest, margins.parameter_digest(margins.PARAMETERS))
+        self.assertEqual(margins.CALIBRATION_FAMILY, margins.calibration_family(margins.METHOD, margins.SETTLEMENT, margins.PARAMETERS))
+        # A parameter change (the rating weight on 2026-11-06) starts a new correction pool without a method bump.
+        self.assertNotEqual(margins.calibration_family(margins.METHOD, margins.SETTLEMENT, dict(margins.PARAMETERS, rating_weight=.75)),
+                            margins.CALIBRATION_FAMILY)
+        self.assertNotEqual(margins.calibration_family(margins.METHOD, margins.SETTLEMENT, None), margins.CALIBRATION_FAMILY)
+
     def test_prepared_inputs_hash_the_closing_lines_they_read(self):
         samples, closes = league(self.TRUE)
         rows = [dict(game_id=s['game_id'], game_time=s['game_time'], known_at=s['known_at'], home_team_id=s['home_team_id'],
