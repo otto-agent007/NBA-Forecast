@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from nba_forecast.store import _SCHEMA
-from nba_forecast.margins import _pmf, _sha, CALIBRATION_FAMILY as FAMILY, METHOD, SETTLEMENT
+from nba_forecast.margins import _pmf, _sha, CALIBRATION_FAMILY as FAMILY, METHOD, PARAMETERS, SETTLEMENT
 
 try:
     from nba_forecast.prospective_margin_calibration import collect_margin_samples,fit_prospective_margin
@@ -45,9 +45,10 @@ class ProspectiveMarginTests(unittest.TestCase):
             db.executescript(_SCHEMA)
 
     def run_row(self,gid='0022600001',run='first',created='2026-11-01T19:00:00Z',
-                start='2026-11-01T20:00:00Z',margin=None,model_key=MODEL):
+                start='2026-11-01T20:00:00Z',margin=None,model_key=MODEL,parameters=None):
         g=dict(game_id=gid,home_team_id='T1',away_team_id='T2',start_time=start,season_type='Regular Season')
-        snapshot=dict(season='2026-27',as_of=created,games=[g])
+        snapshot=dict(season='2026-27',as_of=created,games=[g],
+                      model_enhancements=dict(margin_inputs=dict(parameters=dict(PARAMETERS if parameters is None else parameters))))
         forecast=dict(season='2026-27',as_of=created,model_key=model_key,margin_forecasts=[margin] if margin else [])
         x=json.dumps(snapshot,separators=(',',':'))
         y=json.dumps(forecast,separators=(',',':'))
@@ -109,9 +110,13 @@ class ProspectiveMarginTests(unittest.TestCase):
                      margin=distribution('0022600002',model_key='release-two'),model_key='release-two')
         self.run_row(gid='0022600003',run='third',created='2026-11-03T19:00:00Z',start='2026-11-03T20:00:00Z',
                      margin=distribution('0022600003',method='older_margin_method_v2'))
+        # Same method, another parameter set (a rating weight change without a method bump): another family.
+        self.run_row(gid='0022600007',run='reweighted',created='2026-11-07T19:00:00Z',start='2026-11-07T20:00:00Z',
+                     margin=distribution('0022600007'),parameters=dict(PARAMETERS,rating_weight=.75))
         for gid,start,known in (('0022600001','2026-11-01T20:00:00Z','2026-11-01T23:00:00Z'),
                                 ('0022600002','2026-11-02T20:00:00Z','2026-11-02T23:00:00Z'),
-                                ('0022600003','2026-11-03T20:00:00Z','2026-11-03T23:00:00Z')):
+                                ('0022600003','2026-11-03T20:00:00Z','2026-11-03T23:00:00Z'),
+                                ('0022600007','2026-11-07T20:00:00Z','2026-11-07T23:00:00Z')):
             self.final(gid=gid,start=start,known=known)
         # A run from before model keys existed (production holds 300) is skipped, not an error.
         self.run_row(gid='0022600005',run='unkeyed',created='2026-10-24T19:00:00Z',start='2026-10-24T20:00:00Z',model_key=None)
@@ -119,14 +124,17 @@ class ProspectiveMarginTests(unittest.TestCase):
         self.assertEqual(result['errors'],[])
         self.assertEqual([(s['game_id'],s['model_key'],s['margin_family']) for s in result['samples']],
                          [('0022600001','release-one',FAMILY),('0022600002','release-two',FAMILY)])
-        self.assertEqual((result['exclusions']['other_family'],result['exclusions']['unkeyed_run']),(1,1))
-        self.assertEqual(result['counts']['model_runs'],3)
-        # A distribution whose model key disagrees with its run is still an error, not a pooled sample.
+        self.assertEqual((result['exclusions']['other_family'],result['exclusions']['unkeyed_run']),(2,1))
+        self.assertEqual(result['counts']['model_runs'],4)
+        # A distribution whose model key disagrees with its run is still an error, not a pooled sample,
+        # and so is a run that saved margin distributions without any model key.
         self.run_row(gid='0022600004',run='fourth',created='2026-11-04T19:00:00Z',start='2026-11-04T20:00:00Z',
                      margin=distribution('0022600004',model_key='release-two'),model_key='release-three')
         self.final(gid='0022600004',start='2026-11-04T20:00:00Z',known='2026-11-04T23:00:00Z')
+        self.run_row(gid='0022600006',run='keyless-margin',created='2026-11-06T19:00:00Z',start='2026-11-06T20:00:00Z',
+                     margin=distribution('0022600006',model_key='release-two'),model_key=None)
         mismatched=collect_margin_samples(self.folder,FAMILY,ASOF)
-        self.assertEqual([e['game_id'] for e in mismatched['errors']],['0022600004'])
+        self.assertEqual(sorted(e.get('game_id') or e.get('run_id') for e in mismatched['errors']),['0022600004','keyless-margin'])
         status=fit_prospective_margin(self.folder,FAMILY,ASOF)
         self.assertEqual((status['status'],status['reason'],status['margin_family']),('not_ready','collection_errors',FAMILY))
 

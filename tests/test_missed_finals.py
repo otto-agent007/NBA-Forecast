@@ -94,6 +94,16 @@ class MissedFinalsTests(unittest.TestCase):
             report = tick(state, sched, d, '2026-11-03T01:00:00+00:00')
             self.assertEqual(report['missed_final_record'], dict(total=2, recent=0, recovered=[], older=['0022600150', '0022600151']))
 
+    def test_an_unreadable_recovery_file_keeps_the_alarm_and_never_fails_the_tick(self):
+        state = dict(jobs={}, tracking_started_at='2026-10-23T00:00:00+00:00')
+        sched = schedule(('0022600150', TIP, 'final'))
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'recovered-evidence.json').write_text('{"games": [not json')
+            report = tick(state, sched, d, '2026-11-01T12:00:00+00:00')
+            self.assertEqual(report['missed_final_games'], ['0022600150'])
+            (Path(d) / 'recovered-evidence.json').write_text(json.dumps(dict(games=dict(x=None))))
+            self.assertEqual(tick(state, sched, d, '2026-11-01T13:00:00+00:00')['missed_final_games'], ['0022600150'])
+
 
 if __name__ == '__main__':
     unittest.main()

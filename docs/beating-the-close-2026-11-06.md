@@ -205,6 +205,11 @@ played, so the comparison with the close stays fair. Implemented in
 `margins.market_strengths` (the owner's decision is the pull request that
 carries it); the rating weight itself was left at 0.65, where the harness
 suggests 0.75 would add another 0.06 with wider error, to be gated separately.
+The ± in this paragraph is one date-clustered standard error, the harness's
+convention; the gate's own tables quote two. On the gate each season's verdict
+is improved, carried by the winner Brier; the margin error alone is improved in
+2024-25 (−0.102 ± 0.087) and within noise in the other two seasons (−0.083 and
+−0.085, ± 0.087 and 0.088). The harness is `scripts/research/rating_harness.py`.
 
 ## Limitations
 

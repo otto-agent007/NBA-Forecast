@@ -228,9 +228,11 @@ def closing_margins(folder, records, as_of):
     """Each already-tipped game's closing home margin from its saved captures, for the team rating.
 
     The close is each provider's last pregame capture (``closing_lines``), averaged
-    across providers and negated to a home margin. A game not yet tipped by
-    ``as_of``, without a capture, or with a damaged file is left out: a missing
-    line never blocks a forecast.
+    across providers and negated to a home margin. Only records retrieved by
+    ``as_of`` count, so a close recovered after an outage enters forecasts from
+    its recovery time on and the inputs of an earlier forecast rebuild the same.
+    A game not yet tipped by ``as_of``, without a capture, or with a damaged
+    file or record is left out: a missing line never blocks a forecast.
     """
     cutoff = parse_time(as_of)
     out = {}
@@ -239,11 +241,22 @@ def closing_margins(folder, records, as_of):
         if not start or parse_time(start) >= cutoff:
             continue
         try:
-            lines = closing_lines(read_game_lines(folder, record['game_id']), start)
+            captures = read_game_lines(folder, record['game_id'])
         except ValueError:
-            continue
-        spreads = [((line.get('lines') or {}).get('spread') or {}).get('home', {}).get('current_line') for line in lines.values()]
-        spreads = [s for s in spreads if isinstance(s, (int, float)) and math.isfinite(s)]
+            continue  # a damaged file
+        usable = []
+        for capture in captures:  # a malformed record is dropped on its own; the others still count
+            try:
+                if isinstance(capture, dict) and parse_time(capture['retrieved_at']) <= cutoff and isinstance(capture['lines'], dict) \
+                        and isinstance(capture['provider_id'], str) and isinstance(capture['provider'], str):
+                    usable.append(capture)
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+        spreads = []
+        for line in closing_lines(usable, start).values():
+            spread = ((line['lines'].get('spread') or {}).get('home') or {}).get('current_line') if isinstance(line['lines'].get('spread'), dict) else None
+            if isinstance(spread, (int, float)) and not isinstance(spread, bool) and math.isfinite(spread):
+                spreads.append(spread)
         if spreads:
             out[record['game_id']] = -sum(spreads) / len(spreads)
     return out
