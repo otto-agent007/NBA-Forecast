@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -30,10 +31,33 @@ class EvaluationTests(unittest.TestCase):
             self.run_id=store.save_run(self.db,snapshot,past,forecast)
         self.enterContext(patch('nba_forecast.store._now',return_value=LATER))
 
-    def evaluate(self):
+    def evaluate(self,**limits):
         report=dict(evaluated_runs=0,errors=[])
-        operations._evaluate_runs(self.folder,self.db,report)
+        operations._evaluate_runs(self.folder,self.db,report,**limits)
         return report
+
+    def save(self):
+        snapshot,past,forecast=inputs()
+        with patch('nba_forecast.store._now',return_value=SAVED):
+            return store.save_run(self.db,snapshot,past,forecast)
+
+    def state(self):
+        return json.loads((self.folder/'evaluation-state.json').read_text())
+
+    def deploy(self,digest='b'*64):
+        """Every later call runs as another release of the package."""
+        self.enterContext(patch('nba_forecast.operations._code_digest',return_value=digest))
+
+    def timed(self):
+        """A clock that only scoring a run moves, one second a run; returns the run IDs scored, in order."""
+        clock,order,real=[0.],[],store.evaluate_run
+        def scored(db,run_id,actuals):
+            order.append(run_id)
+            clock[0]+=1
+            return real(db,run_id,actuals)
+        self.enterContext(patch('nba_forecast.operations.evaluate_run',side_effect=scored))
+        self.enterContext(patch('nba_forecast.operations.time',SimpleNamespace(monotonic=lambda:clock[0])))
+        return clock,order
 
     def finals(self,rows):
         (self.folder/'finals').mkdir(exist_ok=True)
@@ -81,6 +105,145 @@ class EvaluationTests(unittest.TestCase):
         self.finals([dict(actual(),opponent_id='T9')])
         self.assertEqual(len(self.evaluate()['errors']),1)
         self.assertEqual(len(self.evaluate()['errors']),1)
+
+    def test_the_memory_survives_a_deploy_and_is_unchanged_only_once_rechecked(self):
+        self.finals([actual(),actual('P2')])
+        self.assertEqual(self.evaluate()['evaluation_backlog'],dict(stale=0,rechecked=0,revised=0,deferred=0))
+        before=self.state()
+        self.assertEqual(before['stale'],[])
+        # The file as the release before this one wrote it: no list of stale entries.
+        (self.folder/'evaluation-state.json').write_text(json.dumps(dict(code=before['code'],runs=before['runs'])))
+        self.assertEqual(self.evaluate()['unchanged_evaluation_runs'],1)
+        (self.folder/'evaluation-state.json').write_text(json.dumps(dict(code=before['code'],runs=before['runs'])))
+        self.deploy()
+        with patch('nba_forecast.operations.evaluate_run') as scored:
+            waiting=self.evaluate(recheck_seconds=0)
+        scored.assert_not_called()
+        self.assertEqual((waiting['evaluated_runs'],waiting['unchanged_evaluation_runs']),(0,0))
+        self.assertEqual(waiting['evaluation_backlog'],dict(stale=1,rechecked=0,revised=0,deferred=0))
+        after=self.state()
+        self.assertEqual((after['code'],after['runs'],after['stale']),('b'*64,before['runs'],[self.run_id]))
+        rechecked=self.evaluate()
+        self.assertEqual((rechecked['evaluated_runs'],rechecked['unchanged_evaluation_runs']),(0,0))
+        self.assertEqual(rechecked['evaluation_backlog'],dict(stale=0,rechecked=1,revised=0,deferred=0))
+        self.assertEqual(self.state()['stale'],[])
+        self.assertEqual(self.revisions(),1,'the same final rows under new code write nothing')
+        self.assertEqual(self.evaluate()['unchanged_evaluation_runs'],1)
+
+    def test_after_a_deploy_a_changed_final_or_a_new_run_is_scored_at_once_whatever_the_budget(self):
+        self.finals([actual(),actual('P2')])
+        self.evaluate()
+        self.deploy()
+        self.finals([dict(actual(),known_at='2026-10-22T22:00:00Z',pts=26,fgm=11),actual('P2')])
+        new=self.save()
+        report=self.evaluate(recheck_seconds=0)
+        self.assertEqual(report['evaluated_runs'],2)
+        self.assertEqual(report['evaluation_backlog'],dict(stale=0,rechecked=0,revised=0,deferred=0))
+        self.assertEqual(self.revisions(),3)
+        self.assertEqual((sorted(self.state()['runs']),self.state()['stale']),(sorted([self.run_id,new]),[]))
+        self.assertEqual(self.evaluate(recheck_seconds=0)['unchanged_evaluation_runs'],2)
+
+    def test_stale_entries_drain_newest_first_over_successive_ticks(self):
+        runs=[self.run_id]+[self.save() for _ in range(4)]
+        self.finals([actual(),actual('P2')])
+        self.assertEqual(self.evaluate()['evaluated_runs'],5)
+        self.deploy()
+        clock,order=self.timed()
+        ticks=[]
+        for _ in range(4):
+            clock[0]=0
+            ticks.append(self.evaluate(recheck_seconds=2))
+            # An entry leaves the stale list only when this code has scored it.
+            self.assertEqual(self.state()['stale'],sorted(set(runs)-set(order)))
+        self.assertEqual(order,runs[::-1])
+        self.assertEqual([t['evaluation_backlog']['rechecked'] for t in ticks],[2,2,1,0])
+        self.assertEqual([t['evaluation_backlog']['stale'] for t in ticks],[3,1,0,0])
+        self.assertEqual([t['unchanged_evaluation_runs'] for t in ticks],[0,2,4,5])
+        self.assertEqual([t['evaluated_runs'] for t in ticks],[0,0,0,0])
+        self.assertEqual(self.revisions(),5)
+        # A second deploy before the first backlog drained makes every entry stale again.
+        self.deploy('c'*64)
+        self.assertEqual(self.evaluate(recheck_seconds=0)['evaluation_backlog']['stale'],5)
+
+    def test_a_recheck_scores_the_final_rows_the_new_code_selects(self):
+        teammate=dict(actual('P2'),player_id='P29',name='Not forecast')
+        self.finals([actual(),teammate])
+        with patch('nba_forecast.operations._absent_from_final',return_value=[]):  # a release before absences were scored
+            self.evaluate()
+        self.deploy()
+        report=self.evaluate()
+        self.assertEqual(report['evaluation_backlog'],dict(stale=0,rechecked=1,revised=1,deferred=0))
+        self.assertEqual(report['evaluated_runs'],0)
+        with sqlite3.connect(self.db) as conn:
+            rows=[(revision,sorted(r['player_id'] for r in json.loads(text)['matched']))
+                  for revision,text in conn.execute('SELECT revision,report_json FROM evaluations ORDER BY revision')]
+        self.assertEqual(rows,[(1,['P1']),(2,['P1','P2'])])
+
+    def test_an_entry_for_a_run_the_ledger_does_not_hold_is_not_counted_as_stale(self):
+        self.finals([actual(),actual('P2')])
+        self.evaluate()
+        state=self.state()
+        state['runs']['not-in-this-ledger']=dict(games=['G1'],signature='x')
+        (self.folder/'evaluation-state.json').write_text(json.dumps(state))
+        self.deploy()
+        self.assertEqual(self.evaluate(recheck_seconds=0)['evaluation_backlog']['stale'],1)
+        self.assertEqual(self.evaluate()['evaluation_backlog'],dict(stale=0,rechecked=1,revised=0,deferred=0))
+
+    def test_runs_are_listed_and_counted_from_the_table_in_either_layout(self):
+        from tests.test_history_dedupe import history
+        def listed(db):
+            with sqlite3.connect(db) as conn:
+                return conn.execute('SELECT run_id,mode FROM runs ORDER BY rowid').fetchall()
+        snapshot,_,forecast=inputs()
+        with patch('nba_forecast.store._now',return_value=SAVED):
+            store.save_run(self.db,snapshot,history('Other'),forecast,mode='demo',scope='subset')
+        self.save()
+        self.assertEqual(operations._run_ids(self.db),listed(self.db))
+        self.assertEqual([m for _,m in operations._run_ids(self.db)],['live','demo','live'])
+        legacy=self.folder/'legacy.sqlite'
+        with sqlite3.connect(legacy) as conn:
+            conn.executescript(store._LEGACY_SCHEMA)
+        with patch('nba_forecast.store._now',return_value=SAVED):
+            store.save_run(legacy,snapshot,history(),forecast)
+        self.assertEqual(operations._run_ids(legacy),listed(legacy))
+        self.assertEqual(len(operations._run_ids(legacy)),1)
+        # The derived service's ledger state counts the same rows either way.
+        def counted(db):
+            with sqlite3.connect(db) as conn:
+                return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {t}').fetchone()) for t in ('runs','evaluations')]
+        store.evaluate_run(self.db,self.run_id,[actual(),actual('P2')])
+        for db in (self.db,legacy):
+            self.assertEqual(operations._ledger_state(db),counted(db))
+        self.assertEqual(operations._ledger_state(self.db),[[3,3],[1,1]])
+
+    def test_a_recheck_that_fails_stays_stale_and_is_tried_again(self):
+        self.finals([actual(),actual('P2')])
+        self.evaluate()
+        self.deploy()
+        with patch('nba_forecast.operations.evaluate_run',side_effect=ValueError('refused')):
+            for _ in range(2):
+                failed=self.evaluate()
+                self.assertEqual(failed['errors'],[dict(task='evaluation',run_id=self.run_id,error='ValueError: refused')])
+                self.assertEqual(failed['evaluation_backlog'],dict(stale=1,rechecked=0,revised=0,deferred=0))
+                self.assertEqual((failed['unchanged_evaluation_runs'],self.state()['stale']),(0,[self.run_id]))
+        self.assertEqual(self.evaluate()['evaluation_backlog'],dict(stale=0,rechecked=1,revised=0,deferred=0))
+
+    def test_past_the_soft_limit_runs_wait_for_the_next_tick_and_the_scored_ones_are_remembered(self):
+        runs=[self.run_id,self.save(),self.save()]
+        self.finals([actual(),actual('P2')])
+        clock,order=self.timed()
+        first=self.evaluate(deadline=2)
+        self.assertEqual((first['evaluated_runs'],first['evaluation_backlog']['deferred']),(2,1))
+        self.assertEqual(sorted(self.state()['runs']),sorted(runs[:2]))
+        clock[0]=0
+        second=self.evaluate(deadline=2)
+        self.assertEqual((second['evaluated_runs'],second['unchanged_evaluation_runs'],second['evaluation_backlog']['deferred']),(1,2,0))
+        self.assertEqual(order,runs)
+        # The deadline also ends the re-checks after a deploy.
+        self.deploy()
+        clock[0]=0
+        third=self.evaluate(deadline=1)
+        self.assertEqual(third['evaluation_backlog'],dict(stale=2,rechecked=1,revised=0,deferred=0))
 
 
 class DerivedReportTests(unittest.TestCase):

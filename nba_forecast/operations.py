@@ -18,7 +18,7 @@ from .injuries import fetch_injury_check
 from .injury_parser import pdf_text,parse_report,apply_report,PARSER_VERSION
 from .profiles import build_profiles,eligible_history
 from .model import forecast, MODEL_VERSION
-from .store import save_run,evaluate_run,performance_report
+from .store import save_run,evaluate_run,performance_report,_is_legacy
 from .benchmarks import benchmark_report
 from .injury_capture import capture_daily,record_check,reported_unavailable
 from .preflight import run_preflight,PREFLIGHT_VERSION
@@ -62,6 +62,11 @@ JOB_RETRY_SECONDS=(900,300)
 # minutes late.
 CAPTURE_BUDGET_SECONDS=120
 TICK_SOFT_LIMIT_SECONDS=420
+# The evaluation memory outlives a deploy: its entries are scored again under the new
+# code a few at a time, for at most this long a tick, instead of all in the first
+# tick. On 2026-11-09 the memory was discarded with the code and the first tick after
+# the deploy re-scored 3800 runs in 379 s, writing nothing, while games tipped.
+EVALUATION_RECHECK_SECONDS=20
 # The tick's record of a player sync keeps its counts; these per-player blocks are
 # the sync's own players/index.json and made each ticks.jsonl row about 400 KB.
 PLAYER_SYNC_DETAIL_KEYS=('rotation_roles','player_summaries','shot_queue')
@@ -110,13 +115,24 @@ def _game_archives(raw):
     return names
 
 
+def _runs_table(conn):
+    """Where to list runs without opening their JSON: ``run_records``, or a ledger from before history deduplication's ``runs`` table.
+
+    The ``runs`` view joins each run to its history on ``history_sha256``, which is
+    stored after ``snapshot_json``: reading through it walks every run's whole
+    snapshot (about 0.9 MB of overflow pages each). The table holds the same rows
+    under the same rowids. The layout test is the store's own (``store._is_legacy``).
+    """
+    return 'runs' if _is_legacy(conn) else 'run_records'
+
+
 def _ledger_state(db):
     """Append-only tables: row counts and newest rowids identify their contents."""
     if not Path(db).exists():
         return None
     with closing(sqlite3.connect(Path(db).resolve().as_uri()+'?mode=ro',uri=True)) as conn:
         return [list(conn.execute(f'SELECT COUNT(*),COALESCE(MAX(rowid),0) FROM {table}').fetchone())
-                for table in ('runs','evaluations')]
+                for table in (_runs_table(conn),'evaluations')]
 
 
 def _roster(folder,season,raw,jobs,report):
@@ -272,11 +288,11 @@ def ledger_runs(db):
 
 
 def _run_ids(db):
-    """(run_id, mode) in insertion order, without opening any JSON."""
+    """(run_id, mode) in insertion order, without opening any JSON (``_runs_table``)."""
     if not Path(db).exists():
         return []
     with closing(sqlite3.connect(db)) as conn:
-        return conn.execute('SELECT run_id,mode FROM runs ORDER BY rowid').fetchall()
+        return conn.execute(f'SELECT run_id,mode FROM {_runs_table(conn)} ORDER BY rowid').fetchall()
 
 
 def _run_row(db,run_id,columns):
@@ -510,7 +526,7 @@ def _tick(folder,history,report):
         report['errors'].append(dict(task='postgame_sources',error=f'{type(exc).__name__}: {exc}'))
     phase('postgame_sources')
     try:
-        _evaluate_runs(folder,db,report)
+        _evaluate_runs(folder,db,report,deadline=tick_started+TICK_SOFT_LIMIT_SECONDS)
     except Exception as exc:
         report['errors'].append(dict(task='evaluate_runs',error=f'{type(exc).__name__}: {exc}'))
     _missed_finals(state,schedule,report,folder)
@@ -845,15 +861,35 @@ def _absent_from_final(rows,predictions):
     return absent
 
 
-def _evaluate_runs(folder,db,report):
+def _evaluate_runs(folder,db,report,*,recheck_seconds=EVALUATION_RECHECK_SECONDS,deadline=None):
     """Score live runs whose final files or evaluation revisions changed since they were last scored.
 
     Runs are immutable, so each run's game IDs are remembered; an unchanged run
     costs one file hash per game instead of decoding its forecast again.
+
+    The memory (``evaluation-state.json``) outlives a code change. New code can
+    change which final rows a run is scored against (``_absent_from_final``, the
+    validation in ``evaluate_run``), so an entry remembered under older code is
+    scored again under this code before it counts as unchanged; ``stale`` in
+    the file lists the entries still waiting for that. A stale run whose finals
+    or revisions changed is scored at once, like a new run. The others are
+    re-checked newest run first (the games being read and reviewed now), for
+    ``recheck_seconds`` a tick, so a deploy costs the next ticks seconds each
+    instead of costing the first one minutes. A re-check that finds the same
+    final rows writes nothing: ``evaluate_run`` appends a revision only when
+    they differ.
+
+    Past ``deadline`` (a ``time.monotonic()`` value, the tick's soft limit)
+    nothing more is scored; those runs wait for the next tick and the ones
+    already scored are remembered. ``report['evaluation_backlog']`` counts the
+    stale entries left, the ones re-checked now, how many of those gained a
+    revision, and the changed runs deferred by the deadline.
     """
     path=folder/'evaluation-state.json'
     saved=_read(path,{})
-    known=saved.get('runs',{}) if saved.get('code')==_code_digest() else {}
+    known=saved.get('runs',{})
+    # Entries this code has not scored yet: every one of them after a code change.
+    stale=set(known) if saved.get('code')!=_code_digest() else set(saved.get('stale',[]))&set(known)
     if not Path(db).exists():
         return
     with closing(sqlite3.connect(db)) as conn:
@@ -867,14 +903,12 @@ def _evaluate_runs(folder,db,report):
         return finals[gid]
     def signature(games,revision):
         return hashlib.sha256(canonical(dict(finals=[[gid,final(gid)[0]] for gid in games],revision=revision))).hexdigest()
-    unchanged=0
-    for run_id,mode in _run_ids(db):
-        if mode!='live':
-            continue
-        entry=known.get(run_id)
-        if entry and entry['signature']==signature(entry['games'],latest.get(run_id)):
-            unchanged+=1
-            continue
+    def score(run_id):
+        """Score one run against its saved finals and remember it as scored by this code.
+
+        Returns None when the evaluation failed (reported; the run stays as it was and is
+        tried again next tick), else whether it had finals to score and whether that wrote a revision.
+        """
         run=_run_row(db,run_id,'snapshot_json,forecast_json')
         snapshot=json.loads(run['snapshot_json'])
         prediction=json.loads(run['forecast_json'])
@@ -891,13 +925,47 @@ def _evaluate_runs(folder,db,report):
         if actuals:
             try:
                 revision=evaluate_run(db,run_id,actuals)['revision']
-                report['evaluated_runs']+=1
             except Exception as exc:
                 report['errors'].append(dict(task='evaluation',run_id=run_id,error=f'{type(exc).__name__}: {exc}'))
-                continue
+                return None
         known[run_id]=dict(games=games,signature=signature(games,revision))
+        stale.discard(run_id)
+        return dict(evaluated=bool(actuals),revised=revision!=latest.get(run_id))
+    def late():
+        return deadline is not None and time.monotonic()>=deadline
+    unchanged=deferred=0
+    waiting=[]
+    live=set()
+    for run_id,mode in _run_ids(db):
+        if mode!='live':
+            continue
+        live.add(run_id)
+        entry=known.get(run_id)
+        if entry and entry['signature']==signature(entry['games'],latest.get(run_id)):
+            if run_id in stale:
+                waiting.append(run_id)
+            else:
+                unchanged+=1
+            continue
+        if late():
+            deferred+=1
+            continue
+        result=score(run_id)
+        if result and result['evaluated']:
+            report['evaluated_runs']+=1
+    stale&=live  # an entry for a run this ledger does not hold has nothing to re-check
+    rechecked=revised=0
+    stop=time.monotonic()+recheck_seconds
+    for run_id in reversed(waiting):
+        if time.monotonic()>=stop or late():
+            break
+        result=score(run_id)
+        if result:
+            rechecked+=1
+            revised+=result['revised']
     report['unchanged_evaluation_runs']=unchanged
-    atomic_json(path,dict(code=_code_digest(),runs=known))
+    report['evaluation_backlog']=dict(stale=len(stale),rechecked=rechecked,revised=revised,deferred=deferred)
+    atomic_json(path,dict(code=_code_digest(),runs=known,stale=sorted(stale)))
 
 
 def _derived_signature(folder,db,schedule,active_model,model_digest):

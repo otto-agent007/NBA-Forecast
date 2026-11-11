@@ -166,6 +166,96 @@ class CliTests(unittest.TestCase):
             self.assertTrue(all(p['points_mean'] is None for p in predictions))
 
 
+# Run in a fresh interpreter: SQLite reads SQLITE_TMPDIR once, when the library loads.
+# Forces a sort to spill (25 MB of rows, a 200 KB page cache), stops part-way through
+# its rows and prints the directories of SQLite's open temporary files, which SQLite
+# unlinks as it creates them, so only /proc/self/fd shows them.
+SPILL = """
+import json, os, sys
+from nba_forecast.__main__ import _ledger_home, _parser, sqlite_tmpdir
+chosen = sqlite_tmpdir(_ledger_home(_parser().parse_args(sys.argv[1:])))
+import sqlite3
+conn = sqlite3.connect(':memory:')
+conn.execute('PRAGMA temp_store = FILE')
+conn.execute('PRAGMA cache_size = -200')
+conn.execute('CREATE TABLE t (x TEXT)')
+conn.executemany('INSERT INTO t VALUES (?)', ((os.urandom(8).hex() * 60,) for _ in range(25000)))
+rows = conn.execute('SELECT x FROM t ORDER BY x')
+rows.fetchone()
+folders = set()
+for fd in os.listdir('/proc/self/fd'):
+    try:
+        link = os.readlink('/proc/self/fd/' + fd)
+    except OSError:
+        continue
+    if os.path.basename(link).startswith('etilqs_'):
+        folders.add(os.path.dirname(link))
+print(json.dumps(dict(chosen=chosen, environment=os.environ.get('SQLITE_TMPDIR'), folders=sorted(folders))))
+"""
+
+
+class SqliteTemporaryFileTests(unittest.TestCase):
+    """SQLite's temporary files go beside the ledger, not to /var/tmp on the small root disk."""
+
+    def spill(self, *args, environment=None):
+        env = {k: v for k, v in __import__('os').environ.items() if k not in ('SQLITE_TMPDIR', 'TMPDIR')}
+        env.update(environment or {})
+        result = subprocess.run([sys.executable, '-c', SPILL, *map(str, args)], cwd=ROOT, env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    @unittest.skipUnless(Path('/proc/self/fd').is_dir(), 'reads /proc/self/fd')
+    def test_a_spilled_sort_writes_its_temporary_files_beside_the_ledger(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = str(Path(d).resolve() / 'tmp')
+            for args in (('derived', '--directory', d), ('report', '--db', Path(d) / 'forecast.sqlite')):
+                with self.subTest(command=args[0]):
+                    self.assertEqual(self.spill(*args), dict(chosen=tmp, environment=tmp, folders=[tmp]))
+            with tempfile.TemporaryDirectory() as other:
+                kept = self.spill('derived', '--directory', d, environment=dict(SQLITE_TMPDIR=other))
+                self.assertEqual(kept, dict(chosen=None, environment=other, folders=[other]), 'a value already set is kept')
+                elsewhere = self.spill('backfill', '--seasons', '2026-27', '--directory', d, environment=dict(TMPDIR=other))
+                self.assertEqual(elsewhere, dict(chosen=None, environment=None, folders=[other]), "a backfill's directory holds no ledger")
+
+    def test_the_commands_set_it_before_they_start(self):
+        import os
+        env = {k: v for k, v in os.environ.items() if k not in ('SQLITE_TMPDIR', 'TMPDIR')}
+        with tempfile.TemporaryDirectory() as d:
+            result = subprocess.run([sys.executable, '-m', 'nba_forecast', 'derived', '--directory', d],
+                                    cwd=ROOT, env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((Path(d) / 'tmp').is_dir())
+
+    def test_importing_the_command_line_does_not_load_sqlite(self):
+        result = subprocess.run([sys.executable, '-c', "import sys, nba_forecast.__main__; print('_sqlite3' in sys.modules)"],
+                                cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(result.stdout.strip(), 'False', result.stderr)
+
+    def test_each_command_that_opens_a_ledger_names_its_folder(self):
+        from nba_forecast.__main__ import _ledger_home, _parser
+        def home(*args):
+            return _ledger_home(_parser().parse_args(list(args)))
+        for command in ('tick', 'derived', 'dashboard', 'postgame', 'sync-players', 'compact-ticks', 'dedupe-histories', 'daily-review'):
+            self.assertEqual(home(command, '--directory', 'ops'), Path('ops'), command)
+        self.assertEqual(home('recover-evidence', '--directory', 'ops'), Path('ops'))
+        for command in ('report', 'benchmarks'):
+            self.assertEqual(home(command, '--db', 'ops/forecast.sqlite'), Path('ops'), command)
+        self.assertEqual(home('evaluate', '--db', 'ops/forecast.sqlite', '--run-id', 'r', '--actuals', 'a.json'), Path('ops'))
+        self.assertIsNone(home('backfill', '--seasons', '2026-27', '--directory', 'archive'))
+        self.assertIsNone(home('fetch-schedule', '--directory', 'schedule'))
+        self.assertIsNone(home('validate', '--snapshot', 's.json'))
+
+    def test_nothing_changes_once_sqlite_is_loaded(self):
+        import os
+        import sqlite3  # noqa: F401  (loaded, as in every test process)
+        from nba_forecast.__main__ import sqlite_tmpdir
+        before = os.environ.get('SQLITE_TMPDIR')
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(sqlite_tmpdir(d))
+            self.assertFalse((Path(d) / 'tmp').exists())
+        self.assertEqual(os.environ.get('SQLITE_TMPDIR'), before)
+
+
 class CompactTicksCommandTests(unittest.TestCase):
     def test_compact_ticks_rewrites_the_log_and_reports_the_sizes(self):
         from contextlib import redirect_stdout

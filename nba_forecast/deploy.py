@@ -8,9 +8,11 @@ Each step is idempotent, so a second run after a success changes nothing:
 2. build the refined model artifact bound to that package digest from the active
    model's 0.5.0 parent (``refinement_upgrade.build_artifact``) and install it;
 3. back up the activation pointer under ``activation-backups/`` and point it at
-   the new artifact, holding the tick's and the derived service's locks so a
-   running tick or rebuild finishes first and neither can write a refit of the
-   old artifact over the new one;
+   the new artifact, holding the derived service's and the tick's locks so a
+   running rebuild or tick finishes first and neither can write a refit of the
+   old artifact over the new one. The derived lock is taken first: a rebuild
+   takes minutes, and the ticks keep running while the deploy waits for it;
+   the tick lock is then held only from the end of the running tick;
 4. store write-ahead logging in the ledger (``PRAGMA journal_mode=WAL``), retrying
    while a reader such as a dashboard request holds the file; the derived
    service's long reads then never hold up the tick's commits;
@@ -50,7 +52,13 @@ from .runner_release import package_digest, pin_release
 from .units import CREATED_BY_DEPLOY, SERVICES, derived_units
 
 UNITS = SERVICES  # each has a WorkingDirectory to point at the release
-LOCKS = ('tick.lock', 'derived.lock')
+# Taken in this order by everything that holds both (``_locks``, ``dedupe-histories``).
+# The slow holder comes first: waiting for a rebuild must not keep the ticks out.
+LOCKS = ('derived.lock', 'tick.lock')
+LOCK_HOLDERS = {'derived.lock': 'a derived rebuild', 'tick.lock': 'a tick'}
+# Rebuilds run back to back on a game night, the next starting two or three seconds
+# after the last; the lock is tried often enough to be taken in that gap.
+LOCK_POLL_SECONDS = .1
 PACKAGE = Path(__file__).resolve().parent
 
 
@@ -87,29 +95,45 @@ def _active(directory, now):
 
 @contextmanager
 def _locks(directory, wait):
-    """Hold the tick's and the derived service's own locks: a running tick or rebuild finishes first, and none starts until the activation is written.
+    """Hold the derived service's lock, then the tick's: a running rebuild or tick finishes first, and none starts until the activation is written.
 
     A derived rebuild that finished after reading the old activation would
     otherwise refit its calibration and write the old artifact back over the
-    new one (a tick did this on 2026-10-26, when it owned the rebuild). A timer
-    run that fires meanwhile exits as 'already running' or 'busy' and the next
-    minute's runs. The wait is shared by both locks.
+    new one (a tick did this on 2026-10-26, when it owned the rebuild). Both
+    locks are held from before the activation is read until everything is
+    written, so no rebuild or tick overlaps any of it; the order in which they
+    were taken does not change that.
+
+    The derived lock comes first because a rebuild takes minutes and a tick
+    seconds. While the deploy waits for a rebuild it holds nothing, and the
+    ticks run as usual; once it has the derived lock it waits for the running
+    tick, and only then do timer ticks exit as 'already running' (and derived
+    runs as 'busy') until the deploy is done. Taking the tick lock first kept
+    every tick out for the rest of a rebuild: the eight ticks from 16:53 to
+    17:00 Pacific on 2026-11-09 all exited, the last of them a tipoff.
+
+    This cannot deadlock: a tick takes only the tick lock and a derived run
+    only the derived lock, each without waiting (they exit when it is held),
+    so the one process that waits while holding a lock is this one, and what
+    it waits for never waits for anything. Two holders of both (a deploy and
+    ``recover-evidence``) take them in the same order. Each lock is waited for
+    up to ``wait`` seconds.
     """
     handles = [(name, (Path(directory) / name).open('a')) for name in LOCKS]
-    deadline = time.monotonic() + wait
     try:
         for name, handle in handles:
+            deadline = time.monotonic() + wait
             while True:
                 try:
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise ValueError(f'a tick or derived run has held the lock {name} for more than {wait} seconds; retry later') from None
-                    time.sleep(1)
+                        raise ValueError(f'{LOCK_HOLDERS[name]} has held the lock {name} for more than {wait} seconds; retry later') from None
+                    time.sleep(LOCK_POLL_SECONDS)
         yield
     finally:
-        for _, handle in handles:
+        for _, handle in reversed(handles):
             fcntl.flock(handle, fcntl.LOCK_UN)
             handle.close()
 
@@ -220,7 +244,7 @@ def main():
     parser.add_argument('--units', default=str(Path.home() / '.config/systemd/user'), help='User systemd unit directory')
     parser.add_argument('--no-systemd', action='store_true', help='Rewrite the units without daemon-reload or a restart')
     parser.add_argument('--dry-run', action='store_true', help='Print what would be deployed; write nothing')
-    parser.add_argument('--wait', type=int, default=900, help='Seconds to wait for a running tick or derived rebuild to finish')
+    parser.add_argument('--wait', type=int, default=900, help='Seconds to wait for a running derived rebuild to finish, and then for a running tick')
     args = parser.parse_args()
     result = deploy(args.directory, args.units, systemd=not args.no_systemd, dry_run=args.dry_run, wait=args.wait)
     if result.get('dirty_worktree'):

@@ -16,6 +16,9 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
 | `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
+| `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
+| `run_ids_cold.py` | What listing a ledger's run IDs costs from a cold page cache through the `runs` view against `run_records` | a copy of a ledger |
+| `sqlite_tmpdir_probe.py` | Where this host's SQLite writes a spilled sort's temporary files under each way of choosing the directory | a scratch directory |
 
 ## Reproduced on 2026-10-26
 
@@ -100,3 +103,31 @@ half-life, ridge 0.1) blended into the rating: 0.5 share −0.075 ± 0.018,
 +0.186 at the 0.7 share. The 0.7 share is what `backtest-2026-11-07-market-strength`
 gated (margin −0.090 ± 0.050 at two standard errors, winner Brier −0.0023 ±
 0.0011, improved).
+
+## Measured on 2026-11-09 (operations)
+
+`rescore_after_deploy.py` on the last 400 runs (352 evaluation revisions) of the
+2026-10-29 production ledger, in a private copy, with that day's
+`evaluation-state.json` (written by another release, as after a deploy); main
+at 1385e80 against this branch at 2a2f403, one call standing for one tick. The
+host's disk was saturated by a production copy, so seconds are slow and vary
+with the page cache (main's natural call ran with a cooler cache than its forced
+call).
+
+| Scenario | Calls | First call s | Slowest call s | Re-scored or re-checked runs | Revisions | End state |
+|---|---|---|---|---|---|---|
+| main, the code as deployed | 1 | 234.03 | 234.03 | 299 | 0 | start |
+| branch, same | 7 | 20.52 | 77.33 | 400 | 0 | start |
+| main, a release that changes evaluation (`--changed-absences`) | 1 | 60.82 | 60.82 | 299 | 33 | `c3b5b7a8` |
+| branch, same | 3 | 20.30 | 20.42 | 400 | 33 | `c3b5b7a8` |
+
+The drained branch leaves the evaluations table identical to main's (row
+count, newest rowid, SHA-256 of run, revision and actuals hash in key order),
+and its next call takes 0.34 s. A call is held to the budget plus one run
+except for what comes before the re-checks, chiefly listing the runs (the
+77.33 s call was not broken down). `run_ids_cold.py` on the same copy, cold:
+through the `runs` view 255.86 s and 415.7 MB read, from `run_records` 30.51 s
+and 1.1 MB, identical rows; warm, 0.096 s against under 0.001 s. `_run_ids`
+and the derived service's `_ledger_state` (row counts through the same view,
+every minute) now read `run_records`. The dashboard's `_ledger_key` and other
+readers still count or list through the view.

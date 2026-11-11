@@ -211,7 +211,15 @@ for the owner to delete. A conflicting history under one digest aborts it.
 
 An idle tick does little work. Live runs are rescored only when one of their
 `finals/` files or their latest evaluation revision changes
-(`evaluation-state.json`). Performance, benchmarks, calibration, postgame and
+(`evaluation-state.json`). The memory outlives a deploy: a run whose finals
+changed, or that has none remembered, is still scored at once, and the others
+are scored again under the new code newest first, for at most 20 seconds a
+tick (`EVALUATION_RECHECK_SECONDS`), until none remain; the tick's
+`evaluation_backlog` counts the entries left (`stale`), the ones re-checked
+and the revisions that wrote. Until 2026-11-09 a deploy discarded the memory,
+and the first tick after it re-scored 3800 runs in 379 s and wrote no
+revision. No run is scored after the tick's soft limit (420 s); those wait
+for the next tick (`evaluation_backlog.deferred`). Performance, benchmarks, calibration, postgame and
 daily reviews are the derived service's job, not the tick's: `python -m
 nba_forecast derived` runs from its own one-minute timer (`nba-derived.timer`,
 at :30, below the tick's CPU priority) and rebuilds them only when the ledger,
@@ -552,8 +560,9 @@ python3 -m nba_forecast.deploy --directory data/operations/production
 
 It pins the release, builds the refined model artifact bound to that package
 digest from the active model's parent, backs up and repoints the activation
-while holding the tick's and the derived service's locks (a running tick or
-rebuild finishes first; `--wait` sets how long to wait, 900 s by default),
+while holding the derived service's and the tick's locks (a running rebuild
+finishes first, with the ticks still running, and then the running tick;
+`--wait` sets how long to wait for each, 900 s by default),
 writes the derived service and its timer for a host that does not have them
 yet and enables the timer, rewrites `WorkingDirectory` in every service unit,
 reloads systemd and restarts the dashboard, and writes
@@ -561,13 +570,24 @@ reloads systemd and restarts the dashboard, and writes
 and the units written or rewritten. Run it again and it changes nothing. The
 next tick re-forecasts every pregame game under the new artifact; the next
 derived run refits the prospective interval calibration, which is bound to the
-model key.
+model key. Rolling back to a release whose tick report has no
+`evaluation_backlog` also drops the evaluation memory: that release re-scores
+every live run in its first tick, as the deploy of 2026-11-09 did (3800 runs,
+379 s); on a cold page cache, at the 0.78 s a run a copy took on a saturated
+disk, some 4,100 runs would run past the tick's 10-minute timeout.
 
 `last-tick.json` and `last-derived.json`, the append-only `ticks.jsonl` and
 `derived.jsonl`, service exit status and journald surface failures and missed
 final windows. Configure your host monitor to flag nonzero exit status and a
 stale heartbeat (no finished tick for 10 minutes; no finished derived run for
 an hour).
+SQLite's temporary files (a sort larger than its page cache) go to `tmp/`
+in the operations directory, on the ledger's disk: `python -m nba_forecast`
+sets `SQLITE_TMPDIR` there for every command that opens a ledger, unless the
+variable is already set. SQLite's default, `/var/tmp`, is on the root disk
+(`PrivateTmp` is a view of the same disk), where one spilled sort filled the
+remaining 7 GB on 2026-11-09. SQLite reads the variable once, when the
+library loads, so it cannot be changed from inside a running process.
 No email/Slack messages are sent. Back up the entire persistent operations
 directory, especially `forecast.sqlite` with its write-ahead log
 (`forecast.sqlite-wal` and `-shm`, present while a connection is open; a copy
