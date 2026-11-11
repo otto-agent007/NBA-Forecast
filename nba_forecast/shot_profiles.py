@@ -163,7 +163,7 @@ def _replay(directory,source,history,context,*,digest=None):
         raise ValueError('Shot source and actual game times disagree')
     key=('shot',str(Path(directory).resolve()),digest or replay_cache.digest(source),replay_cache.digest(history),
          replay_cache.stamp(_raw_paths(directory,source)))
-    return replay_cache.replay(key,lambda:_replay_source(directory,source,history))
+    return replay_cache.replay(key,lambda:_replay_source(directory,source,history),directory)
 
 
 def _raw_paths(directory,source):

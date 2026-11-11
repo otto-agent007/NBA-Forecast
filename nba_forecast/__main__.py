@@ -301,7 +301,8 @@ def main(argv=None):
             exit_code=0 if not value['unresolved'] else 2
         elif args.command == 'tick':
             from .operations import run_tick
-            value=run_tick(args.directory,_rows(args.history))
+            from .tick_memo import history_key
+            value=run_tick(args.directory,_rows(args.history),history_key=history_key(args.history))
             exit_code=0 if value['status']=='complete' and not value['missed_final_games'] else 2
             if not args.output and not args.full_report:
                 print(json.dumps(_tick_summary(value), sort_keys=True, allow_nan=False))

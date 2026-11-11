@@ -591,7 +591,9 @@ def apply_review(snapshot,review,*,skip_superseded=False):
     return out
 
 
-def run_tick(directory,history):
+def run_tick(directory,history,history_key=None):
+    """One tick. ``history_key`` names the input history's content (``tick_memo.history_key`` of its files);
+    without it the rows are digested."""
     folder=Path(directory)
     folder.mkdir(parents=True,exist_ok=True)
     lock=folder/'tick.lock'
@@ -604,7 +606,7 @@ def run_tick(directory,history):
         raise ValueError('tick already running') from exc
     report=dict(started_at=_now(),status='running',created_runs=0,recovered_runs=0,evaluated_runs=0,errors=[],warnings=[],missed_final_games=[],waiting_jobs=[])
     try:
-        _tick(folder,history,report)
+        _tick(folder,history,report,history_key)
         report['status']='partial' if report['errors'] or report['missed_final_games'] else 'complete'
     except Exception as exc:
         report['errors'].append(dict(task='tick',error=f'{type(exc).__name__}: {exc}'))
@@ -633,8 +635,12 @@ def _phases(report):
     return mark
 
 
-def _tick(folder,history,report):
-    validate_history(history)
+def _tick(folder,history,report,history_key=None):
+    from .tick_memo import HistoryMemo
+    # The input history, the captured finals and their enrichment are prepared once per
+    # input state (``tick_memo``), not every minute, and shared with the player sync.
+    memo=HistoryMemo(folder,history,history_key)
+    memo.validate_input()
     phase=_phases(report)
     tick_started=time.monotonic()
     # Daily evidence must still be collected when the calendar endpoint fails.
@@ -662,12 +668,13 @@ def _tick(folder,history,report):
     phase('recover_runs')
     # Enrichment only fills optional fields (rebounds, assists, steals, blocks, starter)
     # into captured finals; a failure is reported and the tick goes on to forecast.
-    try:
-        from .player_sync import enrich_final_cache
-        report['warnings'].extend(dict(task='enrich_finals',**e) for e in enrich_final_cache(folder,skipped=[]))
-    except Exception as exc:
-        report['errors'].append(dict(task='enrich_finals',error=f'{type(exc).__name__}: {exc}'))
-    history=_merge_finals(history,cache,errors=report['errors'])
+    history,skipped,merge_errors,_,failure=memo.merged()
+    if failure is None:
+        report['warnings'].extend(dict(task='enrich_finals',**e) for e in skipped)
+    else:
+        report['errors'].append(dict(task='enrich_finals',error=f'{type(failure).__name__}: {failure}'))
+    report['errors'].extend(merge_errors)
+    report['warnings'].extend(memo.warnings())
     prior_path=folder/'historical-priors.json'
     if prior_path.exists():
         book=json.loads(prior_path.read_text())
@@ -762,11 +769,12 @@ def _tick(folder,history,report):
     if (folder/'roster.json').exists():
         try:
             from .player_sync import sync_player_data
-            synced=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule)
+            synced=sync_player_data(folder,history,roster=roster,max_shot_games=16,schedule=schedule,memo=memo)
             report['player_sync']=player_sync_summary(synced)
             report['warnings'].extend(dict(task='shot_data',**e) for e in synced['errors'])
         except Exception as exc:
             report['errors'].append(dict(task='player_sync',error=f'{type(exc).__name__}: {exc}'))
+        report['warnings'].extend(memo.warnings())
     phase('player_sync')
     # LiveData play-by-play for the postgame recaps and the daily review's exit and blowout labels.
     try:
@@ -877,6 +885,9 @@ def _game_identity(row):
     return (row['season'],parse_time(row['game_time']),tuple(sorted((row['team_id'],row['opponent_id']))))
 
 
+FINAL_IDENTITY_MISMATCH='Captured final and input history disagree on game identity; the captured final is used'
+
+
 def _merge_finals(history,cache,errors=None):
     """The input history plus every captured final, the newest known_at winning per player-game.
 
@@ -892,6 +903,11 @@ def _merge_finals(history,cache,errors=None):
     first={}
     for r in history:
         first.setdefault(r['game_id'],r)
+    # The players ``combined`` holds for each game, so a final replaces its game's rows
+    # without scanning every row of the history for every final.
+    players_by_game={}
+    for gid,pid in combined:
+        players_by_game.setdefault(gid,set()).add(pid)
     for p in sorted(cache.glob('*.json')):
         try:
             rows=json.loads(p.read_text())
@@ -907,15 +923,19 @@ def _merge_finals(history,cache,errors=None):
             mismatched={r['game_id'] for r in rows
                         if r['game_id'] in first and _game_identity(first[r['game_id']])!=_game_identity(r)}
             if mismatched:
-                errors.append(dict(task='finals_cache',game_id=p.stem,
-                    error='Captured final and input history disagree on game identity; the captured final is used'))
-        for key in [k for k in combined if (k[0]==p.stem and k[1] not in players) or k[0] in mismatched]:
+                errors.append(dict(task='finals_cache',game_id=p.stem,error=FINAL_IDENTITY_MISMATCH))
+        stem=p.stem
+        stale=[(gid,pid) for gid in {stem,*mismatched} for pid in players_by_game.get(gid,())
+               if gid in mismatched or pid not in players]
+        for key in stale:
             del combined[key]
+            players_by_game[key[0]].discard(key[1])
         for row in rows:
             key=(row['game_id'],row['player_id'])
             old=combined.get(key)
             if old is None or parse_time(old['known_at'])<=parse_time(row['known_at']):
                 combined[key]=row
+                players_by_game.setdefault(key[0],set()).add(key[1])
     history=list(combined.values())
     validate_history(history)
     return history

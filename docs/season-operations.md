@@ -164,6 +164,25 @@ a tick; `python -m nba_forecast compact-ticks --directory DIR` rewrites those
 rows in place under the tick lock (run it between ticks; a tick that finds the
 lock held exits and the timer retries a minute later).
 
+The tick's `history` phase (the input history, every captured final, and the
+optional fields enrichment fills from archived LiveData box scores) is prepared
+once per input state, not once a minute (`nba_forecast/tick_memo.py`): its keys
+are the finals' and box-score archives' names, sizes and modification times,
+the `--history` files' and the package's source digest, recorded in
+`cache/history-memo.json` with the merged history stored beside it. A tick whose
+inputs are unchanged reads that history back and repeats the enrichment
+warnings recorded with it; the player sync uses the tick's merge instead of a
+second one. Player pages are rebuilt only when the history, roster or shot
+files change, and a page or `players/index.json` is written only when its
+content changes, so their `as_of` is when the content last changed
+(`cache/player-pages.json` holds each page's digest). That record is keyed on
+the code, so a page's `as_of` means its last change or the last deploy,
+whichever is later. Before 2026-11-09 an idle
+tick spent about 14 s of CPU every minute on this; deleting `cache/` costs one
+tick the old work. The memo never stops a tick: an unreadable, malformed or
+unwritable record is treated as missing (a `history_memo` warning) and the step
+runs as before; the stored merged history is checked against its SHA-256.
+
 Python 3.11+ is required. Install **Poppler (`pdftotext`)** for injury extraction
 (e.g. `sudo apt-get install poppler-utils` on Ubuntu). Missing Poppler is explicit:
 extraction failures block new forecasts and are retried. Injury captures remain
@@ -310,9 +329,13 @@ map built once per history object (`nba_forecast/replay_cache.py`): the first
 game of a tick pays the replays (about 20 s), each further game 6 to 8 s, and
 the forecasts are byte-identical. The replay key carries the archive digests,
 the rows replayed against and each archive file's size and modification time,
-so a rewritten archive is replayed and rejected as before. The replay cost of
-that first game grows with the season's archives; a cache that outlives the
-process would be the next step. One game whose source no longer replays is left
+so a rewritten archive is replayed and rejected as before. Since 2026-11-09 a
+replay is also kept on disk under the data folder (`cache/replay/`, keyed on the
+same inputs plus the package's source digest, so a deploy starts a fresh store
+and removes the old one), and the first game of the next tick reads it instead
+of replaying the season again; an unreadable entry is replayed and rewritten.
+The league-wide history maps stay per process (about a second to rebuild from
+the history the tick holds). One game whose source no longer replays is left
 out of that preparation and reported, rather than failing every forecast
 (`full-boxscore.md`, "One bad source costs one game"); before 2026-11-05 one
 unparseable page (0022600160, 2026-11-04) withheld a whole slate.
