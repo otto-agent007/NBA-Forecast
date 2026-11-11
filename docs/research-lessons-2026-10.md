@@ -208,7 +208,10 @@ rosters the replay cannot see) and newcomer projections (minutes +0.009 ±
 
 One layer hurts: the minutes redistribution helps player points (switched
 off, +0.031 worse) but takes about three points off each team's total
-(team-points bias −0.15 without it, −3.11 with it).
+(team-points bias −0.15 without it, −3.11 with it). On 2026-11-09 that turned
+out to be its turnover rates, which the team volume budget did not cap; capped
+like the shots, the production path's team-points bias goes from −3.21 to −0.01
+(`docs/backtest.md`, 2026-11-09).
 
 Start to now, 2025-26, the same 868 games: points MAE 4.87 → 4.49, minutes
 6.32 → 4.85, margin 12.25 → 11.48, winners 63.9% → 69.6%

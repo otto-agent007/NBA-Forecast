@@ -94,6 +94,15 @@ def forecast_candidate(snapshot,history):
                 if field=='fga':
                     prior=original[pid]['rates']['fg3a']
                     inputs[pid]['rates']['fg3a']=min(inputs[pid]['rates']['fga'],prior+scale*(inputs[pid]['rates']['fg3a']-prior))
+                    # Turnovers end possessions as shots do, so the turnover rates the
+                    # allocator added keep the share of its shot additions this budget
+                    # lets through. Uncapped, teammates kept 3.4 of the 4.3 turnovers a
+                    # team-game the absent players vacated but 0.1 of their 27 shots, and
+                    # the usage budget below took the surplus possessions out of everyone's
+                    # shooting: 3.1 points off each team total on the three replayed seasons
+                    # (scripts/research/totals_layers.py; docs/backtest.md, 2026-11-09).
+                    prior=original[pid]['rates']['tov']
+                    inputs[pid]['rates']['tov']=prior+scale*(inputs[pid]['rates']['tov']-prior)
             record[field]=dict(baseline=old,after_extra_minutes=minute_added,observed_volume_budget=target,
                 additional_minutes_scale=minute_scale,additional_rate_scale=scale)
         volume[team]=record
