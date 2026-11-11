@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from nba_forecast import backtest as B
@@ -135,8 +136,16 @@ class StoredFormTests(unittest.TestCase):
         rows = [dict(player_id='P1', team_id='H', game_id=GAME['game_id'], status='projected'),
                 dict(player_id='P2', team_id='X', game_id=None, status='no_game'),
                 dict(player_id='P3', team_id='A', game_id=GAME['game_id'], status='out')]
-        kept = L.as_stored(snapshot, dict(predictions=rows, coverage={}))['predictions']
+        forecast = dict(predictions=rows, coverage={})
+        from unittest.mock import patch, sentinel
+        # Code without store.stored_forecast (before the slim stored forecast): the replay's own filter.
+        with patch.object(L, 'store', SimpleNamespace()):
+            kept = L.as_stored(snapshot, forecast)['predictions']
         self.assertEqual([r['player_id'] for r in kept], ['P1', 'P3'])
+        # Code with it: the store's own function, which validates and filters (tests.test_stored_forecast covers it).
+        with patch.object(L.store, 'stored_forecast', return_value=sentinel.stored, create=True) as stored:
+            self.assertIs(L.as_stored(snapshot, forecast), sentinel.stored)
+        stored.assert_called_once_with(snapshot, forecast)
 
 
 class StatisticsTests(unittest.TestCase):
