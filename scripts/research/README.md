@@ -19,6 +19,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `derived_equivalence.py` | Main's full derived rebuild against this branch's cached one on the same copy: every output file identical, cold, warm and after new runs, with timings | a production copy (or `--ledger` subset), two checkouts |
 | `derived_gate_check.py` | On a copy: the cached interval-calibration fit equals its direct re-fit (the activation gate), and margin samples through the cache equal the direct ledger read; what each costs | a production copy, `PYTHONPATH` this checkout |
 | `subset_ledger.py` | Copies the newest N runs of a ledger, with their histories and evaluations and original rowids, for the checks above | a copy's ledger |
+| `live_replay.py` | How the code of the checkout it sits in scores on the live forecasts' own inputs: each finished game's final pregame run (or `--which first`) re-forecast from its saved snapshot and history, `frozen` (the snapshot as stored; a run of the same release must come back byte for byte) or `rebuilt` (the prepared model inputs, team ratings and market strength included, prepared again as of the run), scored beside what was published and the close; `--compare` pairs two outputs game by game | a production copy (never production): `state.json`, the ledger's `run_records` and `histories` by key, `model-artifacts`, `environment-finals`, `market/game-lines`, `finals` |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 | `rescore_after_deploy.py` | What the first ticks after a deploy spend re-scoring live runs, main's tree against a branch's, and whether the drained evaluations equal main's | a private copy of an operations folder (ledger, `finals/`, `evaluation-state.json`) |
 | `run_ids_cold.py` | What listing a ledger's run IDs costs from a cold page cache through the `runs` view against `run_records` | a copy of a ledger |
@@ -74,6 +75,15 @@ before 2026-10-27).
 1–2 (270 games), +0.39 in weeks 3–4, +0.12 in weeks 5–8 and +0.33 in the gate
 window; per ten uncounted last-season minutes over the first 30% of dates, model
 miss −0.04 ± 0.16, close −0.12 ± 0.04 relative to the model.
+
+## Run on 2026-11-10
+
+`live_replay.py` with main `1385e80` on the 134 finished live games with a
+pregame run (`docs/backtest.md`, "Live replay"): on the 122 with a close,
+rebuilt margin MAE 11.77 against 12.51 published and the close's 10.76, today −
+close +1.01 ± 0.29 (one standard error, Eastern-date clusters); without the
+four games published 10+ points from the close +1.04 ± 0.29, and today −
+published +0.03 ± 0.12. Every v4 run came back byte for byte.
 
 ## Run on 2026-11-06
 

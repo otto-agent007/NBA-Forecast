@@ -344,6 +344,49 @@ def published_margin(selection, game):
     return None, 'unavailable', player_sum, reason
 
 
+def _paired_errors(rows):
+    """Model and closing-line margin error on the same rows, and their paired difference with one date-clustered error."""
+    from .backtest import _day, _mean_se
+    model = [r['margin_abs_error']['model'] for r in rows]
+    market = [r['margin_abs_error']['market'] for r in rows]
+    differences = [a - b for a, b in zip(model, market)]
+    dates = [_day(r['start_time']).isoformat() for r in rows]
+    se = _mean_se(differences, [(d,) for d in dates])[0] if len(rows) > 1 else None
+    return dict(games=len({r['game_id'] for r in rows}), rows=len(rows), dates=len(set(dates)),
+                model=sum(model) / len(rows), market=sum(market) / len(rows),
+                difference=sum(differences) / len(rows), difference_se=se,
+                first_game=min(r['start_time'] for r in rows), last_game=max(r['start_time'] for r in rows))
+
+
+def method_breakdown(rows):
+    """The spread rows' margin error by the margin method and the calibration family of the run that published them.
+
+    The all-time figures mix every margin method and parameter set the service has
+    run; this puts the current method's and family's own live record beside them
+    (``margins.METHOD``, ``margins.CALIBRATION_FAMILY``). A row that published the
+    player sum (no estimated margin forecast) is counted under ``player_sum`` and
+    in no family; a run whose saved margin inputs carry no parameter set has no
+    family.
+    """
+    from .margins import CALIBRATION_FAMILY, METHOD
+    methods, families = {}, {}
+    for r in rows:
+        # A row without a margin method published the player sum (model_margin_basis).
+        methods.setdefault(r.get('margin_method') or 'player_sum', []).append(r)
+        if r.get('margin_family'):
+            families.setdefault(r['margin_family'], []).append(r)
+    current = [r for r in rows if r.get('margin_family') == CALIBRATION_FAMILY]
+    return dict(
+        by_margin_method={m: dict(_paired_errors(v), current=m == METHOD) for m, v in sorted(methods.items())},
+        by_margin_family={f: dict(_paired_errors(v), parameter_digest=f.split('|')[-1], current=f == CALIBRATION_FAMILY)
+                          for f, v in sorted(families.items())},
+        current_margin_family=dict(family=CALIBRATION_FAMILY, **(_paired_errors(current) if current else dict(games=0, rows=0))),
+        policy=('Absolute margin errors of the model (the published margin) and the closing line on the same rows, '
+                'by the margin method and calibration family (method|settlement|parameter digest) of the run '
+                'the report selected; difference is model minus market with ONE standard error clustered by '
+                'Eastern game date (backtest._mean_se). A small sample; not an edge.'))
+
+
 def market_report(folder, schedule, as_of=None, *, selected=None):
     """Compare each game's latest pregame forecast with the closing line and the final score.
 
@@ -399,6 +442,14 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             continue
         model_total = teams['home']['points_mean'] + teams['away']['points_mean']
         margin_forecast = selection.get('margin_forecast') or {}
+        # The margin method and calibration family of the margin forecast this row published
+        # (method_breakdown). A run whose margin forecast was unavailable published the player sum
+        # and is counted as that, as the prospective margin calibration leaves it out of every family.
+        margin_method = margin_forecast.get('method') if basis == 'margin_forecast' else None
+        margin_family = None
+        if margin_method and isinstance(selection.get('margin_parameters'), dict):
+            from .margins import calibration_family
+            margin_family = calibration_family(margin_method, margin_forecast.get('settlement'), selection['margin_parameters'])
         model_home_win = margin_forecast.get('home_win_probability')
         if model_home_win is None and margin_forecast.get('status') == 'estimated':
             from .margins import probability_above
@@ -421,7 +472,7 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
             row = dict(game_id=gid, start_time=game['start_time'], provider=line['provider'], provider_id=pid,
                        season=schedule.get('season'), home_team_id=game['home_team_id'], away_team_id=game['away_team_id'],
                        run_id=selection['run_id'], stage=stage,
-                       model_margin=model_margin, model_margin_basis=basis,
+                       model_margin=model_margin, model_margin_basis=basis, margin_method=margin_method, margin_family=margin_family,
                        player_sum_margin=player_sum_margin, model_total=model_total, model_home_win=model_home_win,
                        spread_home=spread, total_line=total, home_moneyline=home_ml, away_moneyline=away_ml,
                        actual_margin=actual_margin, actual_total=actual_total,
@@ -453,9 +504,13 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                    close_teacher=live_diagnostics(rows, schedule.get('season')))
     spread_rows = [r for r in rows if 'spread_edge' in r]
     total_rows = [r for r in rows if 'total_edge' in r]
+    breakdown = None
     if spread_rows:
         summary['margin_abs_error'] = dict(model=sum(r['margin_abs_error']['model'] for r in spread_rows) / len(spread_rows),
                                            market=sum(r['margin_abs_error']['market'] for r in spread_rows) / len(spread_rows), n=len(spread_rows))
+        # The whole breakdown is the report's; the summary, which every tick report carries, keeps the current family's line.
+        breakdown = method_breakdown(spread_rows)
+        summary['current_margin_family'] = breakdown['current_margin_family']
         summary['spread_leans'] = {}
         for threshold in EDGE_THRESHOLDS:
             picks = []
@@ -497,5 +552,6 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                                  model_pick_accuracy=sum((r['model_margin'] > 0) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows),
                                  market_pick_accuracy=sum((r['market_home_win'] > .5) == (r['actual_margin'] > 0) for r in win_rows) / len(win_rows))
     return dict(version=VERSION, generated_at=as_of, summary=summary, games=rows, errors=errors,
+                margin_breakdown=breakdown,
                 policy='Closing line is the last capture before tipoff, or the provider\'s recorded close recovered after an outage (close_recovered). Leans are descriptive; a win rate on a small sample is not an edge. '
                        'Absolute errors compare the model and the market against the same final scores.')

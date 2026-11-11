@@ -676,6 +676,110 @@ above seeds them.
 A result here is necessary, not sufficient: a change that improves the replay is
 expected to show up live after enough games, and both are reported.
 
+## Live replay
+
+The gate replays the baseline path on box-score rosters; live, the margin has
+trailed the close by more than the gate predicts, over games made by four
+margin methods and several fixes. `scripts/research/live_replay.py` scores the
+code of the checkout it sits in on the inputs the live forecasts actually had:
+for each finished game it takes the pregame run the market report scores (the
+last final-stage run before tip, else the last preliminary; `--which first`
+takes the day's first), re-forecasts it from the run's saved snapshot and
+history, and scores it beside what was published and the closing line, with
+the market report's and the ledger evaluation's own rules (published margin,
+closing line, winner Brier; `store._report` for players). It reads a
+production copy, never production, and finds runs through `state.json` and the
+ledger's `run_records` by key, one 59 MB history at a time.
+
+```bash
+nice -n 19 python3 scripts/research/live_replay.py --copy COPY \
+  --output-frozen OUT/frozen.json --output-rebuilt OUT/rebuilt.json
+python3 scripts/research/live_replay.py --compare MAIN/rebuilt.json BRANCH/rebuilt.json
+```
+
+`--ledger` reads the runs from another ledger, by key only (production's,
+read-only, while COPY holds the small files), and `--artifacts` the model
+artifacts from another folder. This host's disks ignore I/O priority classes
+(`ionice -c3` does nothing under mq-deadline), so the tool throttles itself:
+after each game it sleeps twice the time it spent reading (`--io-share`, a
+third by default), at least a second after each history, and it pauses while
+production's last completed tick started more than two minutes ago.
+
+Two modes. **Frozen** forecasts the snapshot exactly as stored: a run made by
+the same release must come back byte for byte (the self-test), and code inside
+`forecast` (player model, allocation, blend weights) shows up, but nothing that
+was prepared before the forecast and saved in the snapshot does. In particular a
+run of an earlier margin method carries margin inputs today's code refuses
+(`unsupported_margin_inputs`), so its replay publishes the player sum.
+**Rebuilt** also prepares `model_enhancements` again with this code, from the
+run's own model artifact, as of the run's `prepared_at`: the pace and defense
+environment and the margin inputs (team ratings with the market-implied
+strength from closes retrieved by then, the outcome dispersion). The line
+captures are bounded by `retrieved_at` (PR #36), which is sufficient when every
+capture was appended before its game tipped and no recovered close was
+retrieved before its recovery began; the tool counts both in the copy (on
+2026-11-10: 0 of 1,960 captures after tip, 0 of 10 recovered closes). The
+environment finals are not: a record carries no
+time it was written, and a box score fetched again later is written as a new
+record that keeps the box score's earlier `known_at`. So by default the rebuild
+reads only the records the run itself read (its `live_team_game_sources`);
+`--finals known-at` reads every record by `known_at`, and each run reports what
+that would add. Everything else stays frozen and is listed in the output: the
+roster and the injury statuses as parsed then, `reported_unavailable`, the
+historical priors, shot profiles and shot quality (their preparation writes
+evidence files into the data folder), role context, the preflight and its
+lineups, and the history.
+
+The proof that the rebuild is as-of clean is the self-test applied to the
+prepared inputs: for every run the running release made, preparing again must
+give the same `model_enhancements` (the same `inputs_sha256` for the margin
+inputs); the output says so, or says the proof is missing when the copy has no
+run of that release. On the 2026-10-29 copy with the code of release
+`e4b31470`, the twelve runs that release made came back byte for byte in both
+modes and their prepared inputs hashed the same; the sixteen runs of the same
+margin method and parameters had identical margin inputs.
+
+Limits: a few weeks of games on fifteen game dates, one sportsbook's captured
+close (the lines are captures, not quotes; 12 of the 134 replayed games have
+none), and the frozen inputs above. `--compare` pairs two outputs on the same
+original runs and prints candidate minus base with one standard error
+clustered by Eastern date, so a model branch can be judged on live inputs:
+run the script in main's tree, run it in the branch's tree, compare.
+
+First run, 2026-11-10, main `1385e80` (package `db02339b`, the deployed
+release), on the 134 finished games of 2026-10-23..11-09 with a pregame run (128
+final-stage, 6 preliminary; median 9.9 minutes before tip), runs read by key
+from production's ledger, the other files frozen from the 11-09 copy; about 20
+minutes for both modes. ± is one standard error clustered by Eastern date.
+Margin against the final, on the 122 games with a DraftKings close (15 dates):
+
+| Games | Published | Today's code, rebuilt | Close | Today − published | Today − close |
+|---|---|---|---|---|---|
+| All 122 | 12.51 | 11.77 | 10.76 | −0.73 ± 0.50 | +1.01 ± 0.29 |
+| Without the 4 published 10+ from the close | 11.92 | 11.95 | 10.92 | +0.03 ± 0.12 | +1.04 ± 0.29 |
+| Original v1 runs (8, one date) | 12.55 | 6.00 | 4.62 | −6.54 ± 2.93 | +1.38 ± 1.60 |
+| Original v2 runs (16) | 11.33 | 10.93 | 11.12 | −0.40 ± 0.46 | −0.19 ± 0.93 |
+| Original v3 runs (77) | 12.62 | 12.22 | 10.94 | −0.40 ± 0.57 | +1.28 ± 0.33 |
+| Original v4 runs (21, three dates) | 12.99 | 12.99 | 12.17 | +0.00 | +0.82 ± 1.11 |
+
+Today's code would have avoided the four outliers (three opening-night v1
+games, and Hawks at Pacers on 2026-11-02, whose short bench left a 60.9-point
+Pacers total and the player sum as the published margin; 29.75 published
+against 6.59 replayed) and otherwise scores like what was published: on live inputs it trails the close by about one point, against the
+gate's 0.26, so the gap between the gate and live is not the mix of margin
+methods or the fixed bugs. Winner Brier 0.2077 published, 0.2043 replayed,
+0.1814 the close (120 games); game total 14.80, 14.75 and 13.81; team points
+10.13 → 9.83 (−0.30 ± 0.20, bias −0.80 → −0.83); player points of players
+who played 4.45 → 4.42 (−0.033 ± 0.015, bias +0.46 → +0.14), minutes 4.83 →
+4.78 (bias +1.01 → +0.44), participation Brier 0.0733 → 0.0710. Frozen, the
+v1–v3 runs keep only their player sum (`unsupported_margin_inputs`): 12.07
+against the close's 10.76 on the 122 games. Self-test: the 3 runs of the
+deployed release and the 18 of the previous v4 release come back byte for byte
+in both modes; preparing again reproduced the deployed release's
+`model_enhancements` (3 of 3) and every v4 run's margin inputs and closes read
+(21 of 21). The `known_at` bound alone would have read another version of an
+environment final in 3 of the 122 runs; on those games it moves no margin.
+
 ## Updating the reference
 
 When a change is merged, run the full backtest, commit its two files as

@@ -115,7 +115,9 @@ def _frozen(folder,rowid,gid,home,away,start,created):
             forecast_sha256=row['forecast_sha256'],
             totals=next((t for t in forecast.get('game_totals',[]) if t['game_id']==gid),None),
             margin_forecast=next((t for t in forecast.get('margin_forecasts',[]) if t['game_id']==gid),None),
-            lineups=snapshot.get('preflight',{}).get('lineups'))
+            lineups=snapshot.get('preflight',{}).get('lineups'),
+            # The parameter set the margin was located with: the third part of its calibration family.
+            margin_parameters=((snapshot.get('model_enhancements') or {}).get('margin_inputs') or {}).get('parameters'))
         return dict(entry=entry),predictions
     except (KeyError,ValueError,TypeError,AttributeError,OverflowError) as exc:
         return dict(error=freeze_exception(exc)),None

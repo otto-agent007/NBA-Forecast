@@ -124,6 +124,7 @@ class ArchiveTests(unittest.TestCase):
         report = M.market_report(self.folder, dict(season='2026-27', games=[GAME]), '2026-10-24T05:00:00Z',
                                  selected={(GAME['game_id'], 'final'): dict(run_id='r1')})
         self.assertEqual([e['game_id'] for e in report['errors']], [GAME['game_id']])
+        self.assertIsNone(report['margin_breakdown'])
 
     def test_capture_index_counts_each_game_on_its_own(self):
         first = M.extract_game_lines(summary(), GAME, '2026-27', META)
@@ -234,6 +235,97 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(row['superseded'], dict(run_id='r2', stage='final', reason='incomplete_team_totals'))
         self.assertAlmostEqual(row['margin_abs_error']['model'], 7.4)
         self.assertEqual(report['summary']['margin_unavailable'], [])
+
+
+    def test_breakdown_by_margin_method_and_family_puts_the_current_record_beside_the_all_time_one(self):
+        from nba_forecast import margins
+        old_method = 'paired_final_score_outcome_dispersion_team_rating_absence_blend_discrete_normal_v3'
+        old_parameters = dict(margins.PARAMETERS, rating_weight=.5)
+        # (game, tipoff, home points, away points, published margin, method, parameters); the close is home by 2.5 everywhere.
+        plan = [('0022600010', '2026-10-23T23:00:00Z', 115, 108, 6., old_method, old_parameters),
+                ('0022600011', '2026-10-24T23:00:00Z', 105, 108, 0., margins.METHOD, margins.PARAMETERS),
+                ('0022600012', '2026-10-25T23:00:00Z', 101, 100, 10., margins.METHOD, margins.PARAMETERS),
+                ('0022600013', '2026-10-25T23:30:00Z', 100, 90, 4., margins.METHOD, None)]
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            (folder / 'finals').mkdir()
+            template = M.extract_game_lines(summary(), GAME, '2026-27', META)[0]
+            games, selected = [], {}
+            for gid, tip, home, away, published, method, parameters in plan:
+                game = dict(GAME, game_id=gid, start_time=tip)
+                games.append(game)
+                M.record_game_lines(folder, [dict(template, game_id=gid, start_time=tip)], '2026-10-23T21:00:30Z')
+                (folder / 'finals' / (gid + '.json')).write_text(json.dumps([dict(game_id=gid, team_id='H', pts=home), dict(game_id=gid, team_id='A', pts=away)]))
+                selected[(gid, 'final')] = dict(run_id='r' + gid[-2:], margin_parameters=parameters, totals=dict(teams=[
+                    dict(team_id='H', side='home', points_mean=110.), dict(team_id='A', side='away', points_mean=105.)]),
+                    margin_forecast=dict(status='estimated', mean_margin=published, method=method, settlement=margins.SETTLEMENT,
+                                         home_win_probability=.6))
+            report = M.market_report(folder, dict(season='2026-27', games=games), '2026-10-26T05:00:00Z', selected=selected)
+        s, b = report['summary'], report['margin_breakdown']
+        rows = {r['game_id']: r for r in report['games']}
+        self.assertEqual(rows['0022600010']['margin_family'], margins.calibration_family(old_method, margins.SETTLEMENT, old_parameters))
+        self.assertEqual(rows['0022600011']['margin_family'], margins.CALIBRATION_FAMILY)
+        self.assertIsNone(rows['0022600013']['margin_family'], 'no parameter set saved, no family')
+        # Model errors 1, 3, 9, 6 and the close's 4.5, 5.5, 1.5, 7.5: the all-time figures are unchanged.
+        self.assertEqual(s['margin_abs_error'], dict(model=19 / 4, market=19 / 4, n=4))
+        current = b['by_margin_method'][margins.METHOD]
+        self.assertEqual({k: current[k] for k in ('games', 'rows', 'dates', 'model', 'market', 'difference', 'current')},
+                         dict(games=3, rows=3, dates=2, model=6., market=29 / 6, difference=7 / 6, current=True))
+        old = b['by_margin_method'][old_method]
+        self.assertEqual((old['games'], old['difference'], old['difference_se'], old['current']), (1, -3.5, None, False))
+        family = b['current_margin_family']
+        self.assertEqual(s['current_margin_family'], family, 'the summary carries the current family\'s line only')
+        self.assertNotIn('by_margin_method', s)
+        self.assertEqual((family['family'], family['games'], family['model'], family['market'], family['difference']),
+                         (margins.CALIBRATION_FAMILY, 2, 6., 3.5, 2.5))
+        # Differences -2.5 and +7.5 on two dates: one-way date clusters give (2/1)(5² + 5²)/2² = 25, above independence (12.5).
+        self.assertAlmostEqual(family['difference_se'], 5.)
+        self.assertEqual(sorted(b['by_margin_family']), sorted([margins.CALIBRATION_FAMILY, rows['0022600010']['margin_family']]))
+        self.assertTrue(b['by_margin_family'][margins.CALIBRATION_FAMILY]['current'])
+        self.assertEqual(b['by_margin_family'][margins.CALIBRATION_FAMILY]['parameter_digest'], margins.parameter_digest(margins.PARAMETERS))
+        for key in ('spread_leans', 'total_leans', 'winner', 'close_teacher', 'total_abs_error'):
+            self.assertIn(key, s)
+
+    def test_a_run_whose_margin_forecast_was_unavailable_counts_as_the_player_sum(self):
+        from nba_forecast import margins
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            (folder / 'finals').mkdir()
+            template = M.extract_game_lines(summary(), GAME, '2026-27', META)[0]
+            games, selected = [], {}
+            for gid, tip, status in (('0022600010', '2026-10-23T23:00:00Z', 'estimated'), ('0022600011', '2026-10-24T23:00:00Z', 'unavailable')):
+                game = dict(GAME, game_id=gid, start_time=tip)
+                games.append(game)
+                M.record_game_lines(folder, [dict(template, game_id=gid, start_time=tip)], '2026-10-23T21:00:30Z')
+                (folder / 'finals' / (gid + '.json')).write_text(json.dumps([dict(game_id=gid, team_id='H', pts=115), dict(game_id=gid, team_id='A', pts=108)]))
+                forecast = dict(status=status, method=margins.METHOD, settlement=margins.SETTLEMENT, player_sum_margin=4.)
+                if status == 'estimated':
+                    forecast.update(mean_margin=6., home_win_probability=.6)
+                else:
+                    # Complete team totals: a run without an estimated margin publishes their difference
+                    # (market_lines.published_margin); with partial totals it would publish none.
+                    forecast.update(reason='insufficient_historical_games')
+                selected[(gid, 'final')] = dict(run_id='r' + gid[-2:], margin_parameters=margins.PARAMETERS, margin_forecast=forecast,
+                    totals=dict(status='complete', teams=[dict(team_id='H', side='home', points_mean=110.), dict(team_id='A', side='away', points_mean=106.)]))
+            report = M.market_report(folder, dict(season='2026-27', games=games), '2026-10-26T05:00:00Z', selected=selected)
+        rows = {r['game_id']: r for r in report['games']}
+        self.assertEqual((rows['0022600011']['model_margin_basis'], rows['0022600011']['model_margin']), ('player_sum', 4.))
+        self.assertEqual((rows['0022600011']['margin_method'], rows['0022600011']['margin_family']), (None, None))
+        self.assertEqual(rows['0022600010']['margin_family'], margins.CALIBRATION_FAMILY)
+        b = report['margin_breakdown']
+        self.assertEqual(sorted(b['by_margin_method']), sorted([margins.METHOD, 'player_sum']))
+        self.assertEqual((b['by_margin_method'][margins.METHOD]['games'], b['by_margin_method']['player_sum']['games']), (1, 1))
+        self.assertEqual((b['current_margin_family']['games'], b['current_margin_family']['model']), (1, 1.))
+        self.assertEqual(list(b['by_margin_family']), [margins.CALIBRATION_FAMILY])
+
+    def test_breakdown_without_a_current_family_run(self):
+        from nba_forecast import margins
+        rows = [dict(game_id='G1', start_time='2026-10-23T23:00:00Z', margin_method='old', margin_family='old|s|0123',
+                     margin_abs_error=dict(model=4., market=3.))]
+        out = M.method_breakdown(rows)
+        self.assertEqual(out['current_margin_family'], dict(family=margins.CALIBRATION_FAMILY, games=0, rows=0))
+        self.assertFalse(out['by_margin_method']['old']['current'])
+        self.assertEqual(out['by_margin_family']['old|s|0123']['parameter_digest'], '0123')
 
 
 class CaptureBudgetTests(unittest.TestCase):
