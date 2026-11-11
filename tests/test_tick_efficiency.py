@@ -318,6 +318,28 @@ class DerivedReportTests(unittest.TestCase):
         self.refresh()
         self.assertEqual(self.builds,2)
 
+    def test_new_runs_alone_rebuild_at_most_every_half_hour_and_evaluations_at_once(self):
+        db=self.folder/'forecast.sqlite'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE runs (x)')
+            conn.execute('CREATE TABLE evaluations (x)')
+        def add(table):
+            with sqlite3.connect(db) as conn:
+                conn.execute(f'INSERT INTO {table} VALUES (1)')
+        self.refresh()
+        add('runs')
+        self.clock=at(self.clock,60)
+        self.assertEqual(self.refresh()['status'],'unchanged','a pregame run a minute after a rebuild waits')
+        self.clock=at(self.clock,operations.DERIVED_RUNS_REFRESH_SECONDS-120)
+        self.assertEqual(self.refresh()['status'],'unchanged')
+        self.clock=at(self.clock,120)
+        self.assertEqual(self.refresh()['status'],'rebuilt','half an hour after the last rebuild')
+        self.assertEqual(self.refresh()['status'],'unchanged')
+        add('evaluations')
+        self.clock=at(self.clock,60)
+        self.assertEqual(self.refresh()['status'],'rebuilt','a scored run rebuilds at once')
+        self.assertEqual(self.builds,3)
+
     def test_cross_check_metadata_alone_does_not_rebuild(self):
         self.refresh()
         self.schedule['games'][0]['schedule_corroboration']=dict(observed_at=self.clock)
