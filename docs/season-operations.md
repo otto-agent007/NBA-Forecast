@@ -809,10 +809,6 @@ digest from the active model's parent, backs up and repoints the activation
 while holding the derived service's and the tick's locks (a running rebuild
 finishes first, with the ticks still running, and then the running tick;
 `--wait` sets how long to wait for each, 900 s by default),
-writes the derived service and its timer for a host that does not have them
-yet and enables the timer, rewrites `WorkingDirectory` in every service unit,
-while holding the tick's and the derived service's locks (a running tick or
-rebuild finishes first; `--wait` sets how long to wait, 900 s by default),
 writes the derived and capture services and their timers for a host that does
 not have them yet and enables each new timer, rewrites `WorkingDirectory` in every service unit,
 reloads systemd and restarts the dashboard, and writes
@@ -826,18 +822,6 @@ every live run in its first tick, as the deploy of 2026-11-09 did (3800 runs,
 379 s); on a cold page cache, at the 0.78 s a run a copy took on a saturated
 disk, some 4,100 runs would run past the tick's 10-minute timeout.
 
-`last-tick.json` and `last-derived.json`, the append-only `ticks.jsonl` and
-`derived.jsonl`, service exit status and journald surface failures and missed
-final windows. Configure your host monitor to flag nonzero exit status and a
-stale heartbeat (no finished tick for 10 minutes; no finished derived run for
-an hour).
-SQLite's temporary files (a sort larger than its page cache) go to `tmp/`
-in the operations directory, on the ledger's disk: `python -m nba_forecast`
-sets `SQLITE_TMPDIR` there for every command that opens a ledger, unless the
-variable is already set. SQLite's default, `/var/tmp`, is on the root disk
-(`PrivateTmp` is a view of the same disk), where one spilled sort filled the
-remaining 7 GB on 2026-11-09. SQLite reads the variable once, when the
-library loads, so it cannot be changed from inside a running process.
 Rolling back to a release from before 2026-11-10, whose tick captures market
 lines without `capture.lock`, deploy leaves `nba-capture.timer` enabled; run
 `systemctl --user disable --now nba-capture.timer` with the rollback, or two
@@ -851,6 +835,13 @@ journald surface failures and missed final windows. Configure your host monitor
 to flag nonzero exit status and a stale heartbeat (no finished tick for 10
 minutes; no finished derived run for an hour; no finished capture run for three
 minutes, after which the tick captures the game lines itself).
+SQLite's temporary files (a sort larger than its page cache) go to `tmp/`
+in the operations directory, on the ledger's disk: `python -m nba_forecast`
+sets `SQLITE_TMPDIR` there for every command that opens a ledger, unless the
+variable is already set. SQLite's default, `/var/tmp`, is on the root disk
+(`PrivateTmp` is a view of the same disk), where one spilled sort filled the
+remaining 7 GB on 2026-11-09. SQLite reads the variable once, when the
+library loads, so it cannot be changed from inside a running process.
 No email/Slack messages are sent. Back up the entire persistent operations
 directory, especially `forecast.sqlite` with its write-ahead log
 (`forecast.sqlite-wal` and `-shm`, present while a connection is open; a copy
