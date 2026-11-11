@@ -15,6 +15,7 @@ can be rerun on a new reference. Standard library only; run from anywhere, the
 | `clutch.py` | Whether clutch shooting persists year to year beyond a player's season shooting, against what chance alone gives | the NBA clutch archive (`datasets/clutch-2026-10-22`), the gate's histories |
 | `close_teacher.py` | Whether the model's disagreements with the close predict the close's misses; the "teacher" regressions of close − model on schedule and standings features; a strength backbone from earlier closing spreads; the same situations and the opener over the 2007-26 archive | a reference's `rows.json.gz`, team games, histories, closing lines; optionally `market/report.json` and the research notes' `all_games.json` |
 | `dashboard_compare_servers.py` | Serves one frozen operations copy from main and from this branch and checks every game's calendar fields, each day's details, the other top-level keys and the daily reviews are equal; page and endpoint timings | a frozen production copy, two checkouts |
+| `rating_harness.py` | Re-scores a reference's margins under a candidate team rating without a replay (exact: the `current` variant reproduces the reference); results-only rebuilds against the market-implied strength of `margins.market_strengths` | a reference's `rows.json.gz`, team games, histories, closing lines (through `close_teacher.load`) |
 | `stats_lite.py` | OLS with date-clustered errors for the above | |
 
 ## Reproduced on 2026-10-26
@@ -81,3 +82,22 @@ beyond one standard error except fading a March–April bottom-8 home team
 (54.2% ± 1.2, one of nine tests); lines that move 1.5+ points cover the
 opener 57.7% on the side of the move. Written up in
 `docs/beating-the-close-2026-11-06.md`.
+
+## Run on 2026-11-07
+
+`rating_harness.py --reference datasets/backtest-2026-11-06-rating-weight`
+(18 s): the `current` variant reproduces the reference's 11.251 margin MAE
+with a change of +0.000, so each candidate's change is the exact replay
+effect. One date-clustered standard error. Results-only rebuilds of the
+rating do not move it: recency weighting with a 20-day half-life +0.112 ±
+0.036 and 40-day +0.035 ± 0.022, margins capped at 20 +0.028 ± 0.017, an
+opponent-adjusted ridge rating −0.007 ± 0.010 (5 pseudo-games) and −0.008
+± 0.008 (10), the ridge with a 30-day half-life +0.054 ± 0.028. The strength
+implied by earlier closing margins (`margins.market_strengths`, 7-day
+half-life, ridge 0.1) blended into the rating: 0.5 share −0.075 ± 0.018,
+0.7 share −0.090 ± 0.025, 1.0 share −0.100 ± 0.036, each season between
+−0.08 and −0.10; a 14-day half-life −0.078 ± 0.022 and a ridge of 1 −0.064
+± 0.023. The slope of actual − close on model − close rises from +0.121 to
++0.186 at the 0.7 share. The 0.7 share is what `backtest-2026-11-07-market-strength`
+gated (margin −0.090 ± 0.050 at two standard errors, winner Brier −0.0023 ±
+0.0011, improved).

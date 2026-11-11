@@ -371,11 +371,12 @@ def settled_games(directory):
     needing attention; the missed checkpoint itself stays on the record.
     """
     path = Path(directory) / AUTO_FILE
-    if not path.exists():
-        return set()
-    games = json.loads(path.read_text()).get('games', {})
-    return {gid for gid, entry in games.items()
-            if all(((entry.get('sources') or {}).get(source) or {}).get('status') in AUTO_DONE for source in AUTO_SOURCES)}
+    try:
+        games = json.loads(path.read_text()).get('games', {}) if path.exists() else {}
+        return {gid for gid, entry in games.items()
+                if all(((entry.get('sources') or {}).get(source) or {}).get('status') in AUTO_DONE for source in AUTO_SOURCES)}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return set()  # an unreadable progress file leaves the misses as alarms; it never fails the tick
 
 
 def _over(folder, game, now):
