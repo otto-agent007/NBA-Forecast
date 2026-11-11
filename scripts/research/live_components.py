@@ -18,6 +18,7 @@ shallow copy of the prepared snapshot, so a later run never sees a removed input
     no-live-only      the three above together: the live path closest to the production-path backtest
     no-absence        the team-rating absence term off: ``margins.ABSENCE_RATING_PER_MINUTE`` = 0 for the
                       run (the player-sum half still withholds the out players)
+    half-absence      the absence term at half size: ``margins.ABSENCE_RATING_PER_MINUTE`` halved for the run
     official-absence  the absence term counts only players out on an official NBA injury report
                       (roster ``status_basis`` ``explicit_report_status`` with an nba.com source), as the
                       backtest's T-minus-30 report does; any other basis adds no absent minutes
@@ -57,7 +58,7 @@ import lineup_oracle as LO  # noqa: E402
 
 REMOVED = {'none': (), 'no-role': ('role_context',), 'no-shot-quality': ('shot_quality',),
            'no-priors': ('historical_priors',), 'no-live-only': ('role_context', 'shot_quality', 'historical_priors'),
-           'no-absence': (), 'official-absence': ()}
+           'no-absence': (), 'half-absence': (), 'official-absence': ()}
 OFFICIAL_HOSTS = ('ak-static.cms.nba.com', 'official.nba.com')
 
 _state = dict(variant='none', snapshot=None, audits=[])
@@ -127,6 +128,8 @@ def install(variant):
     M.forecast = forecast
     if variant == 'no-absence':
         G.ABSENCE_RATING_PER_MINUTE = 0.
+    elif variant == 'half-absence':
+        G.ABSENCE_RATING_PER_MINUTE = G.PARAMETERS['absence_rating_per_minute'] / 2
     elif variant == 'official-absence':
         G.absent_minutes = official_absent_minutes
 
