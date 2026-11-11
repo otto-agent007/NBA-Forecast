@@ -13,7 +13,7 @@ import time
 from zoneinfo import ZoneInfo
 
 from .data import fetch_roster,fetch_json,boxscore_url,normalize_boxscore
-from .schedule import fetch_schedule,fetch_verified_secondary_schedule,due_jobs,game_context,atomic_json,canonical
+from .schedule import fetch_schedule,fetch_verified_secondary_schedule,due_jobs,game_context,atomic_json,canonical,saved_calendar
 from .injuries import fetch_injury_check
 from .injury_parser import pdf_text,parse_report,apply_report,PARSER_VERSION
 from .profiles import build_profiles,eligible_history
@@ -31,6 +31,7 @@ from .intervals import INTERVAL_FAMILY
 from .market_lines import capture_game_lines,market_report,saved_capture_evidence
 from .kalshi_lines import capture_kalshi_lines
 from .reference import archive_daily_references
+from .capture import tick_fallback
 
 
 def _now():
@@ -58,8 +59,9 @@ ROSTER_REUSE_SECONDS=3*3600
 ROSTER_FINAL_REUSE_SECONDS=900
 # A job that failed is retried after this long (near tipoff, sooner).
 JOB_RETRY_SECONDS=(900,300)
-# The market captures are optional downloads; they run after the pregame forecasts
-# and share one time budget, cut further when the tick is already old, so a slow
+# The market captures are the capture service's (``capture.py``); when it is not running
+# the tick captures after the pregame forecasts within this budget, cut further when the
+# tick is already old, so a slow
 # network (each request waiting out its timeout) cannot starve a checkpoint or push
 # the tick into systemd's ten-minute kill. On 2026-11-06 the captures took 135-475 s
 # a tick for two hours of failing name resolution and the 9 AM forecasts came 82
@@ -491,21 +493,6 @@ def _calendar(folder,season,report):
     return schedule
 
 
-def saved_calendar(folder):
-    """The calendar the ticks are using, from disk alone: the day's ESPN-verified copy while it is in use, else the saved NBA calendar.
-
-    Returns ``(schedule, source)``; the schedule is None until the first tick saves one.
-    """
-    saved=_read(folder/'schedule/latest.json',None)
-    if saved is None:
-        return None,None
-    state=_read(folder/'schedule/fetch-state.json',{})
-    verified=_read(folder/'schedule/secondary/verified-latest.json',None)
-    if state.get('source')=='espn' and verified and verified.get('crosscheck',{}).get('nba_base_version')==saved.get('version'):
-        return verified,'espn_verified_cached_nba'
-    return saved,'saved_nba'
-
-
 def ledger_runs(db):
     """Yield bounded batches of run metadata, releasing readers before writes.
 
@@ -694,8 +681,8 @@ def _tick(folder,history,report,history_key=None):
         error='An ESPN event has no unique NBA game ID in the saved calendar.') for event in crosscheck.get('unmatched_secondary_events',[]))
     active_model,model_digest=load_active(folder,_now())
     # The ESPN game summary's injury lists are forecast evidence. The digests the last
-    # capture saved key the jobs; the capture itself runs after the forecasts, so a
-    # change ESPN makes rebuilds the forecast one tick later.
+    # capture saved key the jobs: the capture service's run at :45, about 15 s before
+    # this tick, or this tick's own fallback capture after its forecasts, a tick later.
     capture=dict(evidence=saved_capture_evidence(folder,upcoming))
     # A forecast is rebuilt when its evidence changes: the official report edition
     # for the game, ESPN's injury list and the roster. These checks are cheap.
@@ -738,17 +725,19 @@ def _tick(folder,history,report,history_key=None):
             failed[job['key']]=dict(at=_now(),reason=type(exc).__name__)
     atomic_json(statepath,state)
     phase('forecasts')
-    # Market lines for upcoming games, at the forecast cadence, after the pregame
-    # deadlines and within the capture budget; never a reason to fail the tick.
-    deadline=time.monotonic()+max(0.,min(CAPTURE_BUDGET_SECONDS,TICK_SOFT_LIMIT_SECONDS-(time.monotonic()-tick_started)))
-    try:
-        report['market_lines']=capture_game_lines(folder,upcoming,season,_now(),deadline=deadline)
-    except Exception as exc:
-        report['warnings'].append(dict(task='market_lines',error=f'{type(exc).__name__}: {exc}'))
-    try:
-        report['kalshi_lines']=capture_kalshi_lines(folder,upcoming,_now(),deadline=deadline)
-    except Exception as exc:
-        report['warnings'].append(dict(task='kalshi_lines',error=f'{type(exc).__name__}: {exc}'))
+    # Market lines are the capture service's job (nba-capture, ``capture.py``). The tick
+    # captures them itself, after the pregame deadlines and within the capture budget
+    # (half each, so a slow ESPN cannot starve Kalshi), only when that service has not
+    # finished a run recently; never a reason to fail the tick.
+    seconds=max(0.,min(CAPTURE_BUDGET_SECONDS,TICK_SOFT_LIMIT_SECONDS-(time.monotonic()-tick_started)))
+    report['market_capture'],results=tick_fallback(folder,dict(
+        market_lines=lambda deadline:capture_game_lines(folder,upcoming,season,_now(),deadline=deadline),
+        kalshi_lines=lambda deadline:capture_kalshi_lines(folder,upcoming,_now(),deadline=deadline)),seconds,_now())
+    for name,(value,exc) in results.items():
+        if exc is None:
+            report[name]=value
+        else:
+            report['warnings'].append(dict(task=name,error=f'{type(exc).__name__}: {exc}'))
     phase('market_lines')
     # Prioritize pregame deadlines over downloads and postgame reporting.
     if active_model:
@@ -1557,3 +1546,10 @@ def _derived_reports(folder,db,schedule,active_model,model_digest,report):
         report['market']=market['summary']
     except Exception as exc:
         report['errors'].append(dict(task='market_report',error=f'{type(exc).__name__}: {exc}'))
+    try:
+        from .kalshi_props import props_report
+        props=props_report(folder,schedule,_now())
+        atomic_json(folder/'market/props-report.json',props)
+        report['props']={k:props['summary'].get(k) for k in ('status','games','rungs','median_players')}
+    except Exception as exc:
+        report['errors'].append(dict(task='props_report',error=f'{type(exc).__name__}: {exc}'))

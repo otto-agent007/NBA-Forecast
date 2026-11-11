@@ -72,7 +72,11 @@ unchanged. The artifact digest participates in the next checkpoint's job key.
 Pinned runner releases prevent worktree edits from mixing code versions during
 a tick. To roll back, stop the runner timer, restore the baseline service's
 WorkingDirectory from `production/verified-units`, remove the active upgrade
-pointer (retain an archived copy), reload systemd and restart the timer. Do not
+pointer (retain an archived copy), reload systemd and restart the timer. A
+release from before 2026-11-10 captures market lines in its tick without
+`capture.lock`: also run `systemctl --user disable --now nba-capture.timer`, or
+it and the capture service write the capture files at once
+(`docs/season-operations.md`, "Persistent execution"). Do not
 delete source archives or rewrite the ledger. Existing saved forecasts retain
 their original model version, parameters and timestamps. A release whose tick
 report has no `evaluation_backlog` re-scores every live run in its first tick

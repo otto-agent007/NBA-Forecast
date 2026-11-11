@@ -161,12 +161,15 @@ def saved_capture_evidence(folder, games):
     return {k: v for k, v in state.get('evidence', {}).items() if k in wanted}
 
 
-def capture_game_lines(folder, games, season, as_of, deadline=None):
+def capture_game_lines(folder, games, season, as_of, deadline=None, index=True):
     """Capture lines for the given upcoming games, once per cadence slot each; failures are reported, never raised.
 
     ``deadline`` is a ``time.monotonic()`` instant: games not started by then are
-    listed under ``deferred`` and wait for the next tick, so a slow network (each
-    request waiting out its timeout) cannot hold the tick past its budget.
+    listed under ``deferred`` and wait for the next run, so a slow network (each
+    request waiting out its timeout) cannot hold the caller past its budget.
+    A call with nothing due leaves the saved state as it is. ``index=False``
+    leaves ``market/index.json`` to the caller (the capture service rebuilds it
+    once per run, and only when a line file changed: ``refresh_index``).
     """
     from .reference import BASE, fetch_reference, scoreboard_event
     folder = Path(folder)
@@ -190,6 +193,9 @@ def capture_game_lines(folder, games, season, as_of, deadline=None):
             event, _ = scoreboard_event(game, folder / 'references')
             if event is None:
                 raise ValueError('no unique ESPN event for this matchup')
+            if deadline is not None and time.monotonic() > deadline:
+                report['deferred'].append(game['game_id'])  # the scoreboard took the budget; the summary waits
+                continue
             payload, meta = fetch_reference(BASE + 'summary?event=' + str(event['provider_event_id']), folder / 'references')
             # The summary's injury lists are forecast evidence; their digest tells a tick whether they changed.
             evidence[game['game_id']] = hashlib.sha256(canonical(payload.get('injuries'))).hexdigest()
@@ -201,8 +207,11 @@ def capture_game_lines(folder, games, season, as_of, deadline=None):
                      appended=len(appended)))
         except (ValueError, OSError, KeyError, TypeError) as exc:
             report['errors'].append(dict(game_id=game['game_id'], error=str(exc)))
-    atomic_json(state_path, dict(version=VERSION, captured=captured, evidence=evidence))
-    atomic_json(folder / 'market' / 'index.json', build_index(folder))
+    saved = dict(version=VERSION, captured=captured, evidence=evidence)
+    if saved != state:
+        atomic_json(state_path, saved)
+    if index:
+        atomic_json(folder / 'market' / 'index.json', build_index(folder))
     return report
 
 
@@ -299,6 +308,36 @@ def build_index(folder):
                                             first=records[0]['lines'], home_win_probability=records[-1]['home_win_probability'],
                                             captures=len(records))
     return dict(version=VERSION, generated_at=datetime.now(timezone.utc).isoformat(), games=index, damaged=damaged)
+
+
+def _index_inputs(folder):
+    """A digest of the line files' names, sizes and modification times; every appended capture changes it."""
+    digest = hashlib.sha256()
+    for name in ('game-lines', 'kalshi'):
+        root = Path(folder) / 'market' / name
+        for path in sorted(root.glob('*.jsonl')) if root.exists() else []:
+            stat = path.stat()
+            digest.update(f'{name}/{path.name}:{stat.st_size}:{stat.st_mtime_ns}\n'.encode())
+    return digest.hexdigest()
+
+
+def refresh_index(folder):
+    """Rebuild ``market/index.json`` if a line file changed since it was built; returns whether it was rebuilt.
+
+    ``build_index`` reads every game's captures. The capture service runs every
+    minute and calls this instead, so a run that appended nothing costs one
+    directory listing. The digest is taken before the files are read: a file
+    appended to during the build is seen as changed by the next call.
+    """
+    path = Path(folder) / 'market' / 'index.json'
+    inputs = _index_inputs(folder)
+    try:
+        if json.loads(path.read_text()).get('inputs_sha256') == inputs:
+            return False
+    except (OSError, ValueError, AttributeError):
+        pass  # missing or unreadable: build it
+    atomic_json(path, dict(build_index(folder), inputs_sha256=inputs))
+    return True
 
 
 def _implied(odds):

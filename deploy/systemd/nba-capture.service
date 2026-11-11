@@ -1,0 +1,14 @@
+[Unit]
+Description=NBA Forecast market-line capture (ESPN and Kalshi game lines, Kalshi player props)
+
+[Service]
+Type=oneshot
+# Pin with: python3 -m nba_forecast.runner_release --directory data/operations/production/runner-releases
+# Replace WorkingDirectory with the printed release path; keep data paths absolute.
+WorkingDirectory=/ABSOLUTE/PATH/PINNED-RUNNER-RELEASE
+ExecStart=/usr/bin/python3 -m nba_forecast capture --directory /ABSOLUTE/PATH/NBA-Forecast/data/operations/production
+# A run stops starting requests after 40 s; this ends one stuck on name resolution.
+TimeoutStartSec=2min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

@@ -350,5 +350,18 @@ class CaptureBudgetTests(unittest.TestCase):
         self.assertEqual(list(saved), [GAME['game_id']])
         self.assertEqual(M.saved_capture_evidence(self.folder, games[1:]), {})
 
+    def test_a_scoreboard_request_that_uses_up_the_budget_defers_the_summary(self):
+        import time
+        clock = [time.monotonic()]
+        def slow_board(game, directory):
+            clock[0] += 100
+            return dict(provider_event_id='401909848'), META
+        with patch('nba_forecast.reference.scoreboard_event', side_effect=slow_board), \
+             patch('nba_forecast.reference.fetch_reference', side_effect=AssertionError('the summary was requested')), \
+             patch('nba_forecast.market_lines.time.monotonic', side_effect=lambda: clock[0]):
+            report = M.capture_game_lines(self.folder, [GAME], '2026-27', '2026-10-23T21:00:30Z', deadline=clock[0] + 60)
+        self.assertEqual((report['deferred'], report['captured'], report['errors']), ([GAME['game_id']], [], []))
+        self.assertEqual(json.loads((self.folder / 'market' / 'capture-state.json').read_text())['captured'], {}, 'the slot stays open')
+
 if __name__ == '__main__':
     unittest.main()

@@ -29,6 +29,6 @@ for name in files:
 for name,content in files.items():
     (folder/name).write_text(content)
 print('Wrote units to',folder)
-print('On the persistent host, enable with: systemctl --user daemon-reload && systemctl --user enable --now nba-forecast.timer nba-derived.timer nba-dashboard.service')
-print('Check: systemctl --user status nba-forecast.timer nba-derived.timer nba-dashboard.service; journalctl --user -u nba-forecast.service -u nba-derived.service')
+print('On the persistent host, enable with: systemctl --user daemon-reload && systemctl --user enable --now nba-forecast.timer nba-derived.timer nba-capture.timer nba-dashboard.service')
+print('Check: systemctl --user status nba-forecast.timer nba-derived.timer nba-capture.timer nba-dashboard.service; journalctl --user -u nba-forecast.service -u nba-derived.service -u nba-capture.service')
 print('Dashboard listens on localhost:8765. Use SSH forwarding or your authenticated reverse proxy. Enable user lingering if required by your host.')
