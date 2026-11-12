@@ -15,7 +15,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-07-market-strength
+  --reference datasets/backtest-2026-11-12-margins-v5
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -91,13 +91,12 @@ the close did not. These are reported, not gated. The lines come from ESPN's cor
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
 
-`--market` also feeds the forecast itself: each team's rating blends its
-results average with the strength the closing spreads of its earlier games
-imply (`margins.market_strengths`), reading only games played before the
-replayed day, as production reads its saved pregame captures. A game's own
-line never reaches its forecast. A replay without `--market` scores the
-results-only rating, which is not the production model, so the gate command
-and CI's smoke run both pass the closing-line archives.
+`--market` only scores the replay against the close; no market line, current
+or past, reaches a forecast. From margin method v5 (2026-11-12) the team rating
+is results-only again: v4's blend with the strength earlier games' closing
+spreads implied (2026-11-07 reference below) was removed by the owner's rule
+that the model beats the line without using it. A replay with or without
+`--market` produces the same forecasts.
 
 `metrics.market.close_teacher` adds the November 6 study's descriptive teacher
 regressions, disagreement buckets, and persistent-team versus game-day split.
@@ -161,7 +160,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-07-market-strength-midday
+  --reference datasets/backtest-2026-11-12-margins-v5-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -192,7 +191,7 @@ python -m nba_forecast backtest \
   --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
   --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
   --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-07-market-strength-early-season
+  --reference datasets/backtest-2026-11-12-margins-v5-early-season
 python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 ```
 
@@ -261,7 +260,7 @@ gates on it too: the gate command with
 
 ```bash
   --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
-  --reference datasets/backtest-2026-11-09-production-path
+  --reference datasets/backtest-2026-11-12-production-path
 ```
 
 and its own `--output`. It took 34 minutes 44 seconds at idle priority on
@@ -1061,6 +1060,9 @@ weeks of games.
 
 ## Reference: 2026-11-07 (market-implied team strength)
 
+Removed in margin method v5 (2026-11-12): no market input, current or past.
+The section is kept as the record of what was measured.
+
 `datasets/backtest-2026-11-07-market-strength/` (T-minus-30), model code
 `regular-season-baseline-0.4.8`, one change: each team's rating blends its
 results average with the strength the closing spreads of its earlier games
@@ -1248,3 +1250,59 @@ Live points the same way as the replay's miss slope, toward a smaller term,
 but by less than two standard errors on 97 games of a season's first three
 weeks, and the replay finds the term off clearly worse; live gives the share
 rules no edge over a smaller coefficient either.
+
+## Reference: 2026-11-12 (margin method v5: no market input)
+
+`datasets/backtest-2026-11-12-margins-v5/` (T-minus-30), with
+`-early-season`, `-midday` and `datasets/backtest-2026-11-12-production-path/`
+(the 2026-11-09 artifact), all replayed on the same code (code digest
+`6e46900333ef`). Two changes: the market-implied team strength of 2026-11-07
+is removed, so the team rating is the results average again and no market
+price, current or past, enters a forecast (the owner's rule, now in
+`AGENTS.md`); and the absence term is re-sized for that rating, 0.1 → 0.08
+points per reported-out minute. The method string is
+`..._team_rating_absence_blend_discrete_normal_v5`; the margin calibration
+family changes with it. The rating weight stays 0.65.
+
+**The gate calls this `worse`.** `AGENTS.md` does not merge a `worse` change;
+this one goes in only if the owner decides the no-market-input rule outweighs
+the verdict. It is not a change for accuracy on these seasons: it gives back
+part of what the market strength had bought. Pooled, against the 11-07
+references, ± two clustered standard errors as the gate prints them:
+
+| Replay | Margin MAE | Margin change | Winner Brier change | Verdict |
+|---|---|---|---|---|
+| Gate (2,604 games) | 11.16 → 11.23 | +0.068 ± 0.064 worse | +0.0025 ± 0.0013 worse | worse |
+| Early season, seeded (3,676) | 10.88 → 10.92 | +0.043 ± 0.051 | +0.0015 ± 0.0010 worse | worse |
+| Preliminary, midday (2,604) | 11.33 → 11.42 | +0.081 ± 0.059 worse | +0.0025 ± 0.0012 worse | worse |
+| Production path (2,604) | 11.21 → 11.23 | +0.024 ± 0.064 | +0.0020 ± 0.0012 worse | worse |
+
+Points, minutes, team points, participation, the interval score and the three
+biases are within noise in all four. The closing line stays 10.90 on the gate
+games (winners 69.5%, Brier 0.1960); the model is 68.5% and 0.2044. Each
+gate-season verdict is `worse`; the early-season seasons are each
+`within_noise`; production 2023-24 is `worse`, 2024-25 and 2025-26
+`within_noise`.
+
+The removal alone is exact: replayed at 0.1 a minute its rows are identical,
+player for player, to `backtest-2026-11-06-rating-weight` (margin +0.090 ±
+0.050, winner Brier +0.0023 ± 0.0011 against the 11-07 reference). The size
+was then chosen before any live replay was run, on the gate seasons with
+`scripts/research/absence_harness.py` on that replay (exact to 1e-14 against
+`replay_components.py`): ± one standard error, against 0.1, off +0.215, 0.025
++0.092, 0.05 +0.011, 0.075 −0.023 ± 0.018, 0.125 +0.062, 0.15 +0.171; the
+miss slope puts the best size at 0.083 ± 0.009. Its prediction for 0.08
+(margin −0.021, winner Brier +0.0002) is what the real replay gave: every one
+of the 2,604 margins agrees with the harness to 7.1e-15
+(`--check-run ... --variant 'size 0.08 a minute'`).
+
+Live (`scratch` replay of production's 2026-10-24 to 11-10 games with the
+inputs production had, 120 games with a close, 15 Eastern dates, ± one
+date-clustered standard error, negative = better than what production ran):
+margin MAE 11.85 → 11.67 (−0.179 ± 0.107; the removal alone at 0.1 −0.095 ±
+0.098), the close 10.88; winner Brier 0.2043 → 0.2023 (−0.002 ± 0.002); team
+points −0.046 ± 0.039; player points and minutes unchanged. On live games the
+change points the right way by about 1.7 standard errors; on three past
+seasons it costs about 0.07 points of margin. Both are reported, neither is
+hidden. If it ships, `market/report.json` and the nightly reviews judge it
+from there.

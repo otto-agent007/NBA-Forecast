@@ -98,9 +98,7 @@ def prepare(artifact,digest,game,as_of,*,directory=None):
         excluded_history_game_ids=artifact.get('excluded_history_game_ids',[]),live_team_game_sources=sources)
     if artifact['model_version']==REFINED_VERSION:
         from .margins import prepare_margin_inputs
-        from .market_lines import closing_margins
-        closes=closing_margins(directory,list(records.values()),as_of) if directory is not None else {}
-        result['margin_inputs']=prepare_margin_inputs(list(records.values()),as_of,artifact['model_key'],closing_margins=closes)
+        result['margin_inputs']=prepare_margin_inputs(list(records.values()),as_of,artifact['model_key'])
         result['margin_calibration']=artifact.get('margin_calibration')
     return result
 
