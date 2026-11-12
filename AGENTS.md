@@ -17,7 +17,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-07-market-strength
+  --reference datasets/backtest-2026-11-12-margins-v5
 ```
 
 It replays the 2023-24, 2024-25 and 2025-26 seasons, each with the official
@@ -49,7 +49,7 @@ python -m nba_forecast backtest \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
   --output /tmp/backtest-production-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-09-production-path
+  --reference datasets/backtest-2026-11-12-production-path
 ```
 
 A change must not be `worse` on either path, by the rules above. A change

@@ -8,9 +8,9 @@ rows can be re-scored for any rule in seconds once each game's reported-out play
 game logs are known. They are rebuilt here from the gate's own files with the replay's own
 functions (`backtest._roster`, `backtest._listed_absentees`, `model._absence`).
 
-    python3 scripts/research/absence_harness.py --reference datasets/backtest-2026-11-07-market-strength
-    python3 scripts/research/absence_harness.py --seeded --reference datasets/backtest-2026-11-07-market-strength-early-season
-    python3 scripts/research/absence_harness.py --midday --reference datasets/backtest-2026-11-07-market-strength-midday
+    python3 scripts/research/absence_harness.py --built-with 'size 0.08 a minute' --reference datasets/backtest-2026-11-12-margins-v5
+    python3 scripts/research/absence_harness.py --built-with 'size 0.08 a minute' --seeded --reference datasets/backtest-2026-11-12-margins-v5-early-season
+    python3 scripts/research/absence_harness.py --built-with 'size 0.08 a minute' --midday --reference datasets/backtest-2026-11-12-margins-v5-midday
 
 Proof that the reconstruction is the replay's: `--components RUN/components.json.gz`, the file
 `replay_components.py` writes beside an unchanged-code replay, holds each game's player sum,
