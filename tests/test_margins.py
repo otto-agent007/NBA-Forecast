@@ -194,8 +194,9 @@ class MarginForecastTests(unittest.TestCase):
         value = margins.build_margin_forecasts(snapshot, result)[0]
         self.assertEqual(value['absent_regular_minutes'], {'home': 30., 'away': 0.})
         self.assertAlmostEqual(value['absence_rating_adjustment'], -margins.ABSENCE_RATING_PER_MINUTE * 30.)
-        self.assertAlmostEqual(value['team_rating_margin'], -3.)
-        self.assertAlmostEqual(value['mean_margin'], (1 - margins.RATING_WEIGHT) * 5. + margins.RATING_WEIGHT * -3.)
+        rating = -margins.ABSENCE_RATING_PER_MINUTE * 30.  # the teams' ratings are level before the term
+        self.assertAlmostEqual(value['team_rating_margin'], rating)
+        self.assertAlmostEqual(value['mean_margin'], (1 - margins.RATING_WEIGHT) * 5. + margins.RATING_WEIGHT * rating)
 
     def test_home_away_means_mirror_the_entire_distribution(self):
         s1, r1 = forecast_inputs(110, 105)

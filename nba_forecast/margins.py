@@ -30,7 +30,7 @@ PARAMETERS = dict(minimum_games=MINIMUM_GAMES, maximum_games=MAXIMUM_GAMES,
                   support=SUPPORT, tail_floor_per_side=TAIL_FLOOR,
                   minimum_scale=1., required_interior_standard_deviations=3.,
                   rating_weight=.65, rating_prior_games=10, rating_prior_shrink=.6,
-                  absence_rating_per_minute=.1, absence_minimum_minutes=15.)
+                  absence_rating_per_minute=.08, absence_minimum_minutes=15.)
 
 
 def parameter_digest(parameters):
@@ -87,7 +87,9 @@ RATING_PRIOR_SHRINK = PARAMETERS['rating_prior_shrink']
 # minute (0.065 of the blend at the 0.65 weight, gated together): a player
 # averaging 15 or more minutes for the team this season who played one of its
 # last ten games (model._absence). A longer absence is already in the team's
-# recent results.
+# recent results. Re-sized for v5 (2026-11-12) on the results-only rating:
+# the gate's slope of the miss on the term gave a best size of 0.083 +- 0.009
+# a minute (one SE), so 0.08 (scripts/research/absence_harness.py, size table).
 ABSENCE_RATING_PER_MINUTE = PARAMETERS['absence_rating_per_minute']
 ABSENCE_MINIMUM_MINUTES = PARAMETERS['absence_minimum_minutes']
 

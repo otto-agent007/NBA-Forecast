@@ -21,7 +21,8 @@ with the harness's prediction for it, game by game.
 
 The reference must have been built with the rule named by `--built-with` (default `current`:
 0.1 a minute, 15+ minutes a game played, one of the team's last ten games, the rule of every
-reference up to backtest-2026-11-07-market-strength).
+reference up to backtest-2026-11-07-market-strength). References of margin method v5
+(2026-11-12 on) are built with `--built-with 'size 0.08 a minute'`.
 
 The +- printed is ONE date-clustered standard error of the paired change (never below the
 independent one, as the gate computes it); the `gate` column is the gate's own verdict for
@@ -192,7 +193,7 @@ VARIANTS = {
 VARIANTS['own: 0.075, long absences 0.035'] = rule(per_minute=.075, long_value=.035)
 VARIANTS['own: 0.1, long absences 0.035'] = rule(per_minute=.1, long_value=.035)
 # Sizes of today's rule, for re-sizing the term on margin method v5 (no market strength).
-for _value in (.025, .125, .15, .2):
+for _value in (.025, .08, .125, .15, .2):
     VARIANTS[f'size {_value:g} a minute'] = rule(per_minute=_value)
 for _name, _share in (('A1 season share', season_share), ('A2 share of last ten', recent_share), ('A3 rating share', rating_share)):
     for _value in (.075, .125, .15):
