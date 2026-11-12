@@ -98,3 +98,8 @@ measurements of what the model is missing.
   leave multi-day changes uncommitted in the shared working tree.
 - Production data lives under `data/operations/production` and is never
   edited by hand. Use copies for experiments.
+- No market-derived input, current or past: no closing or opening line, no
+  price, no blend with one, enters a forecast. The model has to beat the line
+  without reading it. Market lines score forecasts (the backtest's `--market`,
+  `market/report.json`); they never feed them. Judge a change by its error
+  against what actually happened, not by whether it moves toward the close.

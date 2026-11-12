@@ -367,40 +367,24 @@ def league(strengths, edge=3., days=20):
     return samples, closes
 
 
-class MarketStrengthTests(unittest.TestCase):
+class NoMarketInputTests(unittest.TestCase):
     TRUE = {'A': 6., 'B': 2., 'C': -2., 'D': -6.}
 
-    def test_strengths_recover_the_differences_the_closing_lines_encode(self):
-        samples, closes = league(self.TRUE)
-        strengths = margins.market_strengths(samples, '2026-01-21T00:00:00Z', closes)
-        self.assertEqual(set(strengths), set(self.TRUE))
-        self.assertAlmostEqual(sum(strengths.values()), 0., places=9)
-        for a in self.TRUE:
-            for b in self.TRUE:
-                self.assertAlmostEqual(strengths[a] - strengths[b], self.TRUE[a] - self.TRUE[b], delta=.3)
-        # A game's own line is never among the inputs: only earlier games enter through the samples.
-        self.assertEqual(margins.market_strengths(samples[:10], '2026-01-21T00:00:00Z', closes), {}, 'below the minimum priced games')
-        self.assertEqual(margins.market_strengths(samples, '2026-01-21T00:00:00Z', {}), {})
-
-    def test_ratings_blend_results_with_market_strength_only_when_priced(self):
-        samples, closes = league(self.TRUE)
+    def test_the_rating_reads_results_only_and_no_market_line(self):
+        samples, _ = league(self.TRUE)
+        rows = [dict(game_id=s['game_id'], game_time=s['game_time'], known_at=s['known_at'], home_team_id=s['home_team_id'],
+                     away_team_id=s['away_team_id'], team_minutes={s['home_team_id']: 240., s['away_team_id']: 240.},
+                     team_stats={s['home_team_id']: dict(pts=s['home_points']), s['away_team_id']: dict(pts=s['away_points'])})
+                for s in samples]
         as_of = '2026-01-21T00:00:00Z'
-        plain = margins.team_ratings(samples, as_of)
-        priced = margins.team_ratings(samples, as_of, closes)
-        strengths = margins.market_strengths(samples, as_of, closes)
-        for team in self.TRUE:
-            self.assertIsNone(plain[team]['market_strength'])
-            self.assertEqual(plain[team]['rating'], plain[team]['results_rating'])
-            self.assertEqual(priced[team]['results_rating'], plain[team]['rating'])
-            self.assertAlmostEqual(priced[team]['rating'], (1 - margins.MARKET_STRENGTH_WEIGHT) * plain[team]['rating']
-                                   + margins.MARKET_STRENGTH_WEIGHT * strengths[team])
-        # A team the lines never priced keeps its results average beside the others' blends.
-        by_id = {s['game_id']: s for s in samples}
-        partial = {gid: m for gid, m in closes.items() if 'D' not in (by_id[gid]['home_team_id'], by_id[gid]['away_team_id'])}
-        mixed = margins.team_ratings(samples, as_of, partial)
-        self.assertIsNone(mixed['D']['market_strength'])
-        self.assertEqual(mixed['D']['rating'], plain['D']['rating'])
-        self.assertIsNotNone(mixed['A']['market_strength'])
+        ratings = margins.team_ratings(samples, as_of)
+        self.assertEqual({k for v in ratings.values() for k in v}, {'rating', 'games', 'prior'})
+        prepared = margins.prepare_margin_inputs(rows, as_of, MODEL_KEY)
+        self.assertNotIn('market_strength', prepared)
+        self.assertFalse([k for k in margins.PARAMETERS if 'market' in k])
+        self.assertNotIn('market', margins.METHOD)
+        with self.assertRaises(TypeError):
+            margins.prepare_margin_inputs(rows, as_of, MODEL_KEY, closing_margins={})
 
     def test_calibration_family_names_the_method_settlement_and_parameters(self):
         method, settlement, digest = margins.CALIBRATION_FAMILY.split('|')
@@ -411,29 +395,6 @@ class MarketStrengthTests(unittest.TestCase):
         self.assertNotEqual(margins.calibration_family(margins.METHOD, margins.SETTLEMENT, dict(margins.PARAMETERS, rating_weight=.75)),
                             margins.CALIBRATION_FAMILY)
         self.assertNotEqual(margins.calibration_family(margins.METHOD, margins.SETTLEMENT, None), margins.CALIBRATION_FAMILY)
-
-    def test_prepared_inputs_hash_the_closing_lines_they_read(self):
-        samples, closes = league(self.TRUE)
-        rows = [dict(game_id=s['game_id'], game_time=s['game_time'], known_at=s['known_at'], home_team_id=s['home_team_id'],
-                     away_team_id=s['away_team_id'], team_minutes={s['home_team_id']: 240., s['away_team_id']: 240.},
-                     team_stats={s['home_team_id']: dict(pts=s['home_points']), s['away_team_id']: dict(pts=s['away_points'])})
-                for s in samples]
-        as_of = '2026-01-21T00:00:00Z'
-        without = margins.prepare_margin_inputs(rows, as_of, MODEL_KEY)
-        with_lines = margins.prepare_margin_inputs(rows, as_of, MODEL_KEY, closing_margins=closes)
-        self.assertEqual(without['market_strength']['priced_games'], 0)
-        self.assertEqual(with_lines['market_strength']['priced_games'], len(samples))
-        self.assertEqual(with_lines['market_strength']['rated_teams'], 4)
-        self.assertNotEqual(without['inputs_sha256'], with_lines['inputs_sha256'])
-        self.assertNotEqual(without['team_ratings']['A']['rating'], with_lines['team_ratings']['A']['rating'])
-        noisy = dict(closes, g0=float('nan'), g1=None, unknown=4.)  # ignored lines leave the result otherwise identical
-        self.assertEqual(margins.prepare_margin_inputs(rows, as_of, MODEL_KEY, closing_margins=noisy)['market_strength']['priced_games'],
-                         len(samples) - 2)
-        moved = dict(closes, g2=closes['g2'] + 1.)
-        self.assertNotEqual(with_lines['market_strength']['closing_lines_sha256'],
-                            margins.prepare_margin_inputs(rows, as_of, MODEL_KEY, closing_margins=moved)['market_strength']['closing_lines_sha256'])
-        with self.assertRaises(ValueError):
-            margins.prepare_margin_inputs(rows, as_of, MODEL_KEY, closing_margins=[1., 2.])
 
 
 if __name__ == '__main__':

@@ -27,7 +27,7 @@ class EnhancementsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_active(d,'2026-01-10T12:00:00Z')
 
-    def test_refined_preparation_reads_the_saved_closes_of_tipped_games_for_the_rating(self):
+    def test_refined_preparation_reads_no_saved_market_line(self):
         from nba_forecast.market_lines import record_game_lines
         from nba_forecast.refinement_upgrade import build_artifact
         from tests.test_margins import records
@@ -48,9 +48,8 @@ class EnhancementsTests(unittest.TestCase):
                                           **(dict(recovered_close=dict(recovered_at=retrieved)) if gid=='0022600001' else {}))],retrieved)
             without=prepare(loaded,digest,s['games'][0],'2026-01-10T11:00:00Z')
             with_lines=prepare(loaded,digest,s['games'][0],'2026-01-10T11:00:00Z',directory=d)
-            self.assertEqual(without['margin_inputs']['market_strength']['priced_games'],0)
-            self.assertEqual(with_lines['margin_inputs']['market_strength']['priced_games'],1,'only the capture retrieved by as_of')
-            self.assertNotEqual(without['margin_inputs']['inputs_sha256'],with_lines['margin_inputs']['inputs_sha256'])
+            self.assertNotIn('market_strength',with_lines['margin_inputs'])
+            self.assertEqual(without['margin_inputs'],with_lines['margin_inputs'],'saved lines, even of tipped games, never reach the margin inputs')
 
     def test_future_active_configuration_cannot_be_used(self):
         with tempfile.TemporaryDirectory() as d:

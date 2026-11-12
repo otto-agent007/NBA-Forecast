@@ -161,7 +161,7 @@ def select_run(game, candidates, which='final'):
 
 
 def as_of_captures(captures, as_of):
-    """Line captures retrieved by ``as_of``: what ``market_lines.closing_margins`` may read for a forecast made then."""
+    """Line captures retrieved by ``as_of``: what a v4 forecast made then could read (``market_lines.closing_margins``, removed in v5)."""
     cutoff = parse_time(as_of)
     return [c for c in captures if parse_time(c['retrieved_at']) <= cutoff]
 
@@ -463,7 +463,7 @@ def load_finals(copy):
 def capture_audit(copy):
     """What the ``retrieved_at`` bound on line captures rests on, counted in the copy.
 
-    ``market_lines.closing_margins`` reads, for games tipped before a forecast,
+    v4's ``market_lines.closing_margins`` (removed in v5) read, for games tipped before a forecast,
     the captures retrieved by its ``as_of``. That reproduces what the forecast
     could read if every capture was appended before its game tipped (the tick
     captures only games not yet started) and a recovered close was appended no

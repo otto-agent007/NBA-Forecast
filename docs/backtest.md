@@ -91,13 +91,12 @@ the close did not. These are reported, not gated. The lines come from ESPN's cor
 odds endpoint by event ID (`python -m nba_forecast.market_history`), archived
 with hashes; ESPN's game summary drops its pickcenter once a game is final.
 
-`--market` also feeds the forecast itself: each team's rating blends its
-results average with the strength the closing spreads of its earlier games
-imply (`margins.market_strengths`), reading only games played before the
-replayed day, as production reads its saved pregame captures. A game's own
-line never reaches its forecast. A replay without `--market` scores the
-results-only rating, which is not the production model, so the gate command
-and CI's smoke run both pass the closing-line archives.
+`--market` only scores the replay against the close; no market line, current
+or past, reaches a forecast. From margin method v5 (2026-11-12) the team rating
+is results-only again: v4's blend with the strength earlier games' closing
+spreads implied (2026-11-07 reference below) was removed by the owner's rule
+that the model beats the line without using it. A replay with or without
+`--market` produces the same forecasts.
 
 `metrics.market.close_teacher` adds the November 6 study's descriptive teacher
 regressions, disagreement buckets, and persistent-team versus game-day split.
@@ -1060,6 +1059,9 @@ against 10.41 on 91 games through 2026-11-05) should narrow over the next few
 weeks of games.
 
 ## Reference: 2026-11-07 (market-implied team strength)
+
+Removed in margin method v5 (2026-11-12): no market input, current or past.
+The section is kept as the record of what was measured.
 
 `datasets/backtest-2026-11-07-market-strength/` (T-minus-30), model code
 `regular-season-baseline-0.4.8`, one change: each team's rating blends its
