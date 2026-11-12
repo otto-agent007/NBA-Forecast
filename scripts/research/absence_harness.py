@@ -46,8 +46,10 @@ from nba_forecast.market_history import read_lines  # noqa: E402
 from nba_forecast.validation import parse_time  # noqa: E402
 
 W = PARAMETERS['rating_weight']
-HALF_LIFE = PARAMETERS['market_strength_half_life_days']
-STRENGTH_SHARE = PARAMETERS['market_strength_weight']
+# v4's market-strength half-life and share, for the A3 rule on a v4 reference only: from margin
+# method v5 (2026-11-12) the rating reads no market line, so `strength_active` is always False.
+HALF_LIFE = PARAMETERS.get('market_strength_half_life_days', 7.)
+STRENGTH_SHARE = PARAMETERS.get('market_strength_weight', .7)
 MINIMUM_MINUTES = 15.  # the rule every reference so far was built with
 # The gate command's files (AGENTS.md), and the seeds of the early-season replay (docs/backtest.md).
 SEASONS = (
@@ -77,8 +79,10 @@ def season_games(datasets, season, *, seeded=False, suffix=''):
     market = read_lines(datasets / f"market-closing-{season['label']}" / 'closing-lines.json.gz')
     previous_history = B.read_json(datasets / season['previous_history']) if seeded else ()
     previous_records = B.read_json(datasets / season['previous_team_games']) if seeded else ()
+    # The closes score the margins (the `gap` column and `worth`); they reach the rating only on v4 code.
     closes = {gid: -line['home_spread'] for gid, line in market.items()
               if isinstance(line, dict) and isinstance(line.get('home_spread'), (int, float))}
+    rating_closes = (closes,) if 'market_strength_weight' in PARAMETERS else ()
     labels = {r['season'] for r in history}
     if any(r['season'] in labels for r in previous_history):
         raise ValueError('the seed season shares a season label with the replayed one')
@@ -106,7 +110,7 @@ def season_games(datasets, season, *, seeded=False, suffix=''):
             if day not in rating_cache:
                 window = [s for d, s in finals if d < day][-B.MARGIN_WINDOW:]
                 edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
-                rating_cache = {day: (edge, team_ratings(window, game['game_time'], closes))}
+                rating_cache = {day: (edge, team_ratings(window, game['game_time'], *rating_closes))}
             edge, ratings = rating_cache[day]
             home, away = game['home_team_id'], game['away_team_id']
             rated = home in ratings and away in ratings and edge is not None
@@ -187,6 +191,9 @@ VARIANTS = {
 # about a third of a counted minute, on outcomes and on the close: the two variants of our own.
 VARIANTS['own: 0.075, long absences 0.035'] = rule(per_minute=.075, long_value=.035)
 VARIANTS['own: 0.1, long absences 0.035'] = rule(per_minute=.1, long_value=.035)
+# Sizes of today's rule, for re-sizing the term on margin method v5 (no market strength).
+for _value in (.025, .125, .15, .2):
+    VARIANTS[f'size {_value:g} a minute'] = rule(per_minute=_value)
 for _name, _share in (('A1 season share', season_share), ('A2 share of last ten', recent_share), ('A3 rating share', rating_share)):
     for _value in (.075, .125, .15):
         VARIANTS[f'A5 {_name[3:]}, {_value:g}'] = rule(_share, _value)
