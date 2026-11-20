@@ -41,7 +41,7 @@ flag and wording in the UI and ledger. Unknown/Questionable/Doubtful/Probable
 continue to require review. Missing or incomplete reports do not become healthy.
 
 NBA guidance says reports update continually, not that T−30 is the last update:
-https://official.nba.com/nba-injury-report-2026-27-season/
+https://www.nba.com/players/injury-report
 The runner keeps the T−30 anchor for auditing and applies the latest captured
 report for availability. Pregame refresh slots are 15 minutes, then five minutes
 inside T−30. A reviewed input or model/parser revision also gets a distinct job.
