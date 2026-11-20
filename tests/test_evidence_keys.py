@@ -187,7 +187,7 @@ class PerGameEvidenceTests(PerGameFixture):
         self.tick(120)
         self.assertEqual(self.preflight.call_count, attempts + 1, 'a new member of this game\'s team rebuilds it')
 
-    def test_league_inputs_rebuild_and_an_upcoming_games_line_capture_does_not(self):
+    def test_league_inputs_rebuild_and_a_line_capture_does_not(self):
         import hashlib
         self.assertEqual(self.tick(0)['created_runs'], 1)
         record = json.dumps(dict(game_id='0022600000', game_time='2026-10-20T23:00:00+00:00', known_at='2026-10-21T02:00:00+00:00',
@@ -201,7 +201,7 @@ class PerGameEvidenceTests(PerGameFixture):
         (lines / (GAME + '.jsonl')).write_text('{}\n')
         self.assertEqual(self.tick(120)['created_runs'], 0, 'a capture of this upcoming game is not a preparation input')
         (lines / '0022600000.jsonl').write_text('{}\n')
-        self.assertEqual(self.tick(180)['created_runs'], 1, 'a tipped game\'s close prices the team ratings')
+        self.assertEqual(self.tick(180)['created_runs'], 0, 'nor is a tipped game\'s close: no market line is a forecast input')
         shots = self.folder / 'shots'
         shots.mkdir(exist_ok=True)
         (shots / '0022600000.json').write_text(json.dumps(dict(missing_reason='Shot evidence queued for collection')))
@@ -353,19 +353,19 @@ class ReportStateTests(unittest.TestCase):
 
 
 class LeagueInputTests(unittest.TestCase):
-    def test_once_per_tick_digest_ignores_report_and_upcoming_line_archives(self):
+    def test_once_per_tick_digest_ignores_report_and_line_archives(self):
         folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
         now = '2026-10-21T16:00:00+00:00'
-        first = operations._league_inputs(folder, [], None, now)
+        first = operations._league_inputs(folder, [], now)
         (folder / 'raw').mkdir()
         (folder / 'raw' / ('a' * 64 + '.pdf')).write_bytes(b'%PDF-')
         (folder / 'market/game-lines').mkdir(parents=True)
         (folder / 'market/game-lines' / (GAME + '.jsonl')).write_text('{}\n')
-        self.assertEqual(operations._league_inputs(folder, [], None, now), first)
-        model = dict(team_games=[dict(game_id=GAME, game_time='2026-10-22T00:00:00+00:00')])
-        self.assertEqual(operations._league_inputs(folder, [], model, now), first, 'not tipped yet')
-        self.assertNotEqual(operations._league_inputs(folder, [], model, '2026-10-22T03:00:00+00:00'),
-                            operations._league_inputs(folder, [], None, '2026-10-22T03:00:00+00:00'), 'tipped: its close is priced')
+        self.assertEqual(operations._league_inputs(folder, [], now), first)
+        later = '2026-10-22T03:00:00+00:00'
+        before = operations._league_inputs(folder, [], later)
+        (folder / 'market/game-lines' / (GAME + '.jsonl')).write_text('{}\n{}\n')
+        self.assertEqual(operations._league_inputs(folder, [], later), before, 'no market line, even of a tipped game, is a forecast input')
 
 
 if __name__ == '__main__':

@@ -239,12 +239,11 @@ def _production_forecast(snapshot, history, artifact, team_games, calendar):
 
 
 def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=None, injuries=None,
-           previous_history=(), previous_records=(), artifact=None, market=None):
+           previous_history=(), previous_records=(), artifact=None):
     """Forecast each evaluation game from earlier game days only.
 
-    ``market`` maps game IDs to closing lines (``home_spread``); the team rating
-    reads the closes of the games already played before each day, as production
-    reads its saved captures, never the game's own line.
+    No market line, current or past, enters a forecast; the closing lines are
+    read only by ``market_metrics`` to score the replay against them.
 
     ``injuries`` maps game IDs to their anchor report (``injury_history``); a
     game without one keeps every box-score player available. The previous
@@ -256,8 +255,6 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
     (``_production_forecast``) instead of the baseline.
     """
     home_of = {r['game_id']: r['home_team_id'] for r in (*previous_records, *records)}
-    closes = {gid: -line['home_spread'] for gid, line in (market or {}).items()
-              if isinstance(line, dict) and isinstance(line.get('home_spread'), (int, float))}
 
     def located(r):
         return dict(r, home=r['team_id'] == home_of[r['game_id']]) if r['game_id'] in home_of and 'home' not in r else r
@@ -337,7 +334,7 @@ def replay(history, records, as_of, *, warmup_fraction=.3, limit=None, progress=
                     if day not in rating_cache:
                         window = [s for d, s in finals if d < day][-MARGIN_WINDOW:]
                         edge = fmean(s['home_points'] - s['away_points'] for s in window) if window else None
-                        rating_cache = {day: (edge, team_ratings(window, game['game_time'], closes))}
+                        rating_cache = {day: (edge, team_ratings(window, game['game_time']))}
                     edge, ratings = rating_cache[day]
                     location, _ = blended_location(
                         published[g['home_team_id']] - published[g['away_team_id']],
@@ -842,8 +839,7 @@ def run_seasons(seasons, output, *, reference=None, warmup_fraction=.3, limit=No
         replayed = replay(season['history'], season['records'], as_of, warmup_fraction=warmup_fraction, limit=limit,
                           progress=progress, injuries=season.get('injuries'),
                           previous_history=season.get('previous_history') or (),
-                          previous_records=season.get('previous_records') or (), artifact=artifact,
-                          market=season.get('market'))
+                          previous_records=season.get('previous_records') or (), artifact=artifact)
         for key in ('players', 'teams', 'games'):
             rows[key].extend(replayed[key])
         dates.update({r['game_id']: _day(r['game_time']).isoformat() for r in season['records']})

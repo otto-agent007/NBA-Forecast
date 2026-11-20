@@ -353,41 +353,26 @@ def _stamps(paths):
     return sorted(out)
 
 
-def _league_inputs(folder,history,active_model,now):
+def _league_inputs(folder,history,now):
     """Fingerprint of the league-wide sources every game's preparation reads as of ``now``; once per tick.
 
     The merged history (captured finals, their enrichment and official revisions:
     profiles, rotation and every replay), the contemporary environment finals
-    (``enhancements.prepare``), the saved lines of each already-tipped game the
-    margin inputs price (``market_lines.closing_margins``, recovered closes
-    included), the collected shot files (shot profiles and shot quality; a pending
-    one, which both skip, is left out) and the archived NBA box-score pages
-    (injury role context). The saved lines of games not yet tipped are not read
-    by the preparation, so a capture before tipoff changes nothing here. On
-    2026-10-30's slate (old production copy) this took 0.7 s a tick.
+    (``enhancements.prepare``), the collected shot files (shot profiles and shot
+    quality; a pending one, which both skip, is left out) and the archived NBA
+    box-score pages (injury role context). No saved market line is read by the
+    preparation, so a line capture changes nothing here. On 2026-10-30's slate
+    (old production copy) this took 0.7 s a tick.
     """
     from .enhancements import _contemporary_games
     from .role_context import _URL as BOX_SCORE_PAGE
     folder=Path(folder)
-    cutoff=parse_time(now)
     out=dict(history=hashlib.sha256(canonical(history)).hexdigest())
     try:
         contemporary,sources=_contemporary_games(folder,now)
     except (ValueError,OSError,KeyError,TypeError) as exc:
         contemporary,sources=[],[f'unreadable: {type(exc).__name__}: {exc}']
     out['environment']=sources
-    starts={}
-    for record in list((active_model or {}).get('team_games') or [])+contemporary:
-        if isinstance(record,dict) and record.get('game_id'):
-            starts[record['game_id']]=record.get('game_time')
-    priced=[]
-    for gid,start in starts.items():
-        try:
-            if start and parse_time(start)<cutoff:
-                priced.append(folder/'market'/'game-lines'/(gid+'.jsonl'))
-        except (TypeError,ValueError):
-            continue
-    out['closes']=_stamps(p for p in priced if p.exists())
     shots=[]
     for path in sorted((folder/'shots').glob('*.json')):
         try:
@@ -976,7 +961,7 @@ def _job_keys(folder,jobs,checks,capture,roster,active_model,model_digest,*,sche
     league=team_games=None
     if jobs:
         try:
-            league=_league_inputs(folder,history,active_model,_now())
+            league=_league_inputs(folder,history,_now())
             team_games={}
             for row in history:
                 if row.get('season')==schedule.get('season'):

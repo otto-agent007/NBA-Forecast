@@ -202,8 +202,8 @@ strengths (half-life 7 days, ridge 0.1), blended at 0.7 into the rating, gives
 actual-on-close slope from 0.12 to 0.19; 0.5 gives −0.075 ± 0.018, 1.0
 −0.100 ± 0.036. A game's own line is never read, only lines of games already
 played, so the comparison with the close stays fair. Implemented in
-`margins.market_strengths` (the owner's decision is the pull request that
-carries it); the rating weight itself was left at 0.65, where the harness
+`margins.market_strengths` (merged in PR #35, then removed in margin method
+v5 on 2026-11-12 under the owner's rule of no market input, current or past); the rating weight itself was left at 0.65, where the harness
 suggests 0.75 would add another 0.06 with wider error, to be gated separately.
 The ± in this paragraph is one date-clustered standard error, the harness's
 convention; the gate's own tables quote two. On the gate each season's verdict
