@@ -12,6 +12,9 @@ from zoneinfo import ZoneInfo
 from .data import _fetch
 from .validation import parse_time
 
+# The official report index. Until 2026-11-20 it was official.nba.com/nba-injury-report-{season}-season/,
+# which now redirects here; this page lists only the current day's (Eastern) editions.
+INDEX_URL = 'https://www.nba.com/players/injury-report'
 REPORT_PATTERN = r'https://ak-static\.cms\.nba\.com/referee/injury/Injury-Report_(\d{4}-\d{2}-\d{2})_(\d{2}_\d{2}[AP]M)\.pdf'
 # Until 2025-12-21 the league published hourly and named each file by its hour
 # alone (Injury-Report_2025-01-15_07PM.pdf); the file itself is stamped half
@@ -70,7 +73,7 @@ def fetch_injury_check(snapshot,cache_dir='data/raw',*,capture_cache=None):
     season=snapshot['season']
     if not re.fullmatch(r'20\d{2}-\d{2}',season):
         raise ValueError('invalid season')
-    url=f'https://official.nba.com/nba-injury-report-{season}-season/'
+    url=INDEX_URL
     cache=capture_cache if capture_cache is not None else {}
     key=('index',season)
     entry=cache.get(key)
@@ -122,7 +125,7 @@ def fetch_daily_report(season,cache_dir='data/raw'):
     """Capture the newest published official report, independently of a slate."""
     if not re.fullmatch(r'20\d{2}-\d{2}',season):
         raise ValueError('invalid season')
-    url=f'https://official.nba.com/nba-injury-report-{season}-season/'
+    url=INDEX_URL
     raw,observed=_fetch(url,cache_dir)
     reports=report_links(raw.decode('utf-8'),observed)
     if not reports:

@@ -46,7 +46,7 @@ cannot silently move. This is our forecast policy, not an assertion that late
 NBA updates can never occur or that accuracy has been measured.
 
 Official policy/source:
-https://official.nba.com/nba-injury-report-2026-27-season/
+https://www.nba.com/players/injury-report
 
 The NBA describes day-before and game-day submission windows and continual
 updates. Its linked PDFs carry Eastern Time publication timestamps. The code

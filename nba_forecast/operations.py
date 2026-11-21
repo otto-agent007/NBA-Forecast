@@ -182,11 +182,14 @@ def _evidence_key(check,espn_injuries,roster,stage,game,report,inputs):
     the game's own (``_game_inputs``) and what its review and roster review decide
     (``_review_state``, ``_roster_review_state``). A new edition that leaves this
     game's lines alone, a roster move elsewhere and an upcoming game's line
-    capture are not this game's evidence. Without a usable injury check the key
-    falls back to a time slot, so the attempt is repeated periodically instead of never.
+    capture are not this game's evidence. Without a usable injury check the report
+    part is a fixed marker: the game is forecast once from its other evidence (the
+    ESPN list, the roster) and again when that evidence changes or the official
+    report becomes readable, not on a clock (on 2026-11-20 a 15-minute slot here
+    re-forecast the whole slate 268 times with 249 of 259 repeats unchanged).
     """
     if isinstance(check,Exception) or check is None:
-        reports=_retry_slot(stage,'unavailable')
+        reports=['unavailable']
     else:
         reports=report
     teams={game['home_team_id'],game['away_team_id']}

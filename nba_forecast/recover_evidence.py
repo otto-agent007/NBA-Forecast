@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 
 from .data import _fetch
 from .files import archive_bytes, atomic_json
-from .injuries import checkpoints, report_time
+from .injuries import INDEX_URL, checkpoints, report_time
 from .injury_capture import record_check
 from .injury_history import candidates
 from .kalshi_lines import API, SERIES, _download, closing_kalshi_line, event_ticker, fetch_markets, read_kalshi_lines, record_kalshi_line
@@ -48,7 +48,6 @@ from .reference import fetch_reference, scoreboard_event
 from .validation import parse_time
 
 VERSION = 'recover-evidence-1'
-INDEX_URL = 'https://official.nba.com/nba-injury-report-{}-season/'
 CANDLE_URL = 'https://api.elections.kalshi.com/trade-api/v2/series/{}/markets/{}/candlesticks?start_ts={}&end_ts={}&period_interval=1'
 CANDLE_PATTERN = (r'https://api\.elections\.kalshi\.com/trade-api/v2/series/KXNBA(GAME|SPREAD|TOTAL)/markets/[0-9A-Z-]+/candlesticks'
                   r'\?start_ts=\d+&end_ts=\d+&period_interval=1')
@@ -133,7 +132,7 @@ def recover_report_records(directory, schedule, game_ids, *, now=None, fetch=_fe
         if anchor is None:
             out.append(dict(game_id=gid, status='unavailable', failures=failures))
             continue
-        check = dict(schema_version=1, policy='per-game-t-minus-30', index_url=INDEX_URL.format(schedule['season']),
+        check = dict(schema_version=1, policy='per-game-t-minus-30', index_url=INDEX_URL,
                      index_observed_at=None, index_sha256=None, checked_at=now,
                      games=checkpoints([game], [anchor], now), availability_applied=False,
                      late_capture=_late(now, 'The checkpoint never ran (host outage); the edition published by T-30 '
@@ -325,7 +324,7 @@ def recover_daily_report(directory, season, date, *, now=None, fetch=_fetch, sle
     report, failures = _fetch_edition(candidates((scheduled + timedelta(hours=2)).isoformat(), anchor=anchor), folder / 'raw', fetch, sleep)
     if report is None:
         return dict(date=date, status='unavailable', failures=failures)
-    capture = dict(schema_version=1, season=season, index_url=INDEX_URL.format(season), index_observed_at=None, index_sha256=None,
+    capture = dict(schema_version=1, season=season, index_url=INDEX_URL, index_observed_at=None, index_sha256=None,
                    checked_at=report['retrieved_at'], report=report, capture_date=date, scheduled_at=scheduled.isoformat(),
                    late_capture=_late(now, 'The daily capture never ran (host outage); the edition published by 9 AM Pacific '
                                            'was fetched later from the NBA archive.'))
