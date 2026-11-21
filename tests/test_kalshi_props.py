@@ -225,6 +225,18 @@ class ReportTests(unittest.TestCase):
         self.assertAlmostEqual(median['model_abs_error'], 4.0)
         self.assertEqual(report['games'][0]['close_captured_at'], '2026-11-10T02:55:00Z')
         self.assertEqual(report['games'][0]['metrics']['brier/interval']['n'], 5)
+        # Taking the model's side at the quote: 0.374 for Curry over 29.5 is under the 0.445 bid, so no at 0.555.
+        self.assertEqual((curry[2]['side'], curry[2]['bid'], curry[2]['ask']), ('no', .445, .455))
+        self.assertAlmostEqual(curry[2]['edge'], .445 - curry[2]['model'])
+        self.assertAlmostEqual(curry[2]['pnl'], -.555 - P.FEE_RATE * .555 * .445, msg='he scored 31: the no side lost its price and the fee')
+        taken = [r for r in detail['rungs'] if 'edge' in r]
+        for edge in P.EDGES:
+            use = [r for r in taken if r['edge'] >= edge]
+            entry = summary['taking_the_model_side'][f'{edge:.2f}']
+            self.assertEqual((entry['contracts'], entry['yes']), (len(use), sum(r['side'] == 'yes' for r in use)))
+            if use:
+                self.assertAlmostEqual(entry['pnl_per_contract'], sum(r['pnl'] for r in use) / len(use))
+        self.assertGreater(summary['taking_the_model_side']['0.00']['contracts'], summary['taking_the_model_side']['0.15']['contracts'])
         # Scored once: the next rebuild reads neither the props history nor the forecast selection.
         with patch('nba_forecast.kalshi_props.read_props', side_effect=AssertionError('read again')), \
              patch('nba_forecast.daily_review._selected', side_effect=AssertionError('selected again')):
@@ -243,6 +255,20 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(P.read_props(self.folder, GAME['game_id']), [], 'the archive failed first, so nothing was appended')
         done = P.capture_kalshi_props(self.folder, [GAME], '2026-11-10T01:00:00Z', fetch=fetcher(dict(KXNBAPTS=points())))
         self.assertEqual(done['captured'], [GAME['game_id']], 'the slot stayed open')
+
+    def test_taking_a_side_needs_a_two_sided_quote_and_a_probability_outside_it(self):
+        self.assertIsNone(P.take(.50, .48, .52, True), 'inside the quote there is nothing to take')
+        self.assertIsNone(P.take(.90, 0., .52, True), 'no bid: not a two-sided quote')
+        self.assertIsNone(P.take(None, .48, .52, True))
+        edge, pnl, side = P.take(.60, .48, .52, True)
+        self.assertEqual(side, 'yes')
+        self.assertAlmostEqual(edge, .08)
+        self.assertAlmostEqual(pnl, 1 - .52 - P.FEE_RATE * .52 * .48)
+        edge, pnl, side = P.take(.40, .48, .52, True)
+        self.assertEqual(side, 'no')
+        self.assertAlmostEqual(edge, .08)
+        self.assertAlmostEqual(pnl, -.52 - P.FEE_RATE * .52 * .48)
+        self.assertAlmostEqual(P.take(.40, .48, .52, False)[1], 1 - .52 - P.FEE_RATE * .52 * .48)
 
     def test_pooled_sums_give_the_row_level_answer(self):
         rows = [dict(date='d1', a=.1, b=.3), dict(date='d1', a=.4, b=.2), dict(date='d2', a=.5, b=.5), dict(date='d3', a=.0, b=.2)]

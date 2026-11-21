@@ -410,11 +410,33 @@ def _log_loss(p, outcome):
 # A game's scored figures are kept (``report-cache.json``) until its props file, its final box
 # score, its tipoff or this version changes: a close never changes after tip, and a tipped game's
 # selected forecast cannot either (runs created at or after tipoff are not selected).
-SCORING = 'props-report-2'
+SCORING = 'props-report-3'
+# Taking the model's side at the recorded quote: thresholds fixed here on 2026-11-21, before the
+# games they will be read on, so a threshold is never picked after the results. The fee is Kalshi's
+# general taker schedule, 0.07 * price * (1 - price) a contract, without its rounding up to a cent.
+EDGES = (0., .05, .10, .15)
+FEE_RATE = .07
 METRICS = {'brier/interval': ('model_brier', 'market_brier'), 'brier/sd': ('model_sd_brier', 'market_brier'),
            'log_loss/interval': ('model_log_loss', 'market_log_loss'), 'log_loss/sd': ('model_sd_log_loss', 'market_log_loss'),
            'median_abs_error': ('model_abs_error', 'market_abs_error')}
 EXCLUDED = ('unmatched_players', 'players_without_forecast', 'players_not_entered', 'rungs_without_mid', 'medians_not_bracketed')
+
+
+def take(probability, bid, ask, outcome):
+    """``(edge, pnl, side)`` of acting on ``probability`` against a two-sided quote, or None without one.
+
+    Buy yes at the ask when the probability is above it, no at one minus the bid when it is
+    below the bid; inside the quote there is nothing to take. ``edge`` is the probability's
+    distance past the price paid, ``pnl`` the result of one contract after the fee.
+    """
+    if probability is None or not (_finite(bid) and _finite(ask)) or not 0 < bid < ask < 1:
+        return None
+    if probability > ask:
+        return probability - ask, (1. if outcome else 0.) - ask - FEE_RATE * ask * (1 - ask), 'yes'
+    if probability < bid:
+        price = 1 - bid
+        return bid - probability, (0. if outcome else 1.) - price - FEE_RATE * price * (1 - price), 'no'
+    return None
 
 
 def _stamp(path):
@@ -464,6 +486,9 @@ def _score_game(folder, game, close, choice, stage):
                 if row[name] is not None:
                     row[name + '_brier'] = (row[name] - outcome) ** 2
                     row[name + '_log_loss'] = _log_loss(row[name], outcome)
+            taken = take(row['model'], rung[1], rung[2], outcome)
+            if taken:
+                row.update(bid=rung[1], ask=rung[2], edge=taken[0], pnl=taken[1], side=taken[2])
             rungs.append(row)
         if ladder.get('implied_median') is None:
             excluded['medians_not_bracketed'] += 1
@@ -475,6 +500,9 @@ def _score_game(folder, game, close, choice, stage):
     for name, (a, b) in METRICS.items():
         use = [r for r in (medians if name == 'median_abs_error' else rungs) if r.get(a) is not None and r.get(b) is not None]
         metrics[name] = dict(n=len(use), a=sum(r[a] for r in use), b=sum(r[b] for r in use))
+    for edge in EDGES:
+        use = [r for r in rungs if r.get('edge') is not None and r['edge'] >= edge]
+        metrics[f'take/{edge:.2f}'] = dict(n=len(use), a=sum(r['pnl'] for r in use), b=0., yes=sum(r['side'] == 'yes' for r in use))
     entry.update(scored=True, run_id=choice.get('run_id'), stage=stage, players_scored=counted, rungs=len(rungs),
                  median_players=len(medians), excluded=excluded, metrics=metrics)
     return entry, rungs, medians
@@ -555,6 +583,13 @@ def props_report(folder, schedule, as_of=None, *, selected=None):
         summary.update(status='scored', brier=dict(interval=totals['brier/interval'], sd=totals['brier/sd']),
                        log_loss=dict(interval=totals['log_loss/interval'], sd=totals['log_loss/sd']),
                        median_abs_error=totals['median_abs_error'])
+        taken = {}
+        for edge in EDGES:
+            name = f'take/{edge:.2f}'
+            result = pooled([dict(date=e['date'], **{k: e['metrics'][name][k] for k in ('n', 'a', 'b')}) for _, e in scored], 'pnl', 'zero')
+            taken[f'{edge:.2f}'] = dict(contracts=result['n'], dates=result.get('dates', 0), pnl_per_contract=result.get('difference'),
+                                        pnl_se=result.get('difference_se'), yes=sum(e['metrics'][name]['yes'] for _, e in scored))
+        summary['taking_the_model_side'] = taken
     games = [dict({k: e[k] for k in ('date', 'start_time', 'run_id', 'stage', 'close_captured_at', 'players_scored', 'rungs',
                                      'median_players', 'metrics')}, game_id=gid, detail=f'market/kalshi-props/scored/{gid}.json')
              for gid, e in scored]
@@ -566,6 +601,9 @@ def props_report(folder, schedule, as_of=None, *, selected=None):
                             'points_sd. The market line is a median and the model points a mean, which favours the market on absolute error '
                             'when scoring is skewed. The model forecasts regulation (its minutes stop at 48) while settlement and the box '
                             'score count overtime points. A game\'s metrics are sums (n, a = model, b = market); its scored rungs and '
-                            'medians are in its detail file.',
+                            'medians are in its detail file. taking_the_model_side: one contract on every rung where the "interval" '
+                            'probability is at least the keyed edge past the recorded quote (yes at the ask, no at one minus the bid), '
+                            'in dollars a contract after a fee of 0.07 * price * (1 - price); the thresholds were fixed on 2026-11-21 '
+                            'and positive means the model\'s side made money. Rungs sharing a player are not independent.',
                 policy='Recorded public Kalshi prices, last capture before tipoff, against the final pregame forecast. Not a quote, '
                        'a recommendation or a bet; a small sample is not an edge.')

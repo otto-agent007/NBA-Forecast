@@ -616,7 +616,14 @@ probability (a two-piece normal that puts the published 80% interval at the
 median line against the model's points mean by absolute error. Differences are
 model minus market with one standard error clustered by Pacific game date;
 excluded players and rungs are counted by reason. A median scored on absolute
-error is favoured against a mean when scoring is skewed. Until a captured game
+error is favoured against a mean when scoring is skewed. `taking_the_model_side`
+answers the money question at the recorded quote instead of the mid: one
+contract on every rung where the model's probability is past the quote by at
+least 0, 0.05, 0.10 or 0.15 (yes at the ask, no at one minus the bid), in
+dollars a contract after a fee of 0.07 × price × (1 − price). The thresholds
+were fixed on 2026-11-21, when the first nine dates read −0.023 ± 0.010 at any
+edge and +0.093 ± 0.043 at 0.15 on 106 contracts; that last figure was seen
+before the threshold was fixed, so only games from 2026-11-21 on test it. Until a captured game
 is final the report says `no_data`. Rebounds, assists and threes are recorded
 but not yet scored. A game is scored once: its counts and sums are kept in
 `market/kalshi-props/report-cache.json` until its props file, its final box score
