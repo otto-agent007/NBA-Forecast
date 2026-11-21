@@ -22,11 +22,11 @@ A second one-minute timer runs `python -m nba_forecast derived`, which rebuilds
 the performance, calibration, market, postgame and daily-review reports the
 dashboard reads whenever their inputs changed. It runs beside the tick, so a
 rebuild that takes minutes never delays a checkpoint forecast or a line capture.
-A third, `python -m nba_forecast capture`, captures sportsbook lines from ESPN
-and Kalshi at the forecast cadence (every minute in the last five before tip on
-Kalshi) and Kalshi's player prop ladders, the benchmark for the player
-forecasts; the tick captures the game lines itself only when that service has
-not run for three minutes.
+A third, `python -m nba_forecast capture`, captures sportsbook lines from ESPN,
+Kalshi and Polymarket at the forecast cadence (every minute in the last five
+before tip on the two exchanges) and Kalshi's player prop ladders, the benchmark
+for the player forecasts; the tick captures the ESPN and Kalshi game lines
+itself only when that service has not run for three minutes.
 
 Deploy a merged change with `python3 -m nba_forecast.deploy --directory
 data/operations/production` (`--dry-run` first); it records the commit in
@@ -81,7 +81,7 @@ and end-to-end checks.
 
 | Path | Holds |
 |---|---|
-| `nba_forecast/` | The package: `model`, `candidate`, `margins`, `totals` (the forecast); `operations`, `injuries`, `injury_capture`, `preflight`, `schedule`, `market_lines`, `kalshi_lines`, `kalshi_props`, `capture` (the tick, the capture and derived services); `store` (the ledger); `backtest`, `injury_history`, `espn_season`, `market_history` (the replay and its datasets); `dashboard`; `deploy` |
+| `nba_forecast/` | The package: `model`, `candidate`, `margins`, `totals` (the forecast); `operations`, `injuries`, `injury_capture`, `preflight`, `schedule`, `market_lines`, `kalshi_lines`, `kalshi_props`, `polymarket_lines`, `capture` (the tick, the capture and derived services); `store` (the ledger); `backtest`, `injury_history`, `espn_season`, `market_history` (the replay and its datasets); `dashboard`; `deploy` |
 | `tests/` | `unittest` suites, offline, one per module |
 | `datasets/` | Committed replay inputs (box-score histories, team games, injury reports, closing lines) and every backtest reference scoreboard |
 | `data/` | Gitignored: production operations under `data/operations/production`, raw archives, the ledger; back it up |

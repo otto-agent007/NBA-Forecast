@@ -23,6 +23,8 @@ from .validation import parse_time
 VERSION = 'market-lines-1'
 # Spread and total edges, in points, at which a model lean is counted in the report.
 EDGE_THRESHOLDS = (0.0, 1.0, 2.0, 3.0)
+# The home-win probability each source's report row carries (winner_by_source).
+WINNER_SOURCES = dict(model='model_home_win', draftkings='market_home_win', kalshi='kalshi_home_win', polymarket='polymarket_home_win')
 
 
 def _number(text):
@@ -254,28 +256,30 @@ def build_index(folder):
                                 providers={pid: dict(provider=v['provider'], first_captured_at=v['first']['captured_at'],
                                                      latest_captured_at=v['latest']['captured_at'], latest=v['latest']['lines'],
                                                      first=v['first']['lines']) for pid, v in providers.items()})
-    from .kalshi_lines import read_kalshi_lines  # imported here: kalshi_lines uses this module's line parser
-    kalshi_root = Path(folder) / 'market' / 'kalshi'
-    for path in sorted(kalshi_root.glob('*.jsonl')) if kalshi_root.exists() else []:
-        try:
-            records = read_kalshi_lines(folder, path.stem)
-        except ValueError:
-            damaged.append(path.stem)
-            continue
-        if not records:
-            continue
-        entry = index.setdefault(path.stem, dict(start_time=records[-1]['start_time'], captures=0, providers={}))
-        entry['providers']['kalshi'] = dict(provider='Kalshi', first_captured_at=records[0]['captured_at'],
-                                            latest_captured_at=records[-1]['captured_at'], latest=records[-1]['lines'],
-                                            first=records[0]['lines'], home_win_probability=records[-1]['home_win_probability'],
-                                            captures=len(records))
+    from .kalshi_lines import read_kalshi_lines  # imported here: both modules use this module's line parser
+    from .polymarket_lines import read_polymarket_lines
+    for key, name, read in (('kalshi', 'Kalshi', read_kalshi_lines), ('polymarket', 'Polymarket', read_polymarket_lines)):
+        exchange_root = Path(folder) / 'market' / key
+        for path in sorted(exchange_root.glob('*.jsonl')) if exchange_root.exists() else []:
+            try:
+                records = read(folder, path.stem)
+            except ValueError:
+                damaged.append(path.stem)
+                continue
+            if not records:
+                continue
+            entry = index.setdefault(path.stem, dict(start_time=records[-1]['start_time'], captures=0, providers={}))
+            entry['providers'][key] = dict(provider=name, first_captured_at=records[0]['captured_at'],
+                                           latest_captured_at=records[-1]['captured_at'], latest=records[-1]['lines'],
+                                           first=records[0]['lines'], home_win_probability=records[-1]['home_win_probability'],
+                                           captures=len(records))
     return dict(version=VERSION, generated_at=datetime.now(timezone.utc).isoformat(), games=index, damaged=damaged)
 
 
 def _index_inputs(folder):
     """A digest of the line files' names, sizes and modification times; every appended capture changes it."""
     digest = hashlib.sha256()
-    for name in ('game-lines', 'kalshi'):
+    for name in ('game-lines', 'kalshi', 'polymarket'):
         root = Path(folder) / 'market' / name
         for path in sorted(root.glob('*.jsonl')) if root.exists() else []:
             stat = path.stat()
@@ -388,6 +392,44 @@ def method_breakdown(rows):
                 'Eastern game date (backtest._mean_se). A small sample; not an edge.'))
 
 
+def winner_by_source(rows):
+    """Winner Brier of the model, DraftKings, Kalshi and Polymarket on the games where all four have a price.
+
+    One row a game, the DraftKings row (its no-vig moneyline is ``market_home_win``);
+    a game any source has no price for is left out of every column, so the
+    columns score the same games. ``best_market`` is the market with the lowest
+    Brier on those games, the first of ``WINNER_SOURCES`` on a tie. Each
+    ``model_minus`` difference is paired, the model's squared error minus that
+    market's, with ONE standard error clustered by Eastern game date. None
+    until a game has all four.
+    """
+    from .backtest import _day, _mean_se
+    games = {}
+    for r in rows:
+        if (re.sub(r'[^a-z]', '', str(r.get('provider')).lower()) == 'draftkings' and r['actual_margin'] != 0
+                and all(r.get(field) is not None for field in WINNER_SOURCES.values())):
+            games[r['game_id']] = r
+    if not games:
+        return None
+    chosen = sorted(games.values(), key=lambda r: (r['start_time'], r['game_id']))
+    dates = [_day(r['start_time']).isoformat() for r in chosen]
+    errors = {name: [(r[field] - (r['actual_margin'] > 0)) ** 2 for r in chosen] for name, field in WINNER_SOURCES.items()}
+    brier = {name: sum(values) / len(values) for name, values in errors.items()}
+    markets = [name for name in WINNER_SOURCES if name != 'model']
+    versus = {}
+    for name in markets:
+        differences = [a - b for a, b in zip(errors['model'], errors[name])]
+        versus[name] = dict(difference=sum(differences) / len(differences),
+                            difference_se=_mean_se(differences, [(d,) for d in dates])[0] if len(chosen) > 1 else None)
+    return dict(games=len(chosen), dates=len(set(dates)), brier=brier, best_market=min(markets, key=lambda name: brier[name]),
+                model_minus=versus, first_game=chosen[0]['start_time'], last_game=chosen[-1]['start_time'],
+                policy=('Brier score of the home-win probability on the games where the model, DraftKings (no-vig closing '
+                        'moneyline from ESPN), Kalshi and Polymarket (last bid-ask mid before tip) all have one; lower is '
+                        'better. best_market is the lowest market Brier on these games; model_minus is model minus market, '
+                        'paired, with ONE standard error clustered by Eastern game date. On a few games the order of the '
+                        'markets is noise.'))
+
+
 def market_report(folder, schedule, as_of=None, *, selected=None):
     """Compare each game's latest pregame forecast with the closing line and the final score.
 
@@ -404,6 +446,7 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
     """
     from .daily_review import _selected
     from .kalshi_lines import closing_kalshi_line, read_kalshi_lines
+    from .polymarket_lines import closing_polymarket_line, read_polymarket_lines
     folder = Path(folder)
     as_of = as_of or datetime.now(timezone.utc).isoformat()
     games = {g['game_id']: g for g in schedule.get('games', []) if g.get('start_time') and g.get('status') not in ('postponed', 'cancelled', 'tbd')}
@@ -465,6 +508,11 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
         except ValueError as exc:
             errors.append(dict(game_id=gid, error=str(exc)))
             kalshi = None
+        try:
+            polymarket = closing_polymarket_line(read_polymarket_lines(folder, gid), game['start_time'])
+        except ValueError as exc:
+            errors.append(dict(game_id=gid, error=str(exc)))
+            polymarket = None
         for pid, line in sorted(lines.items()):
             spread = line['lines']['spread']['home']['current_line']
             total = line['lines']['total']['over']['current_line']
@@ -499,6 +547,12 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
                 row.update(kalshi_margin=kalshi['implied_home_margin'], kalshi_home_win=kalshi.get('home_win_probability'),
                            kalshi_total=kalshi.get('implied_total'), kalshi_captured_at=kalshi['captured_at'],
                            kalshi_abs_error=abs(kalshi['implied_home_margin'] - actual_margin))
+            if polymarket:
+                # Polymarket's last pre-tip price, a third close; its winner market trades before its spreads are listed.
+                row.update(polymarket_home_win=polymarket.get('home_win_probability'), polymarket_margin=polymarket.get('implied_home_margin'),
+                           polymarket_total=polymarket.get('implied_total'), polymarket_captured_at=polymarket['captured_at'])
+                if polymarket.get('implied_home_margin') is not None:
+                    row['polymarket_abs_error'] = abs(polymarket['implied_home_margin'] - actual_margin)
             rows.append(row)
     from .close_teacher import live_diagnostics
     summary = dict(games=len({r['game_id'] for r in rows}), rows=len(rows), margin_unavailable=unavailable,
@@ -544,6 +598,18 @@ def market_report(folder, schedule, as_of=None, *, selected=None):
         kalshi_wins = [r for r in kalshi_rows if r.get('kalshi_home_win') is not None and r['actual_margin'] != 0]
         if kalshi_wins:
             summary['kalshi_winner'] = dict(n=len(kalshi_wins), brier=sum((r['kalshi_home_win'] - (r['actual_margin'] > 0)) ** 2 for r in kalshi_wins) / len(kalshi_wins))
+    polymarket_rows = [r for r in rows if 'polymarket_abs_error' in r]
+    if polymarket_rows:
+        summary.setdefault('margin_abs_error', {})
+        summary['margin_abs_error'].update(polymarket=sum(r['polymarket_abs_error'] for r in polymarket_rows) / len(polymarket_rows),
+                                           polymarket_n=len(polymarket_rows))
+    polymarket_wins = [r for r in rows if r.get('polymarket_home_win') is not None and r['actual_margin'] != 0]
+    if polymarket_wins:
+        summary['polymarket_winner'] = dict(n=len(polymarket_wins),
+                                            brier=sum((r['polymarket_home_win'] - (r['actual_margin'] > 0)) ** 2 for r in polymarket_wins) / len(polymarket_wins))
+    comparison = winner_by_source(rows)
+    if comparison:
+        summary['winner_by_source'] = comparison
     win_rows = [r for r in rows if r.get('market_home_win') is not None and r['actual_margin'] != 0]
     if win_rows:
         summary['winner'] = dict(n=len(win_rows),
