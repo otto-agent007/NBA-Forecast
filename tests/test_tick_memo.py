@@ -64,7 +64,9 @@ class Stopped(BaseException):
 def _tick_patches(stack, schedule):
     for target, value in (('nba_forecast.operations._now', dict(return_value='2026-10-21T23:00:00Z')),
                           ('nba_forecast.operations.fetch_schedule', dict(return_value=schedule)),
-                          ('nba_forecast.operations.fetch_roster', {})):
+                          ('nba_forecast.operations.fetch_roster', {}),
+                          # The day's injury report is not this file's subject; the suite is offline.
+                          ('nba_forecast.operations.capture_daily', dict(return_value={'state': 'waiting'}))):
         stack.enter_context(patch(target, **value))
 
 
@@ -198,6 +200,7 @@ class HistoryMemoTests(unittest.TestCase):
             with patch('nba_forecast.operations._now', return_value='2026-10-21T23:00:00Z'), \
                  patch('nba_forecast.operations.fetch_schedule', return_value=schedule), \
                  patch('nba_forecast.operations.fetch_roster'), \
+                 patch('nba_forecast.operations.capture_daily', return_value={'state': 'waiting'}), \
                  patch('nba_forecast.player_sync.enrich_final_cache', side_effect=lambda *a, **k: enrich.append(1) or real_enrich(*a, **k)), \
                  patch('nba_forecast.operations._merge_finals', side_effect=lambda *a, **k: merge.append(1) or real_merge(*a, **k)):
                 first = run_tick(d, _history(), history_key='k')
