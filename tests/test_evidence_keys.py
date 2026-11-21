@@ -68,13 +68,15 @@ class EvidenceKeyTests(TickFixture):
         self.tick(900)
         self.assertEqual(self.preflight.call_count, 2)
 
-    def test_unavailable_check_retries_every_fifteen_minutes(self):
+    def test_unavailable_check_forecasts_once_until_the_report_returns(self):
         self.injuries.side_effect = ValueError('offline')
         self.tick(0)
-        self.tick(600)
-        self.assertEqual(self.preflight.call_count, 1)
         self.tick(900)
-        self.assertEqual(self.preflight.call_count, 2)
+        self.tick(3600)
+        self.assertEqual(self.preflight.call_count, 1, 'an unreadable report is not re-forecast on a clock')
+        self.injuries.side_effect = None
+        self.tick(3660)
+        self.assertEqual(self.preflight.call_count, 2, 'the readable report is new evidence')
 
     def test_roster_is_reused_for_preliminary_forecasts(self):
         self.tick(0)
