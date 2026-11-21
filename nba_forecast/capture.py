@@ -3,19 +3,19 @@
 ``python -m nba_forecast capture --directory DIR`` (``nba-capture.service`` and
 ``.timer``, every minute at :45) captures, for the games the tick treats as
 upcoming (``schedule.upcoming_games`` of the saved calendar: scheduled, tipping
-within 24 hours), ESPN's sportsbook lines, Kalshi's game markets and Kalshi's
-player prop ladders, each at its own cadence slot. The three providers run side
-by side, one lane per host (ESPN; Kalshi's game lines, then its props), until
-one deadline, so a slow ESPN cannot starve Kalshi or the reverse. Every request
-has a 12-second timeout and each lane checks the deadline before each request
-(``capture_game_lines`` between a game's scoreboard and summary too), so a run
-ends within ``RUN_SECONDS`` plus one request timeout, 52 seconds; name
-resolution is not covered by the timeouts, and the unit's start limit ends a run
-stuck there.
+within 24 hours), ESPN's sportsbook lines, Kalshi's game markets, Kalshi's
+player prop ladders and Polymarket's game markets, each at its own cadence slot.
+The providers run side by side, one lane per provider (ESPN; Kalshi's game lines,
+then its props; Polymarket), until one deadline, so a slow or failing provider
+cannot starve the others. Every request has a 12-second timeout and each lane
+checks the deadline before each request (``capture_game_lines`` between a game's
+scoreboard and summary too), so a run ends within ``RUN_SECONDS`` plus one
+request timeout, 52 seconds; name resolution is not covered by the timeouts, and
+the unit's start limit ends a run stuck there.
 
 Every capture of upcoming games, the service's and the tick's, holds
 ``capture.lock``, so no two processes write ``market/capture-state.json``,
-``market/index.json``, the line files or the Kalshi states at once. The derived
+``market/index.json``, the line files or the Kalshi and Polymarket states at once. The derived
 service's ``recover_evidence.auto_recover`` and the ``recover-evidence`` command
 also append to ``market/game-lines/`` and ``market/kalshi/`` without it; they
 write only files of tipped games, which no capture writes after tipoff. The
@@ -54,7 +54,7 @@ HEARTBEAT_SECONDS = 180
 # service fails and the tick's fallback spans :45, the next tick must capture again.
 # Whoever holds the lock is seen by the tick's own non-blocking lock attempt.
 ALIVE = ('complete', 'partial', 'waiting')
-PROVIDERS = ('market_lines', 'kalshi_lines', 'kalshi_props')
+PROVIDERS = ('market_lines', 'kalshi_lines', 'kalshi_props', 'polymarket_lines')
 
 
 def _now():
@@ -119,9 +119,9 @@ def run_providers(lanes, seconds):
     """Run each lane of provider calls side by side, the calls of a lane in order, all until one deadline.
 
     A lane is a list of ``(name, call)``, a call a function of the deadline (a
-    ``time.monotonic()`` instant ``seconds`` from now). One lane per host: a slow
-    ESPN cannot hold up Kalshi, and Kalshi's two series run one after the other
-    (game lines first), because side by side they drew HTTP 429 on 2026-11-10.
+    ``time.monotonic()`` instant ``seconds`` from now). One lane per provider: a slow
+    ESPN cannot hold up Kalshi or Polymarket, and Kalshi's two series run one after the
+    other (game lines first), because side by side they drew HTTP 429 on 2026-11-10.
     Returns ``{name: (report, None) or (None, exception)}``.
     """
     deadline = time.monotonic() + max(0., seconds)
@@ -224,6 +224,7 @@ def _capture(folder, report, fetch, now):
     from .kalshi_lines import capture_kalshi_lines
     from .kalshi_props import capture_kalshi_props
     from .market_lines import capture_game_lines, refresh_index
+    from .polymarket_lines import capture_polymarket_lines
     clock = (lambda: now) if now else _now
     schedule, source = saved_calendar(folder)
     if schedule is None:
@@ -236,7 +237,8 @@ def _capture(folder, report, fetch, now):
         results = run_providers([
             [('market_lines', lambda deadline: capture_game_lines(folder, games, season, clock(), deadline=deadline, index=False))],
             [('kalshi_lines', lambda deadline: capture_kalshi_lines(folder, games, clock(), fetch=fetch, deadline=deadline)),
-             ('kalshi_props', lambda deadline: capture_kalshi_props(folder, games, clock(), fetch=fetch, deadline=deadline))]], RUN_SECONDS)
+             ('kalshi_props', lambda deadline: capture_kalshi_props(folder, games, clock(), fetch=fetch, deadline=deadline))],
+            [('polymarket_lines', lambda deadline: capture_polymarket_lines(folder, games, clock(), fetch=fetch, deadline=deadline))]], RUN_SECONDS)
         for name, (value, error) in results.items():
             if error is None:
                 report[name] = value

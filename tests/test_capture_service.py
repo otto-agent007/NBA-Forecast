@@ -23,6 +23,13 @@ ROOT = Path(__file__).resolve().parents[1]
 NOW = '2026-10-21T16:00:00Z'  # 9 AM Pacific
 
 
+def setUpModule():
+    """No run here reaches Polymarket: one not handed a fetcher or a patched capture fails instead."""
+    guard = patch('nba_forecast.polymarket_lines._download', side_effect=AssertionError('a test reached the network'))
+    guard.start()
+    unittest.addModuleCleanup(guard.stop)
+
+
 def calendar(folder):
     """A saved calendar: tips in 2, 20 (before the next 9 AM) and 30 hours, one already tipped, one TBD."""
     games = [game('0022600001', '2026-10-21T18:00:00Z'), game('0022600002', '2026-10-22T12:00:00Z'),
@@ -64,7 +71,8 @@ class UpcomingTests(unittest.TestCase):
                 return dict(captured=[], errors=[])
             with patch('nba_forecast.market_lines.capture_game_lines', side_effect=service), \
                  patch('nba_forecast.kalshi_lines.capture_kalshi_lines', return_value=dict(captured=[], errors=[])), \
-                 patch('nba_forecast.kalshi_props.capture_kalshi_props', return_value=dict(captured=[], errors=[])):
+                 patch('nba_forecast.kalshi_props.capture_kalshi_props', return_value=dict(captured=[], errors=[])), \
+                 patch('nba_forecast.polymarket_lines.capture_polymarket_lines', return_value=dict(captured=[], errors=[])):
                 report = C.run_capture(d, now=NOW)
             self.assertEqual(report['status'], 'complete')
             self.assertEqual(seen['service'], seen['tick'])
@@ -86,9 +94,11 @@ class ServiceRunTests(unittest.TestCase):
         atomic_json(self.folder / 'schedule' / 'latest.json', schedule)
         espn = dict(summary(), header=dict(summary()['header'], competitions=[dict(summary()['header']['competitions'][0], date='2026-10-21T23:00:00Z')]))
         kalshi = fetcher(payloads())
-        def fetch(url):
+        def fetch(url, body=None):
             if any(series in url for series in ('KXNBAPTS', 'KXNBAREB', 'KXNBAAST', 'KXNBA3PT')):
                 return b'{"markets": [], "cursor": ""}'  # props open on game day
+            if 'polymarket.com' in url:
+                return b'{"events": []}'  # Polymarket lists no event for this game
             return kalshi(url)
         with patch('nba_forecast.reference.scoreboard_event', return_value=(dict(provider_event_id='401909848'), META)), \
              patch('nba_forecast.reference.fetch_reference', return_value=(espn, META)):
@@ -97,11 +107,13 @@ class ServiceRunTests(unittest.TestCase):
             self.assertEqual([c['game_id'] for c in first['market_lines']['captured']], ['0022600010'])
             self.assertEqual(first['kalshi_lines']['captured'], ['0022600010'])
             self.assertEqual(first['kalshi_props']['unlisted'], ['0022600010'])
+            self.assertEqual(first['polymarket_lines']['unlisted'], ['0022600010'])
             self.assertTrue(first['index_rebuilt'])
             self.assertEqual(list(saved_capture_evidence(self.folder, schedule['games'])), ['0022600010'])
             states = {p: p.stat().st_mtime_ns for p in (self.folder / 'market').rglob('*.json')}
             second = C.run_capture(self.folder, fetch=fetch, now=(datetime.fromisoformat(NOW.replace('Z', '+00:00')) + timedelta(seconds=30)).isoformat())
         self.assertEqual(second['market_lines']['skipped'], ['0022600010'])
+        self.assertEqual(second['polymarket_lines']['skipped'], ['0022600010'])
         self.assertFalse(second['index_rebuilt'])
         self.assertEqual({p: p.stat().st_mtime_ns for p in (self.folder / 'market').rglob('*.json')}, states, 'an idle run rewrites no state')
         lines = [json.loads(line) for line in (self.folder / 'capture.jsonl').read_text().splitlines()]
@@ -119,11 +131,33 @@ class ServiceRunTests(unittest.TestCase):
         calendar(self.folder)
         with patch('nba_forecast.market_lines.capture_game_lines', side_effect=RuntimeError('boom')), \
              patch('nba_forecast.kalshi_lines.capture_kalshi_lines', return_value=dict(captured=['0022600001'], errors=[])), \
-             patch('nba_forecast.kalshi_props.capture_kalshi_props', return_value=dict(captured=[], errors=[])):
+             patch('nba_forecast.kalshi_props.capture_kalshi_props', return_value=dict(captured=[], errors=[])), \
+             patch('nba_forecast.polymarket_lines.capture_polymarket_lines', return_value=dict(captured=['0022600001'], errors=[])):
             report = C.run_capture(self.folder, now=NOW)
         self.assertEqual(report['status'], 'partial')
         self.assertEqual(report['errors'], [dict(task='market_lines', error='RuntimeError: boom')])
         self.assertEqual(report['kalshi_lines']['captured'], ['0022600001'])
+        self.assertEqual(report['polymarket_lines']['captured'], ['0022600001'])
+
+    def test_a_failing_polymarket_never_costs_the_other_captures(self):
+        calendar(self.folder)
+        others = (patch('nba_forecast.market_lines.capture_game_lines', return_value=dict(captured=[dict(game_id='0022600001')], errors=[])),
+                  patch('nba_forecast.kalshi_lines.capture_kalshi_lines', return_value=dict(captured=['0022600001'], errors=[])),
+                  patch('nba_forecast.kalshi_props.capture_kalshi_props', return_value=dict(captured=['0022600001'], errors=[])))
+        for failure, where in ((patch('nba_forecast.polymarket_lines._download', side_effect=OSError('unreachable')), 'polymarket_lines'),
+                               (patch('nba_forecast.polymarket_lines.capture_polymarket_lines', side_effect=RuntimeError('boom')), 'errors')):
+            with others[0], others[1], others[2], failure:
+                report = C.run_capture(self.folder, now=NOW)
+            self.assertEqual(report['status'], 'partial', where)
+            self.assertEqual((len(report['market_lines']['captured']), report['kalshi_lines']['captured'], report['kalshi_props']['captured']),
+                             (1, ['0022600001'], ['0022600001']), where)
+            if where == 'errors':  # the capture itself raised: the run reports it and carries no Polymarket report
+                self.assertEqual(report['errors'], [dict(task='polymarket_lines', error='RuntimeError: boom')])
+            else:  # the network failed: each game is listed with its error and waits for the next run
+                self.assertEqual([e['game_id'] for e in report['polymarket_lines']['errors']], ['0022600001', '0022600002'])
+                self.assertIn('unreachable', report['polymarket_lines']['errors'][0]['error'])
+                self.assertEqual(report['errors'], [])
+        self.assertFalse(list((self.folder / 'market').rglob('*.jsonl')), 'nothing was recorded')
 
 
 class LaneTests(unittest.TestCase):
