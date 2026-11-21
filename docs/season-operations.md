@@ -405,10 +405,11 @@ Since 2026-11-10 the captures run on their own timer, not in the tick:
 `.timer`, every minute at :45; `nba_forecast/capture.py`). It reads the saved
 calendar and captures for the games the tick treats as upcoming (scheduled and
 tipping within 24 hours, including games still waiting for the 9 AM
-checkpoint), each provider at its own cadence slot. ESPN runs in one lane and
-Kalshi in another (its game lines first, then the player props, below), until
-one deadline 40 seconds after the run starts, so a slow ESPN cannot starve
-Kalshi or the reverse; a game a lane does not reach is listed as `deferred` and
+checkpoint), each provider at its own cadence slot. ESPN runs in one lane,
+Kalshi in another (its game lines first, then the player props, below) and
+Polymarket in a third (below), until
+one deadline 40 seconds after the run starts, so a slow or failing provider
+cannot starve the others; a game a lane does not reach is listed as `deferred` and
 waits for the next run, where its slot is still open. Every request has a
 12-second timeout and each lane checks the deadline before each request (ESPN
 also between a game's scoreboard and summary), so a run ends within 52 seconds;
@@ -439,7 +440,8 @@ service has not finished a run within three minutes
 does not count) and the capture lock is free: a host without the unit, or with it
 stopped, keeps its lines. It then gives ESPN and Kalshi half of its 120-second
 capture budget each, in turn, and reports `market_lines` and `kalshi_lines` as
-before; when the service is capturing, the tick reports
+before (the tick does not capture Polymarket: with the service down, Polymarket
+has no captures); when the service is capturing, the tick reports
 `market_capture: {by: "nba-capture", last_finished_at, ...}` instead and no
 `market_lines` or `kalshi_lines`. Before 2026-11-06 the captures ran first and
 unbounded, and two hours of failing name resolution that morning kept them at
@@ -490,6 +492,77 @@ the real close. The dashboard lists Kalshi beside the sportsbook, and
 `market/report.json` carries `kalshi_margin`, `kalshi_abs_error` and a Kalshi
 winner Brier. Measured on 2026-10-27 over 23 games, ESPN's sportsbook line sat a
 median 0.33 points from Kalshi at tip (`scripts/research/line_lag.py`).
+
+### Polymarket
+
+The capture service also records Polymarket's game markets as a third source
+(`nba_forecast/polymarket_lines.py`, `market/polymarket/GAME_ID.jsonl`, raw
+responses under `market/polymarket/raw/`), at Kalshi's cadence: every 15
+minutes within a day of tip, every 5 in the last 30, every minute in the last
+five. It is a benchmark only: like every market price, it scores forecasts and
+never enters one.
+
+A game is one Polymarket event, `nba-<away>-<home>-<Eastern date>` with the NBA
+tricodes in lowercase (`nba-por-nyk-2026-11-21`; on 2026-11-21 all 30 team
+codes of Polymarket's NBA team list were the NBA's). The event must name the
+schedule's home and away teams or the capture is refused; a game with no event
+is `unlisted` until its next slot. Two requests a game, both public and
+unauthenticated:
+
+- `GET gamma-api.polymarket.com/events/keyset?slug=...`: the event and its
+  markets, of which the capture reads the winner (`moneyline`), `spreads` and
+  `totals`: their lines, order-book tokens, volume and liquidity. Gamma answers
+  from a five-minute cache (`cache-control: max-age=300`), so its own best bid
+  and ask can be that old and are not recorded as prices. (`/events?slug=`
+  answers too but is marked deprecated.)
+- `POST clob.polymarket.com/books` with those markets' tokens: the live order
+  books, uncached. The recorded price of a market is the mid of its book's best
+  bid and ask, and only when they are at most `kalshi_lines.MAX_WIDTH` (0.12)
+  apart.
+
+Each record carries the home win probability with the winner book's bid, ask,
+width, sizes at the best prices, last trade and the book's own timestamp, the
+winner market's volume and liquidity (Gamma's), every spread and total line with
+its bid, ask and probability (a spread is listed as one team laying the points;
+"away by more than 1.5" is read as the home margin below −1.5), the implied
+home margin and total where those probabilities cross one half, interpolated as
+for Kalshi, and the main line of each ladder, the listed line priced nearest one
+half, with its price. Polymarket tags lines `consensus` or `alternate`, but
+the tag did not follow the line on 2026-11-21 (Trail Blazers at Knicks moved
+from Knicks −5.5 to Trail Blazers −1.5; DraftKings showed Knicks −2.5 on the
+way, and Polymarket's −2.5 stayed `alternate`), so the tag is not used. A record is appended when the win
+probability, margin or total changed; the last one before tipoff is the close.
+Both responses are archived as received, gzip, named by the digest of those
+bytes, with a provenance file each (URL, retrieval time, digest; for the books
+the digest of the request body, which lists the tokens).
+
+Observed on 2026-11-21 for seven games (`scripts/research/polymarket_sample.py`
+prints the three sources side by side): an event is created two weeks before
+its game with the winner market; the spreads (33 or 34 lines) and totals (29 to
+32) were listed 22 to 30 hours before tip, and a game 23.7 hours out had only
+its winner market; the props are added later, and an event on game day lists
+440 to 516 markets. One to four hours before tip the winner books were 0.01
+wide with $117,000 to $678,000 traded, and the spread and total lines near the
+main line 0.01 to 0.02 wide; the day before, a winner book was 0.01 to 0.02
+wide on $3,000 to $35,000 traded and the spread books were too wide to price
+(no implied margin). A game-day event is 2 MB of JSON, 0.17 to 0.2 MB as
+received, and its books 23 KB, so a capture archives about 0.22 MB and a game
+day (about 105 slots) up to 23 MB; a record is 10 KB. Seven games took four
+seconds.
+
+`market/index.json` lists Polymarket beside the sportsbook and Kalshi, so the
+dashboard's market lines show it. `market/report.json` carries, for each
+finished game with a Polymarket close, `polymarket_home_win`,
+`polymarket_margin`, `polymarket_total`, `polymarket_captured_at` and
+`polymarket_abs_error`; the summary adds `margin_abs_error.polymarket` (with
+`polymarket_n`), a `polymarket_winner` Brier, and `winner_by_source`: on the
+games where the model, DraftKings (its closing moneyline without the vig),
+Kalshi and Polymarket all have a home-win probability, each one's Brier score,
+`best_market` (the market with the lowest), and `model_minus` each market, a
+paired difference with one standard error clustered by Eastern game date. On a
+few games the order of the markets is noise. Evidence recovery after an outage
+(`recover-evidence`) does not cover Polymarket: a game that tips while the
+capture service is down has no Polymarket close.
 
 ### Player props (Kalshi)
 
