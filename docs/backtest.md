@@ -15,7 +15,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-12-margins-v5
+  --reference datasets/backtest-2026-11-22-lineup-context
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -160,7 +160,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-12-margins-v5-midday
+  --reference datasets/backtest-2026-11-22-lineup-context-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -191,7 +191,7 @@ python -m nba_forecast backtest \
   --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
   --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
   --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-12-margins-v5-early-season
+  --reference datasets/backtest-2026-11-22-lineup-context-early-season
 python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 ```
 
@@ -260,7 +260,7 @@ gates on it too: the gate command with
 
 ```bash
   --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
-  --reference datasets/backtest-2026-11-12-production-path
+  --reference datasets/backtest-2026-11-22-lineup-context-production-path
 ```
 
 and its own `--output`. It took 34 minutes 44 seconds at idle priority on
@@ -1306,3 +1306,90 @@ change points the right way by about 1.7 standard errors; on three past
 seasons it costs about 0.07 points of margin. Both are reported, neither is
 hidden. If it ships, `market/report.json` and the nightly reviews judge it
 from there.
+
+## Reference: 2026-11-22 (lineup context in role minutes)
+
+`datasets/backtest-2026-11-22-lineup-context/` (T-minus-30), with
+`-early-season`, `-midday` and `-production-path` (the 2026-11-09 artifact),
+all replayed on the same code (code digest `7e1f4a3bf1fc`). One change, in
+`model._opportunities`: a player's role minutes move half-way
+(`LINEUP_BLEND`) from the plain recency average to an average of his games
+this season for this team that looks further back (0.9 a game) and counts a
+game at 0.3 for every key teammate (the team's eight by minutes) who played in
+it and is out tonight, or sat and is available tonight. A teammate whose
+status is unsettled is left out of the count; a player with fewer than three
+such games keeps the plain average. Each affected row carries a
+`lineup_context` audit entry. Nothing about the margin method, the absence
+term or participation changes.
+
+Where it came from: the 2026-11-21 review found the props gap to Kalshi's
+medians sits in rows where the minutes forecast misses (with actual minutes
+the model would score 4.45 against Kalshi's 5.02), so three minutes ideas were
+measured offline on the replay rows, each with its numbers picked on two
+seasons and scored on the third
+(`scripts/research/review_2026_11_21/role_decay.py`, `high_minutes.py`,
+`blowout_minutes.py`). The lineup context held up out of sample (minutes
+−0.050, −0.053, −0.030; points −0.016, −0.024, −0.016); a slower plain decay
+was worse; a blowout term did not lower absolute error. The blend, decay and
+weight were fixed there and not tuned on the gate.
+
+Pooled, against the 11-12 references, ± two clustered standard errors as the
+gate prints them (`gate_variants.py table`):
+
+| Replay | Minutes MAE | Minutes change | Points change | Interval score | Verdict |
+|---|---|---|---|---|---|
+| Gate (2,604 games) | 4.84 → 4.76 | −0.085 ± 0.013 improved | −0.021 ± 0.005 | −0.075 ± 0.019 | improved |
+| Early season, seeded (3,676) | | −0.063 ± 0.011 improved | −0.016 ± 0.004 | −0.058 ± 0.016 | improved |
+| Preliminary, midday (2,604) | | −0.045 ± 0.013 improved | −0.012 ± 0.004 | −0.035 ± 0.018 | improved |
+| Production path (2,604) | 4.84 → 4.75 | −0.084 ± 0.013 improved | −0.021 ± 0.004 | −0.075 ± 0.019 | improved |
+
+The points change is five to nine standard errors from zero in every replay
+and sits just under the 0.5% materiality floor (0.022), so its own verdict is
+`within_noise`; the minutes change carries the verdict. Team points (−0.005 ±
+0.007), margin (+0.004 ± 0.005 on the gate, −0.000 ± 0.004 on the production
+path), winner Brier, participation and the three biases are within noise in
+all four. Each gate season and each production-path season is `improved`
+(minutes −0.083 ± 0.021, −0.104 ± 0.027, −0.069 ± 0.021); on the midday replay
+2025-26 is `within_noise` (−0.023 ± 0.019). By the reference's projected
+minutes every bucket gains (`gate_variants.py pair`, ± one standard error by
+game, 55,489 player-games): minutes −0.075 ± 0.012 under 10, −0.112 ± 0.011 at
+10–20, −0.076 ± 0.008 at 20–30, −0.065 ± 0.011 at 30–34, −0.088 ± 0.015 at 34
+and over; points −0.014, −0.034, −0.017, −0.019, −0.014.
+
+Levels on the new gate reference: margin MAE 11.23 against the close's 10.90,
+winners 68.5%, team points MAE 9.30, player points MAE 4.46, minutes MAE 4.76,
+80% interval coverage 80.3%.
+
+**Tried with it and dropped: a ceiling on high role minutes.** The review also
+found forecast minutes of 34 and over run high (live +1.9, +3.8 and +5.4 at
+34–36, 36–38 and 38 and over), and counting role minutes above 35 at a quarter
+looked worth −0.040 minutes first order. First order was wrong: the minutes
+the ceiling frees go to teammates through the 240-minute budget, and there
+they cost more than the top gains. On the gate the ceiling alone is within
+noise the wrong way (points +0.006 ± 0.004, minutes +0.005 ± 0.009), and on top
+of the lineup context it gives part of the gain back (points −0.016 ± 0.006,
+minutes −0.080 ± 0.016, against −0.021 and −0.085 without it). Paired on the
+context-only replay (± one standard error by game): rows at 34 and over gain
+(points −0.033 ± 0.015, minutes −0.093 ± 0.030, points bias +0.68 → −0.04) and
+every bucket below loses (points +0.008 to +0.015, minutes +0.005 to +0.047).
+A knee at 34 with slope 0.4 was worse again (−0.011, −0.066). The high-minute
+overshoot is real and still open; it needs a fix that does not hand the
+minutes to the bench by rule. The blend and weight variants were replayed with
+the ceiling on, so they are read against that pair's −0.016 and −0.080: blend
+0.3 −0.010 and −0.059, blend 0.75 −0.017 and −0.081, mismatch weight 0.5
+−0.012 and −0.060. Nothing there argues for moving the pre-registered values.
+
+Live (`scripts/research/live_replay.py`, rebuilt mode, on a copy of production
+frozen 2026-11-22 01:17 PST: every finished game through 11-21 re-forecast from
+its saved inputs with main and with this change, 4,613 projected player-games
+that were played, 27 Eastern dates, ± one date-clustered standard error,
+negative = better than main): minutes MAE 4.76 → 4.73 (−0.026 ± 0.015), player
+points −0.005 ± 0.004 (bias +0.07 unchanged), team points +0.000 ± 0.004,
+margin +0.005 ± 0.004, game total −0.009 ± 0.010, winner Brier and
+participation unchanged. On the 921 Kalshi points medians the props report has
+scored (10 dates, `review_2026_11_21/live_candidate_props.py`): Kalshi 4.995,
+main 5.102, this change 5.099 (−0.003 ± 0.020); the model's side of the median
+is right 49.9% ± 1.6 against 48.9% ± 1.3. Live points the same way as the gate
+on minutes, by 1.7 standard errors and a third of the size, and shows nothing
+yet on the props or the margin: the gap to Kalshi's medians (+0.10) is as it
+was. Both are reported, neither is hidden.
