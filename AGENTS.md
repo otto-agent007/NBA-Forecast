@@ -49,7 +49,7 @@ python -m nba_forecast backtest \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
   --output /tmp/backtest-production-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-22-lineup-context-production-path
+  --reference datasets/backtest-2026-11-22-vacancy-turnovers-production-path
 ```
 
 A change must not be `worse` on either path, by the rules above. A change

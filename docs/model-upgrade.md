@@ -14,7 +14,8 @@ The optional hash-bound enhancement artifact adds four mechanisms:
   opponent defense uses points per possession. Sparse evidence stays neutral.
 - Allocate sourced out-player vacancies only to supported available teammates.
   Historical role caps, manual restrictions, 240 team minutes and FGA/FTA budgets
-  constrain the changes. Unknown availability never becomes an assumed vacancy.
+  constrain the changes; added 3PA and turnover rates keep the share of the added
+  FGA the budget lets through. Unknown availability never becomes an assumed vacancy.
   Any capacity left unallocated is explicit.
 - Apply bounded numerical rest, congestion, home/away and venue-timezone effects
   from an observational ridge fit. Unknown venues stay unknown; venue changes
