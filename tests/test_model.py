@@ -353,6 +353,46 @@ class ForecastTests(unittest.TestCase):
         result = forecast(snapshot(players), past)
         self.assertLessEqual(sum((p["participation_probability"] or 0) * (p["expected_minutes"] or 0) for p in result["predictions"]), 240.0)
 
+    def _with_teammate(self, status, reported=None):
+        # p plays 30 minutes when s sits and 20 when s plays, alternating over six games.
+        star = player("s", status=status)
+        if reported:
+            star["reported_status"] = reported
+        data = []
+        for i in range(6):
+            sat = i % 2 == 1
+            data.append(current(i, pid="p", minutes=30 if sat else 20))
+            data.append(current(i, pid="s", minutes=0 if sat else 34, status="dnp" if sat else "played"))
+        return {q["player_id"]: q for q in forecast(snapshot([player("p"), star]), data)["predictions"]}["p"]
+
+    def test_role_minutes_lean_toward_games_with_tonights_lineup(self):
+        from unittest.mock import patch
+        from nba_forecast import model
+        with patch.object(model, "LINEUP_BLEND", 0.):
+            plain = self._with_teammate("out")["expected_minutes"]
+        out, available = self._with_teammate("out"), self._with_teammate("available")
+        self.assertGreater(out["expected_minutes"], plain + .5)
+        self.assertLess(available["expected_minutes"], plain - .5)
+        audit = out["components"]["opportunities"]["lineup_context"]
+        self.assertAlmostEqual(audit["plain_role_minutes"], plain)
+        self.assertEqual(audit["teammate_ids"], ["s"])
+        self.assertEqual(audit["games_with_a_different_lineup"], 3)
+        self.assertAlmostEqual(out["expected_minutes"],
+                               plain + model.LINEUP_BLEND * (audit["context_role_minutes"] - plain))
+        self.assertAlmostEqual(out["components"]["opportunities"]["minutes_before_adjustment"], out["expected_minutes"])
+
+    def test_an_unsettled_teammate_is_left_out_of_the_lineup_context(self):
+        from unittest.mock import patch
+        from nba_forecast import model
+        with patch.object(model, "LINEUP_BLEND", 0.):
+            plain = self._with_teammate("out")["expected_minutes"]
+        questionable = self._with_teammate("questionable", "Questionable")
+        self.assertAlmostEqual(questionable["expected_minutes"], plain)
+        self.assertNotIn("lineup_context", questionable["components"]["opportunities"])
+        # Probable plays like an untagged player.
+        self.assertAlmostEqual(self._with_teammate("questionable", "Probable")["expected_minutes"],
+                               self._with_teammate("available")["expected_minutes"])
+
     def test_zero_minutes_adjustment_has_zero_scoring_uncertainty(self):
         snap = snapshot()
         snap["role_adjustments"] = [{"player_id": "p", "game_id": "next",

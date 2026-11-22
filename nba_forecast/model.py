@@ -99,6 +99,24 @@ STATUS_PARTICIPATION = {"probable": 1., "questionable": .64, "doubtful": .04, "d
 # the bench's, and at .25 its players were projected two minutes short in the
 # tenth of team-games left below 240.
 UPLIFT_CAP = (.10, 1.)
+# Role minutes lean toward the earlier games that had tonight's lineup. A
+# player's games this season for this team are weighted again with a longer
+# memory (LINEUP_DECAY a game) times LINEUP_MISMATCH for every key teammate
+# (the team's LINEUP_TEAMMATES by minutes this season) who played in that game
+# but is out tonight, or sat and is available tonight; the role minutes move
+# LINEUP_BLEND of the way to that average. A teammate whose status is unsettled
+# (questionable, unknown) is left out of the count. Measured before it was
+# built, on the replay rows with the decay, weight and blend picked on two
+# seasons and scored on the third: minutes error -0.050, -0.053 and -0.030,
+# points error -0.016, -0.024 and -0.016 (scripts/research/review_2026_11_21/role_decay.py);
+# then on the gate, alone: minutes -0.085 +/- 0.013 and points -0.021 +/- 0.005
+# (two standard errors, docs/backtest.md, 2026-11-22). The plain average keeps
+# its fast decay: on its own a slower one is worse.
+LINEUP_BLEND = .5
+LINEUP_DECAY = .9
+LINEUP_MISMATCH = .3
+LINEUP_TEAMMATES = 8
+LINEUP_MIN_GAMES = 3
 # NBA rule: at most 13 players are active for a game, so a team's participation
 # probabilities cannot sum past 13. Teams used at least ten players in three
 # quarters of 2025-26 games (mean 10.8), so with ten or more projected players
@@ -185,7 +203,37 @@ def _shooting(previous, current, historical=None):
     return result
 
 
-def _opportunities(previous, current, team_id=None, historical=None, *, excluded_role_game_ids=None):
+def _lineup_context(players, accepted, season):
+    """Per team: who is in or out tonight, who played each of its games this season, and season minutes."""
+    teams = {}
+    for player in players:
+        state, played, minutes = teams.setdefault(player["team_id"], ({}, defaultdict(set), Counter()))
+        pid = player["player_id"]
+        if player["status"] == "out":
+            state[pid] = False
+        elif player["status"] == "available" or (player["status"] == "questionable"
+                and str(player.get("reported_status") or "").strip().lower() == "probable"):
+            state[pid] = True
+        for r in accepted.get(pid, ()):
+            if r["season"] == season and r["team_id"] == player["team_id"] and r["status"] == "played" and r["minutes"] > 0:
+                played[r["game_id"]].add(pid)
+                minutes[pid] += r["minutes"]
+    return teams
+
+
+def _lineup_mismatches(context, pid):
+    """``({game_id: key teammates whose played/sat state differs from tonight's}, the teammates counted)``."""
+    if not context:
+        return None
+    state, played, minutes = context
+    key = [x for x, _ in minutes.most_common(LINEUP_TEAMMATES + 1) if x != pid][:LINEUP_TEAMMATES]
+    key = [x for x in key if x in state]
+    if not key:
+        return None
+    return {gid: sum((x in members) != state[x] for x in key) for gid, members in played.items()}, key
+
+
+def _opportunities(previous, current, team_id=None, historical=None, *, excluded_role_game_ids=None, lineup=None):
     prior_dnp=sum(r['status']=='dnp' for r in previous)
     previous=[r for r in previous if r['status']=='played' and r['minutes']>0]
     prior_weight = min(len(previous), 20) * 0.90 ** len(current)
@@ -241,6 +289,19 @@ def _opportunities(previous, current, team_id=None, historical=None, *, excluded
         "role_prior_team_ids":sorted({r['team_id'] for r in role_previous}),
         "role_team_id":team_id,"role_minutes_policy":"Prior appearances and current-team role, minutes when playing; participation is modeled separately.",
     }
+    if lineup and LINEUP_BLEND and current_team and len(role_current) >= LINEUP_MIN_GAMES:
+        mismatches, teammates = lineup
+        context_weighted = [(r, LINEUP_DECAY ** age * LINEUP_MISMATCH ** mismatches.get(r['game_id'], 0))
+                            for age, r in enumerate(reversed(role_current))]
+        if role_previous:
+            context_weighted += [(r, role_prior_weight / len(role_previous)) for r in role_previous]
+        context_minutes = sum(r['minutes'] * w for r, w in context_weighted) / sum(w for _, w in context_weighted)
+        audit["lineup_context"] = {"plain_role_minutes": minutes, "context_role_minutes": context_minutes,
+            "blend": LINEUP_BLEND, "decay_per_game": LINEUP_DECAY, "mismatch_weight": LINEUP_MISMATCH,
+            "teammate_ids": list(teammates),
+            "games_with_a_different_lineup": sum(1 for r in role_current if mismatches.get(r['game_id'], 0))}
+        minutes += LINEUP_BLEND * (context_minutes - minutes)
+        audit["minutes_before_adjustment"] = minutes
     if excluded_role_game_ids is not None:
         audit.update(injury_shortened_role_game_ids=sorted(excluded),
             normal_role_supported=any(r['minutes']>0 for r in role_previous+role_current),
@@ -572,9 +633,10 @@ def _baseline_forecast(snapshot, history):
                    for a in snapshot.get("role_adjustments", [])
                    if _time(a["observed_at"]) <= as_of}
     predictions, working = [], {}
+    lineup_context = _lineup_context(snapshot["roster"]["players"], accepted, season) if LINEUP_BLEND else None
     for player in sorted(snapshot["roster"]["players"], key=lambda p: (p["team_id"], p["player_id"])):
         p, entry = _project_player(player, snapshot, as_of, season, previous_season, accepted, excluded, games,
-                                   team_games, complete, home_court, adjustments)
+                                   team_games, complete, home_court, adjustments, lineup_context)
         predictions.append(p)
         if entry is not None:
             working[p["player_id"]] = entry
@@ -596,7 +658,7 @@ def _baseline_forecast(snapshot, history):
 
 
 def _project_player(player, snapshot, as_of, season, previous_season, accepted, excluded, games, team_games, complete,
-                    home_court, adjustments):
+                    home_court, adjustments, lineup_context=None):
     """One roster player's prediction row, and the working inputs the team allocation needs when he is projected.
 
     Returns ``(prediction, None)`` for a player who gets no numbers (no game, late
@@ -710,7 +772,8 @@ def _project_player(player, snapshot, as_of, season, previous_season, accepted, 
     if any(r["status"] == "dnp" for r in current[-3:]):
         p["flags"].append("recent_dnp_role_review")
     historical=season_prior(snapshot,pid)
-    minutes, rates, variance, opportunities = _opportunities(previous,current,team,historical,excluded_role_game_ids=excluded_role)
+    minutes, rates, variance, opportunities = _opportunities(previous,current,team,historical,excluded_role_game_ids=excluded_role,
+        lineup=_lineup_mismatches((lineup_context or {}).get(team),pid))
     if excluded_role:
         p['flags'].append('injury_shortened_role_excluded')
         p['components']['role_context']={'excluded_game_ids':sorted(excluded_role),
