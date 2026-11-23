@@ -46,6 +46,23 @@ class CandidateModelTests(unittest.TestCase):
         self.assertIsNone(forecast(s,[row()])['predictions'][0]['points_mean'])
 
 class CandidateAttemptBudgetTests(unittest.TestCase):
+    def test_minutes_taken_after_the_budget_are_not_an_unresolved_rotation(self):
+        from tests.test_model import current, player
+        team=[player(f'p{i}') for i in range(10)]
+        data=[current(i,pid=p['player_id'],minutes=24,starter=False) for p in team for i in range(8)]
+        data=[r for r in data if not (r['player_id']=='p0' and r['game_id'] in ('g105','g106','g107'))]
+        result=forecast(CandidateModelTests.enhanced(self,snapshot(team)),data)
+        projected=[p for p in result['predictions'] if p['status']=='projected']
+        expected=sum(p['participation_probability']*p['expected_minutes'] for p in projected)
+        # Reserves all, and p0 back from three missed games: the published minutes fall under 240, the budget itself is full.
+        self.assertLess(expected,240-.1)
+        rotation=projected[0]['components']['rotation']
+        self.assertAlmostEqual(rotation['team_minutes_after_adjustment'],240,places=6)
+        self.assertAlmostEqual(rotation['unallocated_minutes'],0,places=6)
+        self.assertFalse(any('team_minutes_unresolved' in p['flags'] for p in projected))
+        total=next(t for t in result['game_totals'][0]['teams'] if t['team_id']=='A')
+        self.assertAlmostEqual(total['residual_minutes'],240-expected)
+
     def test_automatic_extra_minutes_obey_team_attempt_budget_and_audit(self):
         from tests.test_model import player,current
         s=snapshot([player(str(i)) for i in range(5)]+[player('out',status='out')])

@@ -193,7 +193,9 @@ def forecast_candidate(snapshot,history):
     totals={}
     for p in result['predictions']:
         if p['status']=='projected':
-            totals[p['team_id']]=totals.get(p['team_id'],0.)+(p.get('participation_probability') or 1.)*p['expected_minutes']
+            # The budget's own minutes: the terms applied after it (rotation.typical_shift) leave no rotation unresolved.
+            totals[p['team_id']]=totals.get(p['team_id'],0.)+(p.get('participation_probability') or 1.)*(
+                p['expected_minutes']-(p['components']['rotation'].get('typical_shift') or 0.))
     queue={q['player_id']:q for q in result['review_queue']}
     for p in result['predictions']:
         if p['status']=='projected':

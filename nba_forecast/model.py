@@ -41,7 +41,7 @@ the ledger, not presented as established 80% coverage.
 from collections import Counter, defaultdict
 from copy import deepcopy
 from datetime import datetime
-from math import sqrt
+from math import exp, log, sqrt
 from statistics import fmean, pvariance
 from .rotation import rotation_role
 from .historical import season_prior
@@ -91,14 +91,64 @@ PARTICIPATION_MIN_TEAM_GAMES = 1
 # raw play rates 89%, 49%, 3%). Probable plays like an untagged player. The
 # ESPN-only labels keep .5.
 STATUS_PARTICIPATION = {"probable": 1., "questionable": .64, "doubtful": .04, "day-to-day": .5, "game time decision": .5}
-# When expected minutes fall short of 240, conditional minutes rise by at most
-# these fractions (protected rotation, bench) and never past 48. A larger
-# rotation cap over-projects starters (on the three-season replay a .25 cap
-# took their minutes error from 4.31 to 4.60). The bench cap is loose: with
-# rotation probabilities near one, the minutes a short team still lacks are
-# the bench's, and at .25 its players were projected two minutes short in the
-# tenth of team-games left below 240.
-UPLIFT_CAP = (.10, 1.)
+# Who plays follows the same squeeze. When the roles sum past 240 the fringe
+# sits more often than its record says, and plays more often on a short-handed
+# night: on the replay, 8-14 minute roles forecast .66 played .47 of the time
+# when the team's roles summed past 262, and .76 played .85 when they summed
+# under 215. Each unsettled probability (not already near one, not lowered by
+# a reported status) moves by SQUEEZE_LOGIT on the logit scale for every
+# SQUEEZE_MINUTES the roles fall short of 240, and back for an excess,
+# counting at most SQUEEZE_LIMIT minutes either way. Shifts of 0.3 to 0.5
+# score alike (Brier -0.0023, and minutes -0.03 on top of the budget shares;
+# the shift picked on two seasons holds on the third); 0.3 leaves the mean
+# points bias nearest where it was
+# (scripts/research/minutes_2026_11_23/participation_squeeze.py).
+SQUEEZE_LOGIT = .3
+SQUEEZE_MINUTES = 20.
+SQUEEZE_SETTLED = .999
+SQUEEZE_LIMIT = 60.
+# A team's roles rarely add to 240 expected minutes: they were learned in games
+# with other teammates in and out (the sum before the budget has a spread of 24
+# minutes over the three replayed seasons, above 250 in a quarter of team-games
+# and under 230 in a third). The difference is not shared in proportion. On the
+# replay the players who played moved by (median minutes, by role minutes
+# 8-14 / 14-20 / 20-26 / 26-31 / 31-35 / 35+): -4.9, -2.8, -2.1, -1.4, -0.6, -1.0
+# when the roles summed past 262, and +5.6, +4.8, +3.7, +2.6, +1.7, +0.3 when
+# they summed under 215. The bottom of the rotation gives up and takes on the
+# minutes; a 35-minute starter's night barely changes. So each player's
+# conditional minutes move by a common amount times his share: a full share up
+# to BUDGET_TAPER minutes below BUDGET_CEILING, falling in a line to
+# BUDGET_FLOOR near the ceiling, and in proportion to the role below
+# BUDGET_FULL_ROLE minutes (a five-minute role has little to give or to gain).
+# An excess takes at most BUDGET_MAX_CUT of a role; what is left comes off
+# everyone alike. Scaling everyone alike on an excess, and raising everyone in
+# proportion on a shortfall with the rotation capped at a tenth, cost 0.12
+# minutes of error a player: -0.06, -0.16 and -0.13 on each season with the
+# constants picked on the other two
+# (scripts/research/minutes_2026_11_23/budget_rules.py; docs/backtest.md, 2026-11-23).
+BUDGET_CEILING = 42.
+BUDGET_TAPER = 30.
+BUDGET_FLOOR = .15
+BUDGET_FULL_ROLE = 8.
+BUDGET_MAX_CUT = .5
+# The budget works on average minutes. Three things it cannot see move a
+# player's own minutes afterwards, with no redistribution (the team total's
+# residual term covers what is left): role minutes above TYPICAL_TOP[0] count
+# at half (the longest forecasts are the ones blowouts, fouls and early exits
+# cut: after the budget the 34-and-over forecasts still ran 1.3 minutes high);
+# the first game back after missing one of the team's games, or more than one,
+# is shorter; and a shift for having started the last game or not (a starter's
+# minutes are cut short more often than they run long, so his usual night is
+# above his average; a reserve's is below). On top of the budget and the
+# squeeze: minutes -0.04 and points -0.01 a player, with the mean points bias
+# left where it was. Applied before the budget the same terms do nothing: the
+# budget hands the minutes back out. A pull toward the season average and a
+# cut for deep-bench roles lower the error further but move the mean, and
+# were left out (scripts/research/minutes_2026_11_23/after_budget.py;
+# docs/backtest.md, 2026-11-23).
+TYPICAL_TOP = (36., .5)
+TYPICAL_RETURN = (.4, 2., 20., 3)
+TYPICAL_STARTED = (.6, -.2, 3)
 # Role minutes lean toward the earlier games that had tonight's lineup. A
 # player's games this season for this team are weighted again with a longer
 # memory (LINEUP_DECAY a game) times LINEUP_MISMATCH for every key teammate
@@ -792,6 +842,10 @@ def _project_player(player, snapshot, as_of, season, previous_season, accepted, 
         p['reason']=('Conditional on playing: listed by the new team without a positive-minute appearance yet, '
                      'so the role comes from earlier evidence and the participation probability from the listings.')
         p['flags'].append('new_team_role_unobserved')
+    team_rows=[r for r in current if r['team_id']==team and r['status']=='played' and r['minutes']>0]
+    last_played=_time(team_rows[-1]['game_time']) if team_rows else None
+    p['components']['typical_inputs']={'games':len(team_rows),
+        'missed_since_last':sum(1 for when,_ in team_games.get(team,[]) if last_played is not None and when>last_played)}
     participation = _participation(player, rows, team_games.get(team, []), minutes,
                                    frozenset((snapshot.get("reported_unavailable") or {}).get(pid, ())))
     p["participation_probability"] = participation["probability"]
@@ -843,6 +897,22 @@ def _project_player(player, snapshot, as_of, season, previous_season, accepted, 
     return p, (minutes, rates, shooting, rows, variance, opponent["factor"], home_court[side + "_factor"], participation["probability"])
 
 
+def _budget_share(minutes):
+    """The share of a team's minutes excess or shortfall a role of this size takes (see BUDGET_CEILING)."""
+    return min(minutes / BUDGET_FULL_ROLE, 1., max(BUDGET_FLOOR, (BUDGET_CEILING - minutes) / BUDGET_TAPER))
+
+
+def _typical_minutes(minutes, inputs, started):
+    """A player's minutes after the terms the budget cannot see (see TYPICAL_TOP), and each term."""
+    games, missed = inputs.get('games', 0), inputs.get('missed_since_last', 0)
+    terms = {'top': -TYPICAL_TOP[1] * max(0., minutes - TYPICAL_TOP[0]), 'returning': 0., 'started': 0.}
+    if games >= TYPICAL_RETURN[3] and missed:
+        terms['returning'] = -(TYPICAL_RETURN[0] if missed == 1 else TYPICAL_RETURN[1]) * min(minutes, TYPICAL_RETURN[2]) / TYPICAL_RETURN[2]
+    if games >= TYPICAL_STARTED[2]:
+        terms['started'] = TYPICAL_STARTED[0] if started is True else TYPICAL_STARTED[1]
+    return min(48., max(0., minutes + sum(terms.values()))), terms
+
+
 def _allocate_team(team_predictions, working, usage_prior):
     """Finish one team: participation probabilities into the active-list range, the 240-minute budget, the usage budget.
 
@@ -877,6 +947,30 @@ def _allocate_team(team_predictions, working, usage_prior):
             p["participation_probability"] = working[p["player_id"]][7]
             p["components"]["participation"].update(probability=working[p["player_id"]][7], team_probability_sum_before=active_sum,
                                                       team_probability_goal=goal, team_probability_sum_after=sum(working[x["player_id"]][7] for x in projected_team))
+    # Participation follows the squeeze (see SQUEEZE_LOGIT), still at most 13 expected players.
+    # Under eight projected players the roster, not the rotation, is in doubt: no shortfall is read from it.
+    before_squeeze = sum(working[p["player_id"]][7] * working[p["player_id"]][0] for p in projected_team)
+    if before_squeeze and not short and (before_squeeze > 240. or len(projected_team) >= RESIDUAL_MIN_PROJECTED):
+        shift = SQUEEZE_LOGIT * max(-SQUEEZE_LIMIT, min(SQUEEZE_LIMIT, 240. - before_squeeze)) / SQUEEZE_MINUTES
+        moved_ids = [p["player_id"] for p in projected_team if 0 < working[p["player_id"]][7] < SQUEEZE_SETTLED
+                     and p["components"]["participation"]["status_factor"] >= 1]
+        for pid in moved_ids:
+            items = list(working[pid])
+            items[7] = 1. / (1. + exp(-(log(items[7] / (1. - items[7])) + shift)))
+            working[pid] = tuple(items)
+        excess_players = sum(working[p["player_id"]][7] for p in projected_team) - ACTIVE_LIST_MAX
+        movable_sum = sum(working[pid][7] for pid in moved_ids)
+        if excess_players > 0 and movable_sum > excess_players:
+            for pid in moved_ids:
+                items = list(working[pid])
+                items[7] *= 1. - excess_players / movable_sum
+                working[pid] = tuple(items)
+        for p in projected_team:
+            pid = p["player_id"]
+            p["components"]["participation"].update(probability_before_squeeze=p["participation_probability"],
+                team_minutes_before_squeeze=before_squeeze, squeeze_logit_shift=shift if pid in moved_ids else 0.,
+                probability=working[pid][7])
+            p["participation_probability"] = working[pid][7]
     # The 240-minute budget constrains expected minutes: participation
     # probability times the minutes a player gets when he plays.
     expected = {p["player_id"]: working[p["player_id"]][7] * working[p["player_id"]][0] for p in projected_team}
@@ -886,49 +980,78 @@ def _allocate_team(team_predictions, working, usage_prior):
           (p['components']['current_team_rotation'].get('last_game_started') is True or
            (working[p['player_id']][0]>=28 and (p['components']['current_team_rotation'].get('recent_minutes') or 0)>=24))}
     core_total=sum(expected[pid] for pid in core)
-    # Expected minutes above 240 scale every player down alike. Sparing the
-    # protected rotation put the whole excess on the bench, which was already
-    # projected short (-1.4 minutes under ten projected) while the rotation ran
-    # long (+1.7 at thirty and over); once rotation probabilities are near one
-    # the excess grows and the bench-only cut made minutes worse.
-    budget_scale=min(1.,240./total) if total else 1.
-    target={pid:working[pid][0]*budget_scale for pid in expected}
-    # Expected minutes below 240 are still played by someone. Supported
-    # players' conditional minutes rise proportionally to fill the budget, the
-    # rotation's by at most a tenth, and never past 48; any rest stays an
-    # explicit deficit.
+    # Expected minutes above or below 240 move each player by his budget share
+    # (see BUDGET_CEILING): the bottom of the rotation absorbs most of it.
     locked={p['player_id'] for p in projected_team if p['components'].get('manual_adjustment')}
-    # Filling needs a plausible rotation; a handful of supported players is left
-    # as a deficit, unless the bench is short: then the shortfall is forced on
-    # everyone available, shared equally up to 48 each, not in proportion to
-    # roles sized for a full roster. The eight replayed seven-player team-games
-    # averaged 42.6, 40.0, 39.0, 35.7, 33.9, 27.5 and 21.3 minutes by rank.
-    for _ in range((len(target) if short else 4) if len(projected_team) >= 8 or short else 0):
-        shortfall=240.-sum(working[pid][7]*target[pid] for pid in target)
-        ceiling={pid:48. if short else min(48.,(1.+UPLIFT_CAP[0 if pid in core else 1])*working[pid][0]) for pid in target}
-        open_ids=[pid for pid in target if pid not in locked and target[pid]>0 and working[pid][7]>0 and target[pid]<ceiling[pid]-1e-9]
-        if shortfall<=1e-9 or not open_ids:
-            break
-        if short:
-            share=shortfall/sum(working[pid][7] for pid in open_ids)
+    share={pid:_budget_share(working[pid][0]) for pid in expected}
+    target={pid:working[pid][0] for pid in expected}
+    def moved(pid,step,sign):
+        return min(48.,max((1.-BUDGET_MAX_CUT)*working[pid][0],working[pid][0]+sign*step*share[pid]))
+    def expected_at(step,ids,sign):
+        return sum(working[pid][7]*(moved(pid,step,sign) if pid in ids else target[pid]) for pid in target)
+    # A shortfall needs a plausible rotation; a handful of supported players is
+    # left as a deficit, unless the bench is short: then the shortfall is forced
+    # on everyone available, shared equally up to 48 each, not by roles sized
+    # for a full roster. The eight replayed seven-player team-games averaged
+    # 42.6, 40.0, 39.0, 35.7, 33.9, 27.5 and 21.3 minutes by rank.
+    if short and total<240.:
+        for _ in range(len(target)):
+            shortfall=240.-sum(working[pid][7]*target[pid] for pid in target)
+            open_ids=[pid for pid in target if pid not in locked and target[pid]>0 and working[pid][7]>0 and target[pid]<48.-1e-9]
+            if shortfall<=1e-9 or not open_ids:
+                break
+            equal=shortfall/sum(working[pid][7] for pid in open_ids)
             for pid in open_ids:
-                target[pid]=min(ceiling[pid],target[pid]+share)
-            continue
-        factor=1.+shortfall/sum(working[pid][7]*target[pid] for pid in open_ids)
-        for pid in open_ids:
-            target[pid]=min(ceiling[pid],target[pid]*factor)
+                target[pid]=min(48.,target[pid]+equal)
+    elif total>240. or len(projected_team)>=RESIDUAL_MIN_PROJECTED:
+        sign=-1. if total>240. else 1.
+        # Manual roles are not raised; an excess comes off everyone.
+        ids={pid for pid in target if working[pid][0]>0 and working[pid][7]>0 and (sign<0 or pid not in locked)}
+        low,high=0.,96.
+        if not ids:
+            step=0.
+        elif (expected_at(high,ids,sign)-240.)*sign>=0:
+            for _ in range(60):
+                middle=(low+high)/2
+                if (expected_at(middle,ids,sign)-240.)*sign<0:
+                    low=middle
+                else:
+                    high=middle
+            step=high if sign<0 else low
+        else:
+            step=high
+        for pid in ids:
+            target[pid]=moved(pid,step,sign)
+        over=sum(working[pid][7]*target[pid] for pid in target)
+        if over>240.:
+            # The shares and the cut limit could not shed the whole excess: the rest comes off alike.
+            target={pid:value*240./over for pid,value in target.items()}
     deficit=max(0.,240.-sum(working[pid][7]*target[pid] for pid in target))
+    # Then the terms the budget cannot see; never more than 240 expected.
+    budgeted=dict(target); typical_terms={}
+    if not short:
+        for p in projected_team:
+            pid=p['player_id']
+            if pid in locked:
+                continue
+            target[pid],typical_terms[pid]=_typical_minutes(budgeted[pid],p['components'].get('typical_inputs') or {},
+                p['components'].get('current_team_rotation',{}).get('last_game_started'))
+        over=sum(working[pid][7]*target[pid] for pid in target)
+        if over>240.:
+            target={pid:value*240./over for pid,value in target.items()}
     assigned_minutes = 0.0
     for p in team_predictions:
         pid=p['player_id']
-        scale=(target[pid]/working[pid][0] if working[pid][0] else 1.) if pid in target else 1.
+        scale=(budgeted[pid]/working[pid][0] if working[pid][0] else 1.) if pid in budgeted else 1.
         p["components"]["rotation"] = {"team_minutes_before_scaling": total,
             "regulation_budget": 240.0, "scale": scale, "unallocated_minutes": deficit, "short_bench": short,
             "protected_rotation_player_ids":sorted(core),"protected_rotation_minutes":core_total,
             "budget_basis": "expected minutes: participation probability times minutes when playing",
-            "method": "Expected minutes above 240 scale every player down alike. "
-                      "A shortfall raises supported players' conditional minutes, protected rotation roles by at most a tenth, "
-                      "bench roles by at most double and never past 48; the rest is an explicit deficit. "
+            "budget_share": share.get(pid), "budgeted_minutes": budgeted.get(pid), "typical_terms": typical_terms.get(pid),
+            "typical_shift": (target[pid] - budgeted[pid]) if pid in budgeted else None,
+            "method": "Expected minutes above or below 240 move each player's conditional minutes by a common amount times his "
+                      "budget share: full for roles well under forty minutes, a small floor near forty, proportional under eight; "
+                      "never past 48, and what cannot be filled is an explicit deficit. "
                       "A short bench (every other roster player explicitly out) plays everyone and shares the shortfall equally, up to 48 each."}
         if deficit > 1e-8:
             p["flags"].append("team_minutes_unresolved")
