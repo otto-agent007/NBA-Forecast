@@ -157,9 +157,9 @@ uncorrected versions:
 | 3 | Official injury reports in the replay, second season | Done: 2024-25 and 2025-26 with T−30 reports |
 | 4 | Blend the player-sum margin with a team rating, preseason prior | Done: 50/50 on 2026-10-24, 0.35/0.65 since 2026-11-06 (`backtest-2026-11-06-rating-weight`: winner Brier −0.0014 ± 0.0007, margin within noise; live the player-sum half sat further from the close than the rating half); prior 10 games at 0.6 × last season; the rating loses 0.1 per minute of reported-out regulars (2026-10-26); since 2026-11-07 the rating blends 0.7 of the strength implied by earlier games' closing spreads (`backtest-2026-11-07-market-strength`: margin −0.090 ± 0.050, winner Brier −0.0023 ± 0.0011; results-only rebuilds had measured within noise). Roster continuity tested on a branch (below) |
 | 5 | Calibrate the interval's two tails separately | Done: `calibration.two_tailed_quantiles` |
-| 6 | Measured status play rates; return-from-absence minutes ramp | Rates done: factors on the role rate fitted on 12:30 PM ET reports (questionable .64, doubtful .04); raw play rates 89/49/3%, close to the outside source's 87/48/4%. Ramp open |
+| 6 | Measured status play rates; return-from-absence minutes ramp | Rates done: factors on the role rate fitted on 12:30 PM ET reports (questionable .64, doubtful .04); raw play rates 89/49/3%, close to the outside source's 87/48/4%. Ramp: since 2026-11-23 the first game back after missed team games is shorter (0.4 minutes after one, 2.0 after more), applied after the minutes budget (`docs/backtest.md`, 2026-11-23) |
 | 7 | Market composite as a separate, labeled output | Open: a product decision; it would make the edge report echo the price |
-| 8 | Blowout minutes haircut | Open |
+| 8 | Blowout minutes haircut | Partly: a term on the model's own projected margin does not lower absolute error (2026-11-22); since 2026-11-23 role minutes above 36 count at half after the budget, which takes the 34-and-over points bias from +0.92 to +0.40 on the production path |
 | 9 | Situational priors (back-to-back, 3-in-4, altitude, eastward travel) | Open: `context_effects` exists but only the research path uses it |
 | 10 | Player-impact ratings (box prior, then RAPM) | In progress: `exp/player-impact` |
 | 11 | A ~1:15 PM PT injury capture | Open: captures are 9 AM PT and T−30 |
@@ -213,6 +213,19 @@ out to be its turnover rates, which the team volume budget did not cap; capped
 like the shots (2026-11-22), the production path's team-points bias goes from
 −3.21 to 0.00, at a cost of 0.018 in player points (`docs/backtest.md`,
 "Vacancy turnovers").
+
+Since then the largest player gain has come from how a team's minutes are
+finished, not from the role average (2026-11-23, `backtest-2026-11-23-minutes`):
+the 240-minute budget now moves the bottom of the rotation and leaves
+high-minute starters nearly alone, participation follows the same squeeze, and
+three terms apply after the budget (long forecasts, the first game back,
+started the last game or not). Minutes −0.185 ± 0.023, points −0.030 ± 0.007,
+participation Brier −0.0023 ± 0.0005, with team points and margins unchanged;
+at 34 minutes and over, points −0.113 on the production path. The lesson that
+carried it: a correction to one player's minutes made before the budget is
+handed back to his teammates by the budget, and a correction toward a usual
+night rather than an average one lowers error while moving the mean, which the
+gate's bias rule stops (`docs/backtest.md`, "Reference: 2026-11-23").
 
 Start to now, 2025-26, the same 868 games: points MAE 4.87 → 4.49, minutes
 6.32 → 4.85, margin 12.25 → 11.48, winners 63.9% → 69.6%
