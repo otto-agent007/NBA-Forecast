@@ -15,7 +15,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24/statuses.json.gz datasets/injury-reports-2024-25/statuses.json.gz datasets/injury-reports-2025-26/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-22-lineup-context
+  --reference datasets/backtest-2026-11-23-minutes
 ```
 
 Each `--history`/`--team-games` pair is one season, replayed on its own from its
@@ -160,7 +160,7 @@ python -m nba_forecast backtest \
   --injuries datasets/injury-reports-2023-24-midday/statuses.json.gz datasets/injury-reports-2024-25-midday/statuses.json.gz datasets/injury-reports-2025-26-midday/statuses.json.gz \
   --market datasets/market-closing-2023-24/closing-lines.json.gz datasets/market-closing-2024-25/closing-lines.json.gz datasets/market-closing-2025-26/closing-lines.json.gz \
   --output /tmp/backtest-midday-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-22-lineup-context-midday
+  --reference datasets/backtest-2026-11-23-minutes-midday
 ```
 
 Each game takes the newest report by 12:30 PM Eastern on game day
@@ -191,7 +191,7 @@ python -m nba_forecast backtest \
   --previous-history datasets/espn-season-2022-23/history.json.gz datasets/espn-season-2023-24/history.json.gz datasets/espn-season-2024-25/history-nba-ids.json.gz \
   --previous-team-games datasets/espn-season-2022-23/team-games.json.gz datasets/espn-season-2023-24/team-games.json.gz datasets/espn-season-2024-25/team-games.json.gz \
   --warmup-fraction 0 --output /tmp/backtest-early-$(date +%Y%m%d-%H%M) \
-  --reference datasets/backtest-2026-11-22-lineup-context-early-season
+  --reference datasets/backtest-2026-11-23-minutes-early-season
 python3 scripts/research/early_season.py --run /tmp/backtest-early-<stamp>
 ```
 
@@ -260,7 +260,7 @@ gates on it too: the gate command with
 
 ```bash
   --production-path datasets/production-artifact-2026-11-09/artifact.json.gz \
-  --reference datasets/backtest-2026-11-22-vacancy-turnovers-production-path
+  --reference datasets/backtest-2026-11-23-minutes-production-path
 ```
 
 and its own `--output`. It took 34 minutes 44 seconds at idle priority on
@@ -1619,3 +1619,199 @@ include overtime (12 of the 206 games), which pushes the other way. Whether
 margins and totals or props matter more is the owner's call; both are
 reported, neither is hidden. The open work it exposes is the over-projection
 of players forecast for 34 minutes and over (live minutes bias about +3).
+
+## Reference: 2026-11-23 (minutes: budget shares, who plays, and what the budget cannot see)
+
+`datasets/backtest-2026-11-23-minutes/` (T-minus-30), with `-early-season`,
+`-midday` and `-production-path` (the 2026-11-09 artifact), all replayed on the
+same code (code digest `f43eb5b102f0`). Three changes to how a player's minutes
+are finished, all in `model._allocate_team`; role minutes themselves
+(`_opportunities`) are untouched.
+
+Where it came from. The props gap to Kalshi sits where the model over-projects
+minutes (live, by the model's minutes miss: +0.155 ± 0.048 points at two to
+six minutes over, +0.550 ± 0.136 at six and more, nothing where it is under),
+and the 34-and-over forecasts ran high. Before building anything, how much of
+the minutes miss is predictable at all was measured on the 11-22
+production-path rows (`scripts/research/minutes_2026_11_23/predictable.py`): a
+boosted fit on about fifty pregame features lowers the 4.75 minutes error by
+0.268 ± 0.010 out of season (points 0.044 first order, 0.135 at 34 and over),
+a calibration of the forecast level alone by 0.043, and sturdier role averages
+(overtime-normalised, blowouts discounted, clipped, a weighted median) by 0.01
+or less. So the role average is not the problem and the signal is elsewhere.
+A replay that wrote what the budget saw for every player (`dump_roles.py`)
+showed where:
+
+**1. The budget's shares.** A team's roles rarely add to 240 expected minutes
+(spread 24 before the budget; over 250 in 24% of team-games, under 230 in
+36%). The rule until now scaled everyone alike on an excess and raised
+everyone in proportion on a shortfall, the rotation by at most a tenth. That is
+not who moves (`budget_rules.py`, median of actual minus role minutes, players
+who played):
+
+| Team minutes before the budget | role 8–14 | 14–20 | 20–26 | 26–31 | 31–35 | 35+ |
+|---|---|---|---|---|---|---|
+| under 215 | +5.6 | +4.8 | +3.7 | +2.6 | +1.7 | +0.3 |
+| 236–244 | −0.8 | −0.5 | +0.0 | +0.5 | +0.7 | −0.3 |
+| 252–262 | −2.9 | −1.6 | −1.2 | −0.7 | −0.3 | −0.3 |
+| over 262 | −4.9 | −2.8 | −2.1 | −1.4 | −0.6 | −1.0 |
+
+The bottom of the rotation gives up and takes on the minutes; a 35-minute
+starter's night barely changes, and the old rule missed him by 3.3 minutes
+both ways (too high on the shortest nights, too low on the most crowded; the
+share rule's misses are within 1.3 in every cell of the table). Each player's
+conditional minutes
+now move by a common amount times his share (`BUDGET_*`): full up to thirty
+minutes below 42, falling in a line to 0.15, in proportion to the role under
+eight minutes; an excess takes at most half a role. One rule serves both
+directions. Offline, on the roles and probabilities of the 11-22 replay, it
+lowers minutes error by 0.122 ± 0.008 (4.756 → 4.633); with the ceiling, taper
+and floor picked on two seasons and scored on the third, −0.064 ± 0.014,
+−0.164 ± 0.015 and −0.128 ± 0.012. The offline emulation of the budget matches
+the replay to the last digit, and the gate run of this change alone gave the
+same −0.122.
+
+**2. Who plays follows the same squeeze.** By role level and the team's total
+before the budget, mean probability against the share who played
+(`participation_squeeze.py`): 8–14 minute roles .76 / .85 under 215, .68 / .68
+at 236–244, .66 / .47 over 262; 14–20 minute roles .90 / .96, .87 / .92,
+.83 / .76. Every unsettled probability (below .999, not lowered by a reported
+status) now moves 0.3 on the logit scale for every twenty minutes the roles
+fall short of 240, and back for an excess, counting at most sixty minutes
+(`SQUEEZE_*`); the sum still cannot pass thirteen, and under eight projected
+players no shortfall is read. Offline: Brier −0.0023 ± 0.0002 on a level of
+0.0871, and minutes −0.027 ± 0.003 on top of the shares because the budget
+then solves with better probabilities. Shifts of 0.3 to 0.5 score alike (0.4
+is picked on every pair of seasons and holds on the third: Brier −0.0016,
+−0.0026, −0.0031); 0.3 was taken because it leaves the mean points bias
+nearest where it was (below).
+
+**3. What the budget cannot see.** After the budget, with no redistribution
+(the team total's residual term covers what is left, as it already does for
+unallocated minutes): role minutes above 36 count at half; the first game back
+after missing one of the team's games is 0.4 minutes shorter, after more than
+one 2.0 (in proportion under twenty minutes); and a player who started the
+last game gets +0.6, one who did not −0.2 (`TYPICAL_*`; three games for the
+team this season needed for the last two). The first two are plain
+over-projections; the third is the gap between a usual night and an average
+one, which runs opposite ways for starters and reserves. Applied before the
+budget the same terms do nothing, because the budget hands the minutes back
+out: that is what sank the ceiling of 2026-11-22.
+
+**The mean.** The gate's bias rule shaped the last two pieces. The shares
+alone raise the mean points bias (they stop cutting high-minute starters,
+whose average, not usual, minutes run high): on the production path +0.047 →
++0.084, `worse` by that rule, with minutes −0.122 `improved`. The squeeze
+moves it back; the terms after the budget move it down. Two more terms lower
+the error further and were left out because they move the mean past the rule:
+a cut for deep-bench roles as participation falls and a pull toward the
+season average (`after_budget.py`, the `+ bench` and `+ season` rows). A first
+stack with both, on the shares and without the squeeze, scored minutes −0.201
+± 0.025 and points −0.045 ± 0.007 on the gate and moved the points bias from
+−0.07 to −0.18: the deep bench's usual night is well under its average, and
+shading toward it buys error with bias. A knee at 35 with a starter shift of +0.5 missed the rule on
+the baseline path by a hair (−0.069 → −0.095 against a standard error of
+0.025); the knee at 36 and +0.6 are inside it on both paths.
+
+Pooled, against the 11-22 references, ± two clustered standard errors as the
+gate prints them (`review_2026_11_21/gate_variants.py table`):
+
+| Replay | Minutes MAE | Minutes change | Points change | Participation Brier | Interval score | Verdict |
+|---|---|---|---|---|---|---|
+| Gate (2,604 games) | 4.76 → 4.57 | −0.185 ± 0.023 improved | −0.030 ± 0.007 improved | −0.0023 ± 0.0005 improved | −0.102 ± 0.037 improved | improved |
+| Early season, seeded (3,676) | 4.75 → 4.58 | −0.171 ± 0.019 improved | −0.027 ± 0.006 improved | −0.0020 ± 0.0004 improved | −0.092 ± 0.028 | improved |
+| Preliminary, midday (2,604) | 4.88 → 4.74 | −0.142 ± 0.022 improved | −0.025 ± 0.007 improved | −0.0024 ± 0.0006 improved | −0.100 ± 0.031 improved | improved |
+| Production path (2,604) | 4.75 → 4.57 | −0.185 ± 0.023 improved | −0.030 ± 0.007 improved | −0.0023 ± 0.0005 improved | −0.095 ± 0.036 | improved |
+
+Player points go from 4.458 to 4.428 on the gate and from 4.467 to 4.438 on
+the production path, past the 0.5% materiality floor (0.022) that the lineup
+context stopped just short of. Team points (+0.002 ± 0.010
+and +0.003 ± 0.008), margin (−0.001 ± 0.009 and −0.005 ± 0.009), winner Brier
+and the team-points and margin biases are within noise in every replay: the
+team sums barely move, because the minutes go to different players of the
+same team. The mean points bias is −0.069 → −0.080 on the gate, +0.047 →
++0.038 on the production path, −0.030 → −0.037 on the early-season replay and
++0.059 → +0.019 on the midday replay (`improved` there). Every season of every
+replay has the verdict `improved`, on minutes, points and participation alike
+(gate minutes −0.138 ± 0.028, −0.223 ± 0.045, −0.196 ± 0.040; points −0.028 ±
+0.011, −0.034 ± 0.013, −0.026 ± 0.011), except the midday replay's 2024-25
+points (−0.020 ± 0.012, within noise).
+
+By the reference's projected minutes, on the production path
+(`gate_variants.py pair`, ± one standard error by game, 55,489 player-games):
+
+| Reference minutes | Player-games | Minutes | Points | Points bias |
+|---|---|---|---|---|
+| under 10 | 6,333 | −0.161 ± 0.020 | −0.032 ± 0.008 | −0.10 → −0.16 |
+| 10–20 | 14,737 | −0.097 ± 0.011 | −0.024 ± 0.005 | −0.00 → −0.06 |
+| 20–30 | 20,347 | −0.140 ± 0.010 | −0.017 ± 0.004 | −0.16 → −0.04 |
+| 30–34 | 7,947 | −0.236 ± 0.021 | −0.008 ± 0.009 | +0.17 → +0.35 |
+| 34 and over | 6,125 | −0.512 ± 0.037 | −0.113 ± 0.015 | +0.92 → +0.40 |
+
+The players the props markets price most gain most: at 34 minutes and over
+the points error falls 1.8% and the bias the turnover fix of 11-22 exposed is
+more than halved. The 30–34 group gains minutes but not points, and its mean
+runs a third of a point high: those are the starters no longer cut on crowded
+nights, plus the starter shift.
+
+Levels on the new gate reference: margin MAE 11.23 against the close's 10.90,
+winners 68.5%, team points MAE 9.31, player points MAE 4.43, minutes MAE 4.57,
+participation Brier 0.085, 80% interval coverage 80.2%.
+
+Live (`live_replay.py`, rebuilt mode, the production copy frozen 2026-11-22
+01:17 PST; every finished game through 11-21 re-forecast with main `1d5aa48`
+and with this change on top; ± one standard error clustered by Eastern game
+date, negative = better; `review_2026_11_21/live_candidate_props.py` and
+`live_candidate_totals.py`):
+
+| Metric | Main | With this change | Change |
+|---|---|---|---|
+| Player minutes MAE (4,613 player-games, 27 dates) | 4.730 | 4.569 | −0.161 ± 0.019 |
+| Player points MAE (the same) | 4.417 | 4.385 | −0.032 ± 0.008 |
+| Player points bias | +0.282 | +0.281 | |
+| Kalshi points medians (921, 10 dates; Kalshi 4.995) | 5.115 | 5.070 | −0.046 ± 0.013 |
+| Gap to Kalshi's medians | +0.120 ± 0.032 | +0.075 ± 0.025 | |
+| Side of Kalshi's median right | 49.0% ± 1.4 | 50.1% ± 0.8 | |
+| Margin MAE (206 games; close 10.86) | 11.447 | 11.456 | +0.008 ± 0.012 |
+| Winner Brier | 0.2077 | 0.2081 | +0.0004 ± 0.0003 |
+| Game total MAE (close 14.04) | 14.81 | 14.84 | +0.03 ± 0.03 |
+| Game total bias (close +0.46 ± 1.25) | +1.84 ± 1.18 | +1.85 ± 1.17 | |
+
+The live games say what the replays say: minutes −0.161 against the gate's
+−0.185, points −0.032 against −0.030, the mean untouched, margins and totals
+unmoved. About three eighths of the gap to Kalshi's medians closes; the model
+is still behind them by 0.075 ± 0.025. By the minutes main projected, the
+medians gain −0.032 ± 0.015 under 28 minutes (448), −0.074 ± 0.036 at 28–34
+(341) and −0.018 ± 0.065 at 34 and over (132). The last is the group the
+production-path replay puts at −0.113 ± 0.015; 132 medians on ten dates
+neither confirm nor contradict it, and the model's side of the median there
+goes from right 53.0% ± 4.3 to 46.2% ± 5.6, also inside the noise.
+
+The research scripts on the final code's own roles (`dump_roles.py` on the
+production path, 5,208 team-games): the shares against the old rule −0.112 ±
+0.008 minutes (held-out seasons −0.058, −0.145, −0.125), with the cells of the
+miss table within 1.3 minutes; the squeeze Brier −0.0023 ± 0.0002 and minutes
+−0.027 ± 0.003; the three terms −0.036 ± 0.003 minutes and −0.008 ± 0.001
+points with the mean points bias where it was (+0.036 → +0.036), against
+−0.012 with the season pull and −0.030 with the bench cut. Picked for minutes
+error alone on two seasons, the terms' constants come out a little stronger
+than the model's (a knee at 35 with a slope of 0.5 to 0.65, 0.8 and 2.5
+minutes for a return, +0.5 to +0.7 and −0.4 for the last game's start); the
+model's are the ones that kept the mean inside the gate's rule on both paths.
+
+What changes for a reader of a forecast: `components.rotation` carries
+`budget_share`, `budgeted_minutes` (the budget's result), `typical_terms` and
+`typical_shift` (what the three terms then added); `scale` is the budget's
+alone. The published minutes of a team now usually sum to a few minutes under
+240 expected; the difference is in the team total's residual term, and
+`team_minutes_unresolved` still means only that the budget itself could not be
+filled. `components.participation` carries `probability_before_squeeze`,
+`team_minutes_before_squeeze` and `squeeze_logit_shift`.
+
+Not done here, and still open: the boosted fit found 0.27 minutes of
+predictable miss and these changes take 0.19 of it, so interactions these
+terms do not capture are worth something; a pregame
+blowout term (the model's own projected margin) is not available inside the
+player model; and a player's line and the team total want different things
+from a skewed minutes distribution (a usual night against an average one),
+which one published number cannot give both.

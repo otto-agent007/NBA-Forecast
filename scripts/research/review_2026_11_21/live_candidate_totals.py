@@ -1,4 +1,4 @@
-"""A candidate's game totals on the live games, from two live replays of the same games.
+"""A candidate's game totals and margins on the live games, from two live replays of the same games.
 
     python3 live_candidate_totals.py BASE-rebuilt.json CANDIDATE-rebuilt.json
 
@@ -7,8 +7,10 @@ the base code and the candidate code on one production copy. For every game
 both replayed that has a final and a closing total: the bias (forecast minus
 the final total, overtime included) and the absolute error of each code's
 total and of the closing total, and the paired differences, overall and before
-and from 2026-11-10 (the date the published totals began to run low). ± one
-standard error clustered by Eastern game date. Reads only.
+and from 2026-11-10 (the date the published totals began to run low). Then
+the same for the home margin against the closing spread, and the Brier score
+of the home-win probability. ± one standard error clustered by Eastern game
+date. Reads only.
 """
 import collections, json, math, sys
 
@@ -35,6 +37,34 @@ def games(path):
     return out
 
 
+def margins(path):
+    out = {}
+    for g in json.load(open(path))['games']:
+        r, actual = g.get('replayed') or {}, (g.get('actual') or {}).get('margin')
+        line = next((c['market_margin'] for c in g.get('closes') or () if c.get('market_margin') is not None), None)
+        if r.get('margin') is not None and r.get('home_win') is not None and actual is not None and line is not None:
+            out[g['game_id']] = dict(date=g['date'], margin=r['margin'], home_win=r['home_win'], actual=actual, line=line)
+    return out
+
+
+def show_margins(base_path, candidate_path):
+    base, cand = margins(base_path), margins(candidate_path)
+    rows = [dict(b, c=cand[k]['margin'], c_win=cand[k]['home_win']) for k, b in base.items() if k in cand]
+    if not rows:
+        return
+    show = lambda t: f'{t[0]:+.3f} ± {t[1]:.3f}'
+    error = lambda key: (lambda r: abs(r[key] - r['actual']))
+    brier = lambda key: (lambda r: (r[key] - (r['actual'] > 0)) ** 2)
+    print(f'margins: {len(rows)} games with a final and a closing spread, {len({r["date"] for r in rows})} dates')
+    print('  absolute error:           base %.3f | candidate %.3f | close %.3f' % tuple(clustered(rows, error(k))[0] for k in ('margin', 'c', 'line')))
+    print('  candidate - base         ', show(clustered(rows, lambda r: error('c')(r) - error('margin')(r))))
+    print('  base - close             ', show(clustered(rows, lambda r: error('margin')(r) - error('line')(r))))
+    print('  candidate - close        ', show(clustered(rows, lambda r: error('c')(r) - error('line')(r))))
+    print('  home-win Brier:           base %.4f | candidate %.4f | candidate - base %s' % (
+        clustered(rows, brier('home_win'))[0], clustered(rows, brier('c_win'))[0],
+        '%+.4f ± %.4f' % clustered(rows, lambda r: brier('c_win')(r) - brier('home_win')(r))))
+
+
 def main(base_path, candidate_path):
     base, cand = games(base_path), games(candidate_path)
     rows = [dict(b, c=cand[k]['total']) for k, b in base.items() if k in cand]
@@ -56,6 +86,7 @@ def main(base_path, candidate_path):
         print('  candidate - close        ', show(clustered(part, lambda r: abs(r['c'] - r['actual']) - abs(r['line'] - r['actual']))))
         print('  forecast - closing total: base', show(clustered(part, lambda r: r['total'] - r['line'])),
               '| candidate', show(clustered(part, lambda r: r['c'] - r['line'])))
+    show_margins(base_path, candidate_path)
     print('± one standard error clustered by Eastern game date')
 
 

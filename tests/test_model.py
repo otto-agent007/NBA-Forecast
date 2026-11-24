@@ -4,6 +4,8 @@ import json
 import math
 import unittest
 
+from nba_forecast.model import _budget_share
+
 try:
     from nba_forecast.model import forecast
 except ModuleNotFoundError:
@@ -205,19 +207,76 @@ class ForecastTests(unittest.TestCase):
             self.assertGreater(usage, 1)
             self.assertAlmostEqual(p["expected_fga"], p["expected_minutes"] * 12 / 45 * usage)
 
-    def test_excess_minutes_scale_the_protected_rotation_and_the_bench_alike(self):
+    def test_excess_minutes_come_off_the_bottom_of_the_rotation(self):
         starters = [player(f"s{i}") for i in range(5)]
         bench = [player(f"b{i}") for i in range(5)]
-        past = ([row(i, pid=p["player_id"], minutes=40, starter=True) for p in starters for i in range(10)] +
-                [row(i, pid=p["player_id"], minutes=22, starter=False) for p in bench for i in range(10)])
+        past = ([row(i, pid=p["player_id"], minutes=36, starter=True) for p in starters for i in range(10)] +
+                [row(i, pid=p["player_id"], minutes=18, starter=False) for p in bench for i in range(10)])
         projections = forecast(snapshot(starters + bench), past)["predictions"]
         rotation = projections[0]["components"]["rotation"]
         self.assertEqual(sorted(rotation["protected_rotation_player_ids"]), [p["player_id"] for p in starters])
         self.assertAlmostEqual(sum(p["participation_probability"] * p["expected_minutes"] for p in projections), 240, places=6)
-        scales = {p["player_id"]: p["components"]["rotation"]["scale"] for p in projections}
-        self.assertLess(max(scales.values()), 1)
-        self.assertAlmostEqual(min(scales.values()), max(scales.values()))
+        by_id = {p["player_id"]: p for p in projections}
+        cut = {pid: 36 - by_id[pid]["expected_minutes"] if pid.startswith("s") else 18 - by_id[pid]["expected_minutes"] for pid in by_id}
+        self.assertTrue(all(value > 0 for value in cut.values()))
         self.assertTrue(all("team_minutes_scaled" in p["flags"] for p in projections))
+        # Each loses the common step times his share: a 36-minute role a fifth of it, an 18-minute role four fifths.
+        self.assertAlmostEqual(cut["b0"] / cut["s0"], _budget_share(18) / _budget_share(36))
+        self.assertAlmostEqual(_budget_share(18) / _budget_share(36), 4.)
+
+    def test_a_shortfall_goes_mostly_to_the_bench_and_a_cut_stops_at_half_a_role(self):
+        starters = [player(f"s{i}") for i in range(5)]
+        bench = [player(f"b{i}") for i in range(4)]
+        past = ([row(i, pid=p["player_id"], minutes=34, starter=True) for p in starters for i in range(10)] +
+                [row(i, pid=p["player_id"], minutes=12, starter=False) for p in bench for i in range(10)])
+        by_id = {p["player_id"]: p for p in forecast(snapshot(starters + bench), past)["predictions"]}
+        budgeted = {pid: p["components"]["rotation"]["budgeted_minutes"] for pid, p in by_id.items()}
+        self.assertAlmostEqual(sum(p["participation_probability"] * budgeted[pid] for pid, p in by_id.items()), 240, places=6)
+        self.assertAlmostEqual((budgeted["b0"] - 12) / (budgeted["s0"] - 34), _budget_share(12) / _budget_share(34))
+        self.assertIn("team_minutes_raised", by_id["s0"]["flags"])
+        self.assertNotIn("team_minutes_unresolved", by_id["s0"]["flags"])
+        # Ten 40-minute roles: the shares stop at half of each role and the rest comes off everyone alike.
+        crowd = [player(f"c{i}") for i in range(10)]
+        past = [row(i, pid=p["player_id"], minutes=40) for p in crowd for i in range(10)]
+        projections = forecast(snapshot(crowd), past)["predictions"]
+        self.assertAlmostEqual(sum(p["participation_probability"] * p["components"]["rotation"]["budgeted_minutes"] for p in projections), 240, places=6)
+        self.assertGreater(min(p["expected_minutes"] for p in projections), 0)
+
+    def test_minutes_after_the_budget(self):
+        from nba_forecast.model import TYPICAL_RETURN, TYPICAL_STARTED, TYPICAL_TOP, _typical_minutes
+        established = {"games": 10, "missed_since_last": 0}
+        # Minutes above the knee count at half; a starter's usual night is above his average, a reserve's below.
+        minutes, terms = _typical_minutes(39., established, True)
+        self.assertAlmostEqual(terms["top"], -TYPICAL_TOP[1] * (39 - TYPICAL_TOP[0]))
+        self.assertAlmostEqual(minutes, 39 + terms["top"] + TYPICAL_STARTED[0])
+        self.assertAlmostEqual(_typical_minutes(20., established, False)[0], 20 + TYPICAL_STARTED[1])
+        # The first game back is shorter: after one missed game, and more after several; small roles in proportion.
+        self.assertAlmostEqual(_typical_minutes(30., {"games": 10, "missed_since_last": 1}, True)[1]["returning"], -TYPICAL_RETURN[0])
+        self.assertAlmostEqual(_typical_minutes(30., {"games": 10, "missed_since_last": 4}, True)[1]["returning"], -TYPICAL_RETURN[1])
+        self.assertAlmostEqual(_typical_minutes(10., {"games": 10, "missed_since_last": 4}, False)[1]["returning"], -TYPICAL_RETURN[1] / 2)
+        # Without three games for the team this season there is nothing to go on but the knee.
+        self.assertEqual(_typical_minutes(30., {"games": 2, "missed_since_last": 3}, True), (30., {"top": -0., "returning": 0., "started": 0.}))
+        self.assertEqual(_typical_minutes(.1, established, False)[0], 0.)
+
+    def test_the_terms_after_the_budget_move_a_player_and_nobody_else(self):
+        team = [player(f"p{i}") for i in range(10)]
+        data = [current(i, pid=p["player_id"], minutes=24, starter=n < 5) for n, p in enumerate(team) for i in range(8)]
+        base = {p["player_id"]: p for p in forecast(snapshot(team), data)["predictions"]}
+        # p0 misses the team's last three games.
+        late = [r for r in data if not (r["player_id"] == "p0" and r["game_id"] in ("g105", "g106", "g107"))]
+        back = {p["player_id"]: p for p in forecast(snapshot(team), late)["predictions"]}
+        rotation = back["p0"]["components"]["rotation"]
+        self.assertEqual(back["p0"]["components"]["typical_inputs"]["missed_since_last"], 3)
+        self.assertLess(rotation["typical_terms"]["returning"], 0)
+        self.assertAlmostEqual(back["p0"]["expected_minutes"], rotation["budgeted_minutes"] + rotation["typical_shift"])
+        self.assertLess(back["p0"]["expected_minutes"], base["p0"]["expected_minutes"])
+        # A starter's shift is his term, less whatever keeping the team at 240 expected minutes takes back.
+        starter = base["p1"]["components"]["rotation"]
+        self.assertTrue(0 < starter["typical_shift"] <= starter["typical_terms"]["started"])
+        self.assertGreater(base["p1"]["expected_minutes"], base["p9"]["expected_minutes"], "the same role: the starter above the reserve")
+        for result in (base, back):
+            self.assertLessEqual(sum(p["participation_probability"] * p["expected_minutes"] for p in result.values()), 240 + 1e-9)
+            self.assertFalse(any("team_minutes_unresolved" in p["flags"] for p in result.values()))
 
     def test_missing_rotation_minutes_are_flagged_not_invented(self):
         result = forecast(snapshot([player(), player("new")]), [row()])
@@ -368,26 +427,29 @@ class ForecastTests(unittest.TestCase):
     def test_role_minutes_lean_toward_games_with_tonights_lineup(self):
         from unittest.mock import patch
         from nba_forecast import model
+        role = lambda p: p["components"]["opportunities"]["minutes_before_adjustment"]
         with patch.object(model, "LINEUP_BLEND", 0.):
-            plain = self._with_teammate("out")["expected_minutes"]
+            plain = role(self._with_teammate("out"))
         out, available = self._with_teammate("out"), self._with_teammate("available")
-        self.assertGreater(out["expected_minutes"], plain + .5)
-        self.assertLess(available["expected_minutes"], plain - .5)
+        self.assertGreater(out["expected_minutes"], available["expected_minutes"] + 1)
+        self.assertGreater(role(out), plain + .5)
+        self.assertLess(role(available), plain - .5)
         audit = out["components"]["opportunities"]["lineup_context"]
         self.assertAlmostEqual(audit["plain_role_minutes"], plain)
         self.assertEqual(audit["teammate_ids"], ["s"])
         self.assertEqual(audit["games_with_a_different_lineup"], 3)
-        self.assertAlmostEqual(out["expected_minutes"],
-                               plain + model.LINEUP_BLEND * (audit["context_role_minutes"] - plain))
-        self.assertAlmostEqual(out["components"]["opportunities"]["minutes_before_adjustment"], out["expected_minutes"])
+        self.assertAlmostEqual(role(out), plain + model.LINEUP_BLEND * (audit["context_role_minutes"] - plain))
+        # Two projected players: no budget fill, so the published minutes are the role and the terms after the budget.
+        self.assertAlmostEqual(out["expected_minutes"], role(out) + out["components"]["rotation"]["typical_shift"])
 
     def test_an_unsettled_teammate_is_left_out_of_the_lineup_context(self):
         from unittest.mock import patch
         from nba_forecast import model
+        role = lambda p: p["components"]["opportunities"]["minutes_before_adjustment"]
         with patch.object(model, "LINEUP_BLEND", 0.):
-            plain = self._with_teammate("out")["expected_minutes"]
+            plain = role(self._with_teammate("out"))
         questionable = self._with_teammate("questionable", "Questionable")
-        self.assertAlmostEqual(questionable["expected_minutes"], plain)
+        self.assertAlmostEqual(role(questionable), plain)
         self.assertNotIn("lineup_context", questionable["components"]["opportunities"])
         # Probable plays like an untagged player.
         self.assertAlmostEqual(self._with_teammate("questionable", "Probable")["expected_minutes"],

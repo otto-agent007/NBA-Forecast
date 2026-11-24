@@ -128,7 +128,9 @@ class ParticipationForecastTests(unittest.TestCase):
         self.assertGreater(sum(p['expected_minutes'] for p in projected), expected)
         total = next(t for t in result['game_totals'][0]['teams'] if t['team_id'] == 'A')
         self.assertEqual(total['projected_minutes'], expected)
-        self.assertAlmostEqual(total['points_mean'], sum(p['participation_probability'] * p['points_mean'] for p in projected))
+        # The terms applied after the budget leave minutes to the residual term of the total.
+        self.assertAlmostEqual(total['residual_minutes'], 240 - expected)
+        self.assertAlmostEqual(total['points_mean'], sum(p['participation_probability'] * p['points_mean'] for p in projected) + total['residual_points'])
         self.assertEqual(result['game_totals'][0]['schema_version'], 6)
         self.assertAlmostEqual(total['expected_players'], sum(p['participation_probability'] for p in projected))
 
@@ -142,7 +144,9 @@ class ActiveListTests(unittest.TestCase):
             data += rows(range(10), pid=f'p{i}', minutes=30)
         projected = [p for p in forecast(snap, data)['predictions'] if p['status'] == 'projected']
         total = sum(p['participation_probability'] for p in projected)
-        self.assertAlmostEqual(total, ACTIVE_LIST_MAX)
+        # Thirteen at most; sixteen thirty-minute roles are far past 240, and the squeeze then sits some of them.
+        self.assertAlmostEqual(projected[0]['components']['participation']['team_probability_sum_after'], ACTIVE_LIST_MAX)
+        self.assertLess(total, ACTIVE_LIST_MAX)
         self.assertEqual(projected[0]['components']['participation']['team_probability_goal'], ACTIVE_LIST_MAX)
         self.assertGreater(projected[0]['components']['participation']['team_probability_sum_before'], ACTIVE_LIST_MAX)
         self.assertLessEqual(sum(p['participation_probability'] * p['expected_minutes'] for p in projected), 240 + 1e-6)
@@ -155,7 +159,9 @@ class ActiveListTests(unittest.TestCase):
         for i in range(12):
             data += rows([0], [1], pid=f'p{i}', minutes=20)  # one appearance in two listings: well under ten expected
         projected = [p for p in forecast(snap, data)['predictions'] if p['status'] == 'projected']
-        self.assertAlmostEqual(sum(p['participation_probability'] for p in projected), ACTIVE_LIST_MIN_EXPECTED)
+        # Raised to ten, and a little further by the squeeze: ten expected twenty-minute roles are short of 240.
+        self.assertAlmostEqual(projected[0]['components']['participation']['team_probability_sum_after'], ACTIVE_LIST_MIN_EXPECTED)
+        self.assertGreater(sum(p['participation_probability'] for p in projected), ACTIVE_LIST_MIN_EXPECTED)
         self.assertTrue(all(p['participation_probability'] <= 1 for p in projected))
         self.assertEqual(projected[0]['components']['participation']['team_probability_goal'], ACTIVE_LIST_MIN_EXPECTED)
 
@@ -168,8 +174,37 @@ class ActiveListTests(unittest.TestCase):
         by_id = {p['player_id']: p for p in forecast(snapshot(players), data)['predictions'] if p['status'] == 'projected'}
         self.assertAlmostEqual(by_id['q']['participation_probability'], STATUS_PARTICIPATION['questionable'] * by_id['q']['components']['participation']['role_rate'],
                                msg='questionable: status times the role rate, not raised')
-        self.assertAlmostEqual(sum(p['participation_probability'] for p in by_id.values()), ACTIVE_LIST_MIN_EXPECTED)
+        self.assertAlmostEqual(by_id['q']['components']['participation']['team_probability_sum_after'], ACTIVE_LIST_MIN_EXPECTED)
+        self.assertEqual(by_id['q']['components']['participation']['squeeze_logit_shift'], 0., 'nor moved by the squeeze')
         self.assertTrue(all(p['participation_probability'] < 1 for p in by_id.values()))
+
+
+class SqueezeTests(unittest.TestCase):
+    """Who plays follows the team's minutes: the fringe sits on a crowded night and plays on a short one."""
+    def team(self, regulars, minutes):
+        players = [player(f'p{i}') for i in range(regulars)] + [player('fringe')]
+        data = []
+        for i in range(regulars):
+            data += rows(range(10), pid=f'p{i}', minutes=minutes)
+        data += rows(range(0, 10, 2), [k for k in range(10) if k % 2], pid='fringe', minutes=12)
+        return {p['player_id']: p for p in forecast(snapshot(players), data)['predictions']}
+
+    def test_a_crowded_rotation_lowers_the_fringe_and_a_short_one_raises_it(self):
+        from nba_forecast.model import SQUEEZE_LIMIT, SQUEEZE_LOGIT, SQUEEZE_MINUTES
+        from math import exp, log
+        crowded, short = self.team(11, 30)['fringe'], self.team(11, 20)['fringe']
+        for p, direction in ((crowded, -1), (short, 1)):
+            audit = p['components']['participation']
+            before, total = audit['probability_before_squeeze'], audit['team_minutes_before_squeeze']
+            self.assertEqual(direction, 1 if total < 240 else -1)
+            shift = SQUEEZE_LOGIT * max(-SQUEEZE_LIMIT, min(SQUEEZE_LIMIT, 240 - total)) / SQUEEZE_MINUTES
+            self.assertAlmostEqual(audit['squeeze_logit_shift'], shift)
+            self.assertAlmostEqual(p['participation_probability'], 1 / (1 + exp(-(log(before / (1 - before)) + shift))))
+        self.assertLess(crowded['participation_probability'], short['participation_probability'])
+
+    def test_fewer_than_eight_projected_players_say_nothing_about_a_shortfall(self):
+        fringe = self.team(6, 30)['fringe']
+        self.assertNotIn('squeeze_logit_shift', fringe['components']['participation'])
 
 
 class LedgerParticipationTests(unittest.TestCase):
