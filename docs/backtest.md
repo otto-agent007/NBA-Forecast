@@ -1758,6 +1758,47 @@ Levels on the new gate reference: margin MAE 11.23 against the close's 10.90,
 winners 68.5%, team points MAE 9.31, player points MAE 4.43, minutes MAE 4.57,
 participation Brier 0.085, 80% interval coverage 80.2%.
 
+Live (`live_replay.py`, rebuilt mode, the production copy frozen 2026-11-22
+01:17 PST; every finished game through 11-21 re-forecast with main `1d5aa48`
+and with this change on top; ± one standard error clustered by Eastern game
+date, negative = better; `review_2026_11_21/live_candidate_props.py` and
+`live_candidate_totals.py`):
+
+| Metric | Main | With this change | Change |
+|---|---|---|---|
+| Player minutes MAE (4,613 player-games, 27 dates) | 4.730 | 4.569 | −0.161 ± 0.019 |
+| Player points MAE (the same) | 4.417 | 4.385 | −0.032 ± 0.008 |
+| Player points bias | +0.282 | +0.281 | |
+| Kalshi points medians (921, 10 dates; Kalshi 4.995) | 5.115 | 5.070 | −0.046 ± 0.013 |
+| Gap to Kalshi's medians | +0.120 ± 0.032 | +0.075 ± 0.025 | |
+| Side of Kalshi's median right | 49.0% ± 1.4 | 50.1% ± 0.8 | |
+| Margin MAE (206 games; close 10.86) | 11.447 | 11.456 | +0.008 ± 0.012 |
+| Winner Brier | 0.2077 | 0.2081 | +0.0004 ± 0.0003 |
+| Game total MAE (close 14.04) | 14.81 | 14.84 | +0.03 ± 0.03 |
+| Game total bias (close +0.46 ± 1.25) | +1.84 ± 1.18 | +1.85 ± 1.17 | |
+
+The live games say what the replays say: minutes −0.161 against the gate's
+−0.185, points −0.032 against −0.030, the mean untouched, margins and totals
+unmoved. About three eighths of the gap to Kalshi's medians closes; the model
+is still behind them by 0.075 ± 0.025. By the minutes main projected, the
+medians gain −0.032 ± 0.015 under 28 minutes (448), −0.074 ± 0.036 at 28–34
+(341) and −0.018 ± 0.065 at 34 and over (132). The last is the group the
+production-path replay puts at −0.113 ± 0.015; 132 medians on ten dates
+neither confirm nor contradict it, and the model's side of the median there
+goes from right 53.0% ± 4.3 to 46.2% ± 5.6, also inside the noise.
+
+The research scripts on the final code's own roles (`dump_roles.py` on the
+production path, 5,208 team-games): the shares against the old rule −0.112 ±
+0.008 minutes (held-out seasons −0.058, −0.145, −0.125), with the cells of the
+miss table within 1.3 minutes; the squeeze Brier −0.0023 ± 0.0002 and minutes
+−0.027 ± 0.003; the three terms −0.036 ± 0.003 minutes and −0.008 ± 0.001
+points with the mean points bias where it was (+0.036 → +0.036), against
+−0.012 with the season pull and −0.030 with the bench cut. Picked for minutes
+error alone on two seasons, the terms' constants come out a little stronger
+than the model's (a knee at 35 with a slope of 0.5 to 0.65, 0.8 and 2.5
+minutes for a return, +0.5 to +0.7 and −0.4 for the last game's start); the
+model's are the ones that kept the mean inside the gate's rule on both paths.
+
 What changes for a reader of a forecast: `components.rotation` carries
 `budget_share`, `budgeted_minutes` (the budget's result), `typical_terms` and
 `typical_shift` (what the three terms then added); `scale` is the budget's
